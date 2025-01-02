@@ -8,7 +8,7 @@ import openai
 import pandas as pd
 
 # OpenAI API 설정
-openai.api_key = "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"  
+openai.api_key =  
 
 # SBERT 모델 초기화
 sbert_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")

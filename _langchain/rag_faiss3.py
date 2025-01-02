@@ -12,7 +12,7 @@ import asyncio
 import time  # 시간 측정을 위한 모듈 추가
 
 # OpenAI API 설정
-openai.api_key = "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"  
+openai.api_key = 
 
 # SBERT 모델 초기화 (GPU 사용 가능 시)
 device = "cuda" if torch.cuda.is_available() else "cpu"
