@@ -1,5 +1,5 @@
 
-# #0227 데모(노래재생 중 음성인식 진행됨)
+
 import os
 import rclpy
 from rclpy.node import Node
@@ -17,6 +17,7 @@ from pydub.playback import play
 from datetime import datetime
 import pygame
 
+
 class UserQuestion(Node):
     def __init__(self):
         super().__init__('UserQuestion')
@@ -24,7 +25,6 @@ class UserQuestion(Node):
 
         # Google Cloud 인증 설정
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/home/nvidia/ros2_ws/my-service-account.json"
-        os.environ["OPENAI_API_KEY"] = "/home/nvidia/ros2_ws/my-service-account.json"
         
         self.client = speech.SpeechClient()
         
@@ -47,10 +47,14 @@ class UserQuestion(Node):
         self.last_speech_time = None  
         # ✅ 강제 퍼블리시 방지를 위한 플래그 추가
         self.force_published = False 
+        self.transcribing = False  # ✅ STT 중복 실행 방지용
+        self.ignore_stt = False  # 🔇 효과음 재생 중 STT 무시
+
+
 
         # PyAudio 설정
         self.p = pyaudio.PyAudio()
-        self.device_index = 25
+        self.device_index = 24
         
         self.stream = None
 
@@ -68,15 +72,20 @@ class UserQuestion(Node):
         """ 음악 상태에 따라 STT 동작 제어 """
         if msg.data == "music_playing":
             self.get_logger().info("Music is playing. Muting STT output.")
+            
             self.music_playing = True
 
             self.audio_stream.queue.clear() 
+            
+
             self.audio_buffer = []  # ✅ 기존 버퍼 삭제
             self.partial_transcript = ""  # ✅ 기존에 감지된 텍스트 삭제
+            
 
 
              # ✅ 마이크 입력 완전 중단
             self.stop_audio_stream() 
+            
 
         elif msg.data == "music_done":
             self.get_logger().info("Music playback finished. Resuming STT output.")
@@ -84,15 +93,15 @@ class UserQuestion(Node):
 
             # ✅ STT 재시작
             self.start_audio_stream()  # 마이크 입력 다시 시작
-            self.transcribe_streaming()  # STT 재개
-
+            #self.transcribe_streaming()  # STT 재개
+            threading.Thread(target=self.transcribe_streaming, daemon=True).start()
  
             
     def start_audio_stream(self):
         """ 마이크 입력을 Google STT API로 실시간 전송 """
         self.get_logger().info('Starting microphone stream (continuous)...')
-
-        self.stop_audio_stream()
+     
+        #self.stop_audio_stream()
 
         try:
             self.stream = self.p.open(
@@ -107,8 +116,8 @@ class UserQuestion(Node):
 
 
             time.sleep(0.5)  
-            self.transcribe_streaming()  # ✅ 누락된 함수 호출 (아래에 정의)
-
+            #self.transcribe_streaming()  # ✅ 누락된 함수 호출 (아래에 정의)
+            threading.Thread(target=self.transcribe_streaming, daemon=True).start()
         except Exception as e:
             self.get_logger().error(f"Failed to start microphone stream: {e}")
             self.get_logger().info("Retrying microphone stream in 1 second...")
@@ -122,21 +131,61 @@ class UserQuestion(Node):
             self.stream.stop_stream()
             self.stream.close()
             self.stream = None
+            
+
+    # def transcribe_streaming(self):
+    #     """ ✅ Google STT API를 사용하여 실시간 음성 인식 """
+  
+    #     def request_generator():
+    #         while True:
+    #             chunk = self.audio_stream.get()
+    #             if chunk is None:
+    #                 break
+    #             yield speech.StreamingRecognizeRequest(audio_content=chunk)
+        
+    #     config = speech.RecognitionConfig(
+    #         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+    #         sample_rate_hertz=44100,
+    #         language_code="ko-KR",
+    #         model='telephony'
+    #     )
+
+    #     streaming_config = speech.StreamingRecognitionConfig(
+    #         config=config,
+    #         interim_results=True
+    #     )
+
+    #     try:
+    #         self.stt_restart_time = time.time()
+    #         responses = self.client.streaming_recognize(streaming_config, request_generator())
+    #         self.process_responses(responses)
+
+    #     except Exception as e:
+    #         self.get_logger().error(f"Error in streaming STT: {e}")
+    #         self.force_restart_stt()
+
 
     def transcribe_streaming(self):
-        """ ✅ Google STT API를 사용하여 실시간 음성 인식 """
+        """ Google STT API를 사용하여 실시간 음성 인식 """
+        if self.transcribing:
+            self.get_logger().info("STT already running, skipping duplicate start.")
+            return
+
+        self.transcribing = True
+        self.get_logger().info("Starting transcribe_streaming...")
+
         def request_generator():
             while True:
                 chunk = self.audio_stream.get()
                 if chunk is None:
                     break
                 yield speech.StreamingRecognizeRequest(audio_content=chunk)
-        
+
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=44100,
             language_code="ko-KR",
-            model='default'
+            model='telephony'
         )
 
         streaming_config = speech.StreamingRecognitionConfig(
@@ -148,14 +197,17 @@ class UserQuestion(Node):
             self.stt_restart_time = time.time()
             responses = self.client.streaming_recognize(streaming_config, request_generator())
             self.process_responses(responses)
-
         except Exception as e:
             self.get_logger().error(f"Error in streaming STT: {e}")
             self.force_restart_stt()
+        finally:
+            self.transcribing = False  # ✅ 항상 플래그 초기화
+
 
     def audio_callback(self, in_data, frame_count, time_info, status):
-        # ✅ 음악이 재생 중이면 마이크 입력 무시
-        if self.music_playing:
+        if self.music_playing or self.ignore_stt:
+            if self.trigger_detected:
+                self.audio_buffer.append(in_data)  # ✅ 트리거 상태에서는 녹음은 계속해야 함
             return None, pyaudio.paContinue
 
 
@@ -176,15 +228,19 @@ class UserQuestion(Node):
         """ 음성 인식 결과 처리 (안녕 이후 문장만 퍼블리시) """
         silence_threshold = 3  # 3초 동안 무음 시 처리
 
-        # ✅ 음악 재생 중이면 STT 자체를 수행하지 않음
-        if self.music_playing:
-            self.get_logger().info("Music is playing. STT is disabled.")
-            return
+
 
         for response in responses:
             for result in response.results:
+
                 transcript = result.alternatives[0].transcript.strip()
                 is_final = result.is_final  
+                # 🔇 효과음 재생 중이면 무시
+                if self.ignore_stt:
+                    self.get_logger().info(f"[무시됨] 효과음 재생 중 transcript: {transcript}")
+                    continue
+
+                
 
                 if transcript:
                     self.last_speech_time = time.time()  # ✅ 음성 감지 시 시간 갱신
@@ -192,10 +248,7 @@ class UserQuestion(Node):
 
                 self.get_logger().info(f'Transcript: {transcript} (Final: {is_final})')
 
-                if self.music_playing:
-                    self.get_logger().info("Ignoring STT output since music is playing.")
-                    continue
-
+    
                 if not self.trigger_detected:
                     if "안녕" in transcript:
                         split_text = transcript.split("안녕", 1)
@@ -250,73 +303,187 @@ class UserQuestion(Node):
         self.silence_monitoring_thread.start()
 
 
+   
 
     def monitor_silence(self, silence_threshold):
-        """ 3초 이상 무음 상태가 지속되면 강제 Publish 또는 음성 안내 """
+        """ 3초 이상 무음 상태가 지속되면 강제 Publish 또는 상태 초기화 """
         self.silence_seconds = 0  # 무음 지속 시간 초기화
+        self.after_prompt = False  # 종료음 후 무음 감지 상태 초기화
 
         while self.trigger_detected:
+            # 🔥 오디오 재생 중일 때 무음 감지 시작 방지
+            if self.is_sound_playing:
+                time.sleep(0.1)
+                continue
+
             elapsed_silence = time.time() - self.last_speech_time
 
-            if elapsed_silence >= self.silence_seconds + 1:  # 1초마다 로그 출력
+            # 1초마다 로그 출력
+            if elapsed_silence >= self.silence_seconds + 1:
                 self.silence_seconds += 1
-                self.get_logger().info(f"무음성 {self.silence_seconds}초 경과")
+                self.get_logger().info(f"무음성 {self.silence_seconds}초 경과 (무음 감지 중)")
 
+            # 무음 시간이 임계값을 초과했을 때
             if elapsed_silence >= silence_threshold:
-                # ✅ 이미 퍼블리시된 경우 강제 퍼블리시 방지
+                # 🔥 이미 퍼블리시된 경우 종료음 실행 방지
                 if self.force_published:
-                    self.get_logger().info("이미 퍼블리시된 텍스트이므로 강제 퍼블리시 생략")
-                    self.force_published = False  # ✅ 플래그 리셋
+                    self.get_logger().info("이미 퍼블리시된 텍스트이므로 종료음 생략")
+                    self.force_published = False  # 플래그 리셋
                     break
 
-                if self.partial_transcript.strip() and self.last_published_text != self.partial_transcript:
-                    self.get_logger().info("무음성 3초 경과로 인해 강제 publish")
+                # 🔥 무음 시간 동안 텍스트가 있는지 최종 확인
+                if self.partial_transcript.strip():
+                    self.get_logger().info(f"무음성 3초 경과 전 텍스트 감지: {self.partial_transcript}")
                     self.publish_transcription(self.partial_transcript)
-                    self.last_published_text = self.partial_transcript  # ✅ 중복 방지
-                    self.partial_transcript = ""  # ✅ 이전 텍스트 초기화
+                    self.last_published_text = self.partial_transcript
+                    self.partial_transcript = ""
+                    self.trigger_detected = False
+                    self.get_logger().info("무음 감지 중지: 퍼블리시 완료")
+                    break
+
+                # 종료음 재생 전이면
+                if not self.after_prompt:
+                    self.get_logger().info("무음성 3초 경과 (초기 체크): 종료음 재생 후 추가 무음 체크 시작")
+                    self.play_effect_sound_prompt()  # 종료음 재생
+
+                    # 종료음 후에도 무음 체크를 위해 시간 갱신
+                    self.last_speech_time = time.time()
+
+                    # 상태 전환
+                    self.after_prompt = True
+                    self.silence_seconds = 0  # 무음 카운터 초기화
+                    continue  # 추가 무음 체크 계속
+
+                # 종료음 후 3초 무음 상태 확인
                 else:
-                    self.get_logger().info("무음성 3초 경과")
-                    self.get_logger().info("말씀하세요! (WAV파일 실행)")
-                    self.play_effect_sound_prompt()
+                    if not self.partial_transcript.strip():
+                        self.get_logger().info(f"종료음 후 추가 무음 {self.silence_seconds}초 경과 (음성 없음)")
+                        self.get_logger().info("추가 음성이 없으므로 초기 상태로 복귀")
+                        self.trigger_detected = False
+                        self.partial_transcript = ""
+                        self.after_prompt = False  # 상태 초기화
+                        break
+                    else:
+                        self.get_logger().info(f"종료음 후 추가 무음 {self.silence_seconds}초 경과 (음성 감지)")
+                        self.get_logger().info("종료음 재생 후 3초 경과로 인해 강제 publish")
+                        self.publish_transcription(self.partial_transcript)
+                        self.last_published_text = self.partial_transcript
+                        self.partial_transcript = ""
+                        self.after_prompt = False  # 상태 초기화
+                        break
 
-                    # ✅ 트리거 상태 유지
-                    self.get_logger().info("트리거 감지 상태 유지")
-                    self.start_silence_monitoring()  # ✅ 무음 감지를 다시 시작
+            time.sleep(0.1)
 
-                break  # ✅ 반복문 종료 후 다시 시작될 수 있도록 설정
 
-            time.sleep(0.1)  # 100ms 단위로 체크하여 정확한 1초 간격 유지
+
+
 
 
 
     def play_effect_sound_prompt(self):
-        """ ✅ '말씀해주세요.wav' 실행 (사용자에게 말하기 요청) """
-        effect_file = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/종료음.wav"
+        """ 랜덤으로 요청 음성(MP3)을 재생하며, 재생 중 텍스트 입력을 무시 """
+        # 효과음 파일이 저장된 디렉토리 경로
+        effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/requestion"
+
+        # 디렉토리에서 MP3 파일 목록 가져오기
+        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+
+        if not mp3_files:
+            self.get_logger().error("No MP3 files found in the requestion directory.")
+            return
 
         try:
-            wave_obj = sa.WaveObject.from_wave_file(effect_file)  # ✅ WAV 파일 불러오기
-            play_obj = wave_obj.play()  # ✅ 재생 시작
-            #play_obj.wait_done()  # ✅ 완료될 때까지 대기
+            self.ignore_stt = True  # 🔇 STT 입력 무시 시작
+            self.audio_buffer = []
+            self.partial_transcript = ""
+            self.audio_stream.queue.clear()
+
+            # 랜덤으로 하나의 MP3 파일 선택
+            selected_file = random.choice(mp3_files)
+            selected_path = os.path.join(effects_dir, selected_file)
+
+            self.get_logger().info(f"Playing sound: {selected_file}")
+
+            # 🔥 효과음 재생 중 상태 설정
+            self.is_sound_playing = True
+
+            # ✅ 버퍼 초기화 (효과음 재생 중 텍스트 무시)
+            
+
+            # pygame을 사용하여 MP3 파일 재생
+            pygame.mixer.init()
+            pygame.mixer.music.load(selected_path)
+            pygame.mixer.music.play()
+
+            # 재생이 끝날 때까지 대기
+            while pygame.mixer.music.get_busy():
+                pygame.time.Clock().tick(10)
+            self.ignore_stt = False  # ✅ 재생 완료 후 STT 다시 허용
+
+            # 🔥 효과음 재생 완료
+            self.is_sound_playing = False
+            self.start_silence_monitoring()
+
         except Exception as e:
             self.get_logger().error(f"Failed to play effect sound: {e}")
+            # 🔥 비상상황: 플래그 해제
+            self.is_sound_playing = False
 
 
 
 
-    #원본
     def play_effect_sound(self):
-        """ ✅ '멍_편집완료.wav' 실행 (완료 후 음성 녹음 시작) """
-        effect_file = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/종료음.wav"
-    
+        """효과음 파일을 재생하며, 재생 중 텍스트 입력을 무시"""
+        # 효과음 파일이 저장된 디렉토리 경로
+        effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/trigger_sound"
+
+        # 디렉토리에서 MP3 파일 목록 가져오기
+        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+
         try:
-            wave_obj = sa.WaveObject.from_wave_file(effect_file)  # ✅ WAV 파일 불러오기
-            play_obj = wave_obj.play()  # ✅ 재생 시작
-            #play_obj.wait_done()  # ✅ 완료될 때까지 대기
-           
+            self.ignore_stt = True  # 🔇 STT 입력 무시 시작
+            # ✅ 버퍼 초기화 (효과음 재생 중 텍스트 무시)
+            self.audio_buffer = []
+            self.partial_transcript = ""
+            self.audio_stream.queue.clear()
+            # 랜덤으로 하나의 MP3 파일 선택
+            selected_file = random.choice(mp3_files)
+            selected_path = os.path.join(effects_dir, selected_file)
+
+            print(f"Playing sound: {selected_file}")
+
+            # 🔥 효과음 재생 중 상태 설정
+            self.is_sound_playing = True
+
+            
+
+            # pygame을 사용하여 MP3 파일 재생
+            pygame.mixer.init()
+            pygame.mixer.music.load(selected_path)
+            pygame.mixer.music.play()
+
+            # 🔥 재생이 끝날 때까지 대기
+            while pygame.mixer.music.get_busy():
+                pygame.time.Clock().tick(10)
+
+            # 🔥 효과음 재생 완료 후에 무음 감지 시작
+            self.is_sound_playing = False
+            
+            
+
+            self.get_logger().info("효과음 재생 완료 후 무음 감지 초기화")
+            self.last_speech_time = time.time()  # 🔥 무음 시간 초기화
+            self.start_silence_monitoring()
+            self.ignore_stt = False  # ✅ 재생 완료 후 STT 다시 허용
 
         except Exception as e:
             self.get_logger().error(f"Failed to play effect sound: {e}")
+            # 🔥 비상상황: 플래그 해제
+            self.is_sound_playing = False
 
+
+
+      
     
 
 
@@ -334,6 +501,7 @@ class UserQuestion(Node):
             self.get_logger().info(f'Transcription published: "{transcript.strip()}"')
             self.save_log(f'Transcription published: "{transcript.strip()}"')
             self.play_effect_sound_robot()
+            
 
 
     def play_effect_sound_robot(self):
@@ -370,7 +538,7 @@ class UserQuestion(Node):
             return
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"/home/nvidia/ros2_ws/audio_files/{timestamp}.wav"
+        filename = f"/home/nvidia/ros2_ws/src/pkg_mic/google_audio/{timestamp}.wav"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
 
         with wave.open(filename, 'wb') as wf:
@@ -382,29 +550,36 @@ class UserQuestion(Node):
         self.get_logger().info(f"Saved audio: {filename}")
         self.save_log(f"Saved audio: {filename}")
         self.audio_buffer = []  
+        
+        
+  
 
-     
     def force_restart_stt(self):
-        """ ✅ STT 강제 재시작 (마이크 스트리밍 완전 종료 후 다시 시작) """
         self.get_logger().info("Forcing STT restart...")
 
-        # ✅ STT 세션 강제 종료
-        self.stop_audio_stream()
-        time.sleep(2)  # ✅ 완전히 닫힐 시간을 확보
+        # ✅ STT 세션 종료 표시
+        self.transcribing = False
 
-        # ✅ 마이크 스트리밍 재시작
+        # ✅ 세션 강제 중지
+        self.stop_audio_stream()
+
+        # ✅ 대기 시간 조금 여유롭게
+        time.sleep(2.5)
+
+        # ✅ 입력 스트림 재시작
         self.start_audio_stream()
 
-        # ✅ STT 스트리밍 강제 재개
-        time.sleep(1)  # 마이크 안정화 대기
-        self.transcribe_streaming()
-    
+        # ✅ STT 재시작 – 쓰레드로 안전하게 분리
+        threading.Thread(target=self.transcribe_streaming, daemon=True).start()
+
+
     def save_log(self, message):
         """ 로그를 파일에 저장 """
         log_file_path = "/home/nvidia/ros2_ws/_logs/UserQuestion_log.txt"
         log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
         with open(log_file_path, "a", encoding="utf-8") as log_file:
             log_file.write(log_message)
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -414,5 +589,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
-
