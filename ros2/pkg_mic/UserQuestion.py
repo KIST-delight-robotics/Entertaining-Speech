@@ -133,37 +133,6 @@ class UserQuestion(Node):
             self.stream = None
             
 
-    # def transcribe_streaming(self):
-    #     """ ✅ Google STT API를 사용하여 실시간 음성 인식 """
-  
-    #     def request_generator():
-    #         while True:
-    #             chunk = self.audio_stream.get()
-    #             if chunk is None:
-    #                 break
-    #             yield speech.StreamingRecognizeRequest(audio_content=chunk)
-        
-    #     config = speech.RecognitionConfig(
-    #         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-    #         sample_rate_hertz=44100,
-    #         language_code="ko-KR",
-    #         model='telephony'
-    #     )
-
-    #     streaming_config = speech.StreamingRecognitionConfig(
-    #         config=config,
-    #         interim_results=True
-    #     )
-
-    #     try:
-    #         self.stt_restart_time = time.time()
-    #         responses = self.client.streaming_recognize(streaming_config, request_generator())
-    #         self.process_responses(responses)
-
-    #     except Exception as e:
-    #         self.get_logger().error(f"Error in streaming STT: {e}")
-    #         self.force_restart_stt()
-
 
     def transcribe_streaming(self):
         """ Google STT API를 사용하여 실시간 음성 인식 """
