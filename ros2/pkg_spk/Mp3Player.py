@@ -1,3 +1,4 @@
+# 실시간 스트리밍으로 인한 수정본
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -9,7 +10,6 @@ import random
 from datetime import datetime
 import unicodedata
 import re
-import time
 
 class Mp3Player(Node):
     def __init__(self):
@@ -17,7 +17,7 @@ class Mp3Player(Node):
         self.file_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database"
         # self.file_path = "/home/delight/bumblebee_ws/src/pkg_rag/pkg_rag/movie_database"
 
-        self.effect_dir = "/home/nvidia/ros2_ws/src/pkg_spk/pkg_spk/effects"
+        self.effect_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/effects"
 
         # MP3 추천 파일 구독
         self.subscription_ = self.create_subscription(
@@ -54,7 +54,6 @@ class Mp3Player(Node):
 
             # MP3 재생이 끝나면 'music_done' 퍼블리시
             self.publish_music_status("music_done")
-            time.sleep(0.5)
 
         except Exception as e:
             self.get_logger().error(f"❌ MP3 재생 중 오류 발생: {e}")
@@ -64,7 +63,7 @@ class Mp3Player(Node):
   
     def play_mp3_list(self, files):
         """MP3 파일들을 로드하여 순차적으로 재생"""
-        effect_dir = "/home/nvidia/ros2_ws/src/pkg_spk/pkg_spk/effects"  # ✅ 효과음 디렉토리 경로
+        effect_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/effects"  # ✅ 효과음 디렉토리 경로
 
         try:
             final_audio = AudioSegment.silent(duration=200)
@@ -125,7 +124,18 @@ class Mp3Player(Node):
 
             self.get_logger().info("MP3 재생 시작...")
             self.save_log("MP3 재생 시작...")
-            play(final_audio)
+            # play(final_audio)
+
+            # play(final_audio) 대신 export + aplay
+            temp_wav_path = "/tmp/final_audio.wav"
+            final_audio.export(temp_wav_path, format="wav")
+            os.system(f"aplay --device=default {temp_wav_path}")
+
+
+
+
+
+
             self.get_logger().info("MP3 재생 완료.")
             self.save_log("MP3 재생 완료.")
 
@@ -133,8 +143,6 @@ class Mp3Player(Node):
         except Exception as e:
             self.get_logger().error(f"MP3 파일 처리 중 오류 발생: {e}")
             self.save_log(f"MP3 파일 처리 중 오류 발생: {e}")
-
-
 
     def publish_music_status(self, status):
         """음악 재생 상태를 퍼블리시"""
@@ -151,6 +159,8 @@ class Mp3Player(Node):
         with open(log_file_path, "a", encoding="utf-8") as log_file:
             log_file.write(log_message)
 
+
+
 def main(args=None):
     rclpy.init(args=args)
     node = Mp3Player()
@@ -165,7 +175,3 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-
-
-
-
