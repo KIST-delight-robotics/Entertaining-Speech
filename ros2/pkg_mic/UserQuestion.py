@@ -1,5 +1,4 @@
 
-
 import os
 import rclpy
 from rclpy.node import Node
@@ -50,6 +49,11 @@ class UserQuestion(Node):
         self.transcribing = False  # ✅ STT 중복 실행 방지용
         self.ignore_stt = False  # 🔇 효과음 재생 중 STT 무시
 
+        self.waiting_for_input_after_music = False  # 음악 종료 후 최초 입력 대기 플래그
+        self.timer_30s = None  # 30초 타이머 초기화
+
+
+
 
 
         # PyAudio 설정
@@ -68,35 +72,55 @@ class UserQuestion(Node):
         self.last_published_text = ""  
         self.force_restart_stt()
 
+
     def music_status_callback(self, msg):
         """ 음악 상태에 따라 STT 동작 제어 """
         if msg.data == "music_playing":
             self.get_logger().info("Music is playing. Muting STT output.")
-            
             self.music_playing = True
-
-            self.audio_stream.queue.clear() 
-            
-
-            self.audio_buffer = []  # ✅ 기존 버퍼 삭제
-            self.partial_transcript = ""  # ✅ 기존에 감지된 텍스트 삭제
-            
-
-
-             # ✅ 마이크 입력 완전 중단
-            self.stop_audio_stream() 
-            
+            self.audio_stream.queue.clear()
+            self.audio_buffer = []
+            self.partial_transcript = ""
+            self.stop_audio_stream()
 
         elif msg.data == "music_done":
             self.get_logger().info("Music playback finished. Resuming STT output.")
             self.music_playing = False
 
-            # ✅ STT 재시작
-            self.start_audio_stream()  # 마이크 입력 다시 시작
-            #self.transcribe_streaming()  # STT 재개
+            # 음악 종료 후 입력 대기 플래그 활성화
+            self.trigger_detected = True
+            self.waiting_for_input_after_music = True
+            self.partial_transcript = ""
+
+            # 마이크 입력 다시 시작 및 STT 재개
+            self.start_audio_stream()
             threading.Thread(target=self.transcribe_streaming, daemon=True).start()
- 
-            
+
+            # 음악 종료 후 30초 타이머 시작
+            self.start_30s_timer()
+            # 무음 모니터링은 최초 입력이 들어올 때 시작
+
+
+
+
+    def start_30s_timer(self):
+        """음악 종료 후 30초 타이머 시작 함수 추가"""
+        if self.timer_30s is not None and self.timer_30s.is_alive():
+            self.timer_30s.cancel()
+
+        self.get_logger().info("⏳ 음악 종료 후 30초 타이머 시작")
+        self.timer_30s = threading.Timer(30, self.timer_30s_expired)
+        self.timer_30s.start()
+
+
+    def timer_30s_expired(self):
+        self.get_logger().info("⏱️ 음악 종료 후 30초 동안 추가 입력 없음. trigger 상태 초기화")
+        self.trigger_detected = False
+        self.waiting_for_input_after_music = False
+        self.partial_transcript = ""
+
+
+
     def start_audio_stream(self):
         """ 마이크 입력을 Google STT API로 실시간 전송 """
         self.get_logger().info('Starting microphone stream (continuous)...')
@@ -194,71 +218,63 @@ class UserQuestion(Node):
 
 
     def process_responses(self, responses):
-        """ 음성 인식 결과 처리 (안녕 이후 문장만 퍼블리시) """
-        silence_threshold = 3  # 3초 동안 무음 시 처리
-
-
+        silence_threshold = 3  # 3초 무음 시 퍼블리시
 
         for response in responses:
             for result in response.results:
-
                 transcript = result.alternatives[0].transcript.strip()
-                is_final = result.is_final  
-                # 🔇 효과음 재생 중이면 무시
+                is_final = result.is_final
+
                 if self.ignore_stt:
                     self.get_logger().info(f"[무시됨] 효과음 재생 중 transcript: {transcript}")
                     continue
 
-                
-
                 if transcript:
-                    self.last_speech_time = time.time()  # ✅ 음성 감지 시 시간 갱신
-                    self.silence_seconds = 0  # ✅ 무음 카운트 리셋
+                    self.last_speech_time = time.time()
+                    self.silence_seconds = 0
+
+                    # 음악 종료 후 최초 음성 입력이 들어왔을 때만 무음 감지 시작
+                    if self.waiting_for_input_after_music:
+                        self.waiting_for_input_after_music = False  # 최초 입력 감지 완료
+                        self.get_logger().info("🎤 음악 종료 후 최초 음성 입력 감지됨. 무음 체크 시작.")
+                        self.start_silence_monitoring()
 
                 self.get_logger().info(f'Transcript: {transcript} (Final: {is_final})')
 
-    
                 if not self.trigger_detected:
                     if "안녕" in transcript:
                         split_text = transcript.split("안녕", 1)
                         if len(split_text) > 1:
-                            self.partial_transcript = split_text[1].strip()  
-
+                            self.partial_transcript = split_text[1].strip()
                             self.get_logger().info(f"Trigger detected. Capturing transcript: {self.partial_transcript}")
-                    
-                            self.play_effect_sound()  # ✅ 효과음 실행
-                        
-                            self.trigger_detected = True  
-                
-                            self.audio_buffer = []  
-                   
-                            #✅ 트리거 감지 후 무음 모니터링 스레드 실행
+                            self.play_effect_sound()
+                            self.trigger_detected = True
+                            self.audio_buffer = []
                             self.start_silence_monitoring()
-
-                    continue  
+                    continue
 
                 elif self.trigger_detected:
-                    if "안녕" in transcript:  
+                    if "안녕" in transcript:
                         split_text = transcript.split("안녕", 1)
                         if len(split_text) > 1:
-                            self.partial_transcript = split_text[1].strip()  
+                            self.partial_transcript = split_text[1].strip()
                     else:
-                        self.partial_transcript = transcript  
+                        self.partial_transcript = transcript
 
-                if is_final:
-                    if not self.partial_transcript.strip():
-                        continue
-                    
-                    
+                # if is_final and self.partial_transcript.strip():
+                #     self.publish_transcription(self.partial_transcript)
+                #     self.save_audio_clip()
+                #     self.partial_transcript = ""
+                #     self.trigger_detected = False
+                #     return
+                if is_final and self.partial_transcript.strip():
                     self.publish_transcription(self.partial_transcript)
-                    self.save_audio_clip()  
-                    self.trigger_detected = False  
-                    self.partial_transcript = ""  
+                    self.save_audio_clip()
+                    # 이곳에서는 trigger_detected와 partial_transcript 초기화 제거
                     return
-                
 
-            # ✅ 음성이 감지되었어도 무음 감지를 다시 시작해야 함
-            self.start_silence_monitoring()
+            if not self.waiting_for_input_after_music:
+                self.start_silence_monitoring()
 
 
 
@@ -355,7 +371,7 @@ class UserQuestion(Node):
         effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/requestion"
 
         # 디렉토리에서 MP3 파일 목록 가져오기
-        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".wav")]
 
         if not mp3_files:
             self.get_logger().error("No MP3 files found in the requestion directory.")
@@ -407,7 +423,7 @@ class UserQuestion(Node):
         effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/trigger_sound"
 
         # 디렉토리에서 MP3 파일 목록 가져오기
-        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".wav")]
 
         try:
             self.ignore_stt = True  # 🔇 STT 입력 무시 시작
@@ -452,25 +468,27 @@ class UserQuestion(Node):
 
 
 
-      
-    
-
-
     def publish_transcription(self, transcript):
         """ STT 결과를 퍼블리시 """
         if transcript.strip():
-            # ✅ 강제 퍼블리시 방지를 위한 플래그 설정
-            self.force_published = True  
+            if self.timer_30s and self.timer_30s.is_alive():
+                self.timer_30s.cancel()  # ✅ 퍼블리시 후 타이머 종료
+
+            self.force_published = True
 
             msg = String()
             msg.data = transcript.strip()
             self.publisher_.publish(msg)
-            self.last_published_text = transcript.strip()  # ✅ 중복 방지용 저장
+            self.last_published_text = transcript.strip()
 
             self.get_logger().info(f'Transcription published: "{transcript.strip()}"')
             self.save_log(f'Transcription published: "{transcript.strip()}"')
             self.play_effect_sound_robot()
-            
+
+            self.partial_transcript = ""  # ✅ 퍼블리시 후 즉시 초기화
+            self.trigger_detected = False  # ✅ 퍼블리시 후 trigger 상태 초기화
+            self.waiting_for_input_after_music = False  # ✅ 입력 대기 상태 해제
+
 
 
     def play_effect_sound_robot(self):
