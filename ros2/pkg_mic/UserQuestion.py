@@ -261,12 +261,6 @@ class UserQuestion(Node):
                     else:
                         self.partial_transcript = transcript
 
-                # if is_final and self.partial_transcript.strip():
-                #     self.publish_transcription(self.partial_transcript)
-                #     self.save_audio_clip()
-                #     self.partial_transcript = ""
-                #     self.trigger_detected = False
-                #     return
                 if is_final and self.partial_transcript.strip():
                     self.publish_transcription(self.partial_transcript)
                     self.save_audio_clip()
