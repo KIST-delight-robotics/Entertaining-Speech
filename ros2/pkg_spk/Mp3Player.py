@@ -1,4 +1,4 @@
-# 실시간 스트리밍으로 인한 수정본
+
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
