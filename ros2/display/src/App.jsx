@@ -22,18 +22,47 @@ function downsampleArray(arr, targetLen) {
   }
   return result;
 }
-
 function SpectrumVisualizer() {
   const [spectrum, setSpectrum] = useState([]);
+  const [musicPlaying, setMusicPlaying] = useState(false);
   const canvasRef = useRef(null);
+  const [recommendStatus, setRecommendStatus] = useState('done');
 
+
+  // 1. 음악 상태 구독
   useEffect(() => {
-    const spectrumListener = new ROSLIB.Topic({
+    const statusListener = new ROSLIB.Topic({
       ros: ros,
-      name: '/audio_amplitude',
+      name: '/music_status',
       messageType: 'std_msgs/String'
     });
+    statusListener.subscribe((message) => {
+      if (message.data === 'music_playing') setMusicPlaying(true);
+      else if (message.data === 'music_done') setMusicPlaying(false);
+    });
+    return () => statusListener.unsubscribe();
+  }, []);
+  //mp3_recommend_status 토픽 구독 및 상태 관리 추가
+  useEffect(() => {
+    const statusListener = new ROSLIB.Topic({
+      ros: ros,
+      name: '/mp3_recommend_status',
+      messageType: 'std_msgs/String'
+    });
+    statusListener.subscribe((message) => {
+      setRecommendStatus(message.data);
+    });
+    return () => statusListener.unsubscribe();
+  }, []);
 
+  // 2. 상황에 따라 구독 토픽 자동 변경
+  useEffect(() => {
+    const topicName = musicPlaying ? '/audio_amplitude' : '/audio_visualizer';
+    const spectrumListener = new ROSLIB.Topic({
+      ros: ros,
+      name: topicName,
+      messageType: 'std_msgs/String'
+    });
     spectrumListener.subscribe((message) => {
       try {
         const data = JSON.parse(message.data);
@@ -43,37 +72,48 @@ function SpectrumVisualizer() {
       }
     });
     return () => spectrumListener.unsubscribe();
-  }, []);
+  }, [musicPlaying]);
 
+  // 3. 시각화 (기존 코드와 동일)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || spectrum.length === 0) return;
     const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+    // 배경색: 음악이면 검정, 마이크면 초록
+    ctx.fillStyle = musicPlaying ? '#000' : '#00c853'; // 초록: #00c853
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // 1. 중앙 60%만 사용
+
+      // 추천 중이면 텍스트만 표시
+    if (recommendStatus === 'searching') {
+      ctx.fillStyle = '#222';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.font = 'bold 56px sans-serif';
+      ctx.fillStyle = '#ff00cc';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('음악찾는중', canvas.width / 2, canvas.height / 2);
+      return;
+  }
+  
     const central = getCentralSlice(spectrum, 0.6);
-
-    // 2. 바 개수 43개
     const numBars = 43;
     let bars = downsampleArray(central, numBars);
-
-    // 3. 바 높이 키우기 (최대 1.7배, 1로 클램프)
     bars = bars.map(v => Math.min(1, v * 10));
-
-    // 4. 바 스타일
     const barWidth = 10;
     const gap = 14;
     const totalWidth = numBars * barWidth + (numBars - 1) * gap;
     const xOffset = (canvas.width - totalWidth) / 2;
     const centerY = canvas.height / 2;
-    const maxBarHeight = canvas.height * 0.42; // 위아래로 뻗게 (전체 높이의 84%를 사용)
-
-    ctx.strokeStyle = '#ff00cc';
+    const maxBarHeight = canvas.height * 0.42;
+  
+    // 바 색: 음악이면 핑크, 마이크면 흰색
+    ctx.strokeStyle = musicPlaying ? '#ff00cc' : '#fff';
     ctx.lineWidth = barWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-
+  
     for (let i = 0; i < numBars; i++) {
       const x = xOffset + i * (barWidth + gap) + barWidth / 2;
       const barHeight = bars[i] * maxBarHeight;
@@ -82,20 +122,20 @@ function SpectrumVisualizer() {
       ctx.lineTo(x, centerY + barHeight);
       ctx.stroke();
     }
-  }, [spectrum]);
+  }, [spectrum, musicPlaying]);
 
   return (
     <canvas
-      ref={canvasRef}
-      width={1100}
-      height={340}
-      style={{
-        background: '#000',
-        display: 'block',
-        margin: '40px auto',
-        borderRadius: '16px'
-      }}
-    />
+  ref={canvasRef}
+  width={1100}
+  height={340}
+  style={{
+    background: musicPlaying ? '#000' : '#00c853',
+    display: 'block',
+    margin: '40px auto',
+    borderRadius: '16px'
+  }}
+/>
   );
 }
 
