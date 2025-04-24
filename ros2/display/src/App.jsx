@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
@@ -101,4 +100,3 @@ function SpectrumVisualizer() {
 }
 
 export default SpectrumVisualizer;
-
