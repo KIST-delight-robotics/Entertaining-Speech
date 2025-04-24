@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
@@ -74,6 +75,10 @@ function SpectrumVisualizer() {
     return () => spectrumListener.unsubscribe();
   }, [musicPlaying]);
 
+
+
+  
+
   // 3. 시각화 (기존 코드와 동일)
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -81,19 +86,19 @@ function SpectrumVisualizer() {
     const ctx = canvas.getContext('2d');
   
     // 배경색: 음악이면 검정, 마이크면 초록
-    ctx.fillStyle = musicPlaying ? '#000' : '#00c853'; // 초록: #00c853
+    ctx.fillStyle = musicPlaying ? '#000' : '#222222'; // 초록: #00c853
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
 
       // 추천 중이면 텍스트만 표시
     if (recommendStatus === 'searching') {
-      ctx.fillStyle = '#222';
+      ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.font = 'bold 56px sans-serif';
       ctx.fillStyle = '#ff00cc';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('음악찾는중', canvas.width / 2, canvas.height / 2);
+      // ctx.fillText('음악찾는중', canvas.width / 2, canvas.height / 2);
       return;
   }
   
@@ -125,17 +130,35 @@ function SpectrumVisualizer() {
   }, [spectrum, musicPlaying]);
 
   return (
-    <canvas
-  ref={canvasRef}
-  width={1100}
-  height={340}
-  style={{
-    background: musicPlaying ? '#000' : '#00c853',
-    display: 'block',
-    margin: '40px auto',
-    borderRadius: '16px'
-  }}
-/>
+    <div style={{position: 'relative', width: 1100, height: 340, margin: '40px auto'}}>
+  
+      <canvas
+        ref={canvasRef}
+        width={1100}
+        height={340}
+        style={{
+          background: musicPlaying ? '#000' : '#00c853',
+          borderRadius: '16px',
+          display: 'block',
+        }}
+      />
+      {/* 추천 중이면 GIF를 중앙에 띄움 */}
+      {recommendStatus === 'searching' && (
+        <img
+          src="./public/load-38_256.gif"
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: 128,
+            height: 128,
+            transform: 'translate(-50%, -50%)',
+            pointerEvents: 'none',
+            zIndex: 2,
+          }}
+        />
+      )}
+    </div>
   );
 }
 
