@@ -1,4 +1,3 @@
-# asyncio + spin_once 
 import os
 import sqlite3
 import faiss
@@ -20,10 +19,12 @@ import numpy as np
 class Mp3Recommender(Node):
     def __init__(self):
         super().__init__('Mp3Recommender')
+        self.status_pub = self.create_publisher(String, 'mp3_recommend_status', 10)
 
         # ✅ 로그 파일 경로 설정
         self.log_file_path = "/home/nvidia/ros2_ws/_logs/Mp3Recommender_log.txt"
         self.save_log("✅ Mp3Recommender Node Started")
+
 
         # ----- 환경 변수 / OpenAI API 키 로드 -----
         load_dotenv()
@@ -41,14 +42,7 @@ class Mp3Recommender(Node):
         self.faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index.bin"
         self.faiss_index = self.load_faiss_index()
         self.metadata = self.load_metadata_from_db()
-        
-        # # ----- 영화 DB와 FAISS 인덱스 로딩 -----
-        # self.db_path = "/home/delight/bumblebee_ws/src/pkg_rag/pkg_rag/movie_database.db"
-        # self.faiss_index_file = "/home/delight/bumblebee_ws/src/pkg_rag/pkg_rag/faiss_index_movie.bin"
-        # self.faiss_index = self.load_faiss_index()
-        # self.metadata = self.load_metadata_from_db()
-
-
+    
         
         # ----- ROS2 pub/sub 설정 -----
         self.publisher_ = self.create_publisher(String, 'recommended_mp3', 10)
@@ -283,6 +277,8 @@ class Mp3Recommender(Node):
 
 
     def question_callback(self, msg: String):
+        self.status_pub.publish(String(data='searching'))
+
         """
         ROS 콜백: user_question 토픽 수신 시 처리
         """
@@ -347,6 +343,7 @@ class Mp3Recommender(Node):
             self.get_logger().info(f"✅ Recommendation published: {result_str}")
             # ✅ 로그 저장
             self.save_log(f"Recommendation published: {result_str}")
+            self.status_pub.publish(String(data='done'))
 
         except Exception as e:
             self.get_logger().error(f"Error during processing: {str(e)}")
@@ -355,6 +352,7 @@ class Mp3Recommender(Node):
             self.publisher_.publish(error_msg)
             # ✅ 에러 로그 저장
             self.save_log(f"❌ Error: {str(e)}")
+            self.status_pub.publish(String(data='done'))
 
     def save_log(self, message):
         """ 로그를 파일에 저장 """
@@ -362,6 +360,8 @@ class Mp3Recommender(Node):
         log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
         with open(log_file_path, "a", encoding="utf-8") as log_file:
             log_file.write(log_message)
+        
+
 
 
 async def async_main(node: Mp3Recommender):
@@ -394,7 +394,6 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
 
 
 
