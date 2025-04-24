@@ -1,4 +1,3 @@
-
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -10,6 +9,10 @@ import random
 from datetime import datetime
 import unicodedata
 import re
+import asyncio
+import websockets
+import numpy as np  # 위에 추가
+import time
 
 class Mp3Player(Node):
     def __init__(self):
@@ -29,9 +32,20 @@ class Mp3Player(Node):
 
         # 퍼블리셔 추가 (음악 재생 상태 전송)
         self.publisher_ = self.create_publisher(String, "music_status", 10)
+        self.amplitude_publisher_ = self.create_publisher(String, "audio_amplitude", 10)
+        self.is_playing = False  # 재생 중 여부 플래그
+
 
     def mp3_callback(self, msg):
         """수신된 JSON 추천 MP3 데이터를 파싱하여 리스트로 변환 후 재생"""
+        if self.is_playing:
+            self.get_logger().warn("이미 음악이 재생 중입니다. 새 요청을 무시합니다.")
+            return
+        self.is_playing = True
+
+
+
+
         try:
             # ✅ JSON 없이 Key=Value 문자열을 파싱
             recommended_files = []
@@ -59,6 +73,34 @@ class Mp3Player(Node):
             self.get_logger().error(f"❌ MP3 재생 중 오류 발생: {e}")
             # ✅ 로그 저장
             self.save_log(f"❌ MP3 재생 중 오류 발생: {e}")
+        finally:
+            self.is_playing = False  # 재생 완료 후 플래그 해제
+
+
+
+    def publish_audio_spectrum(self, audio_segment):
+        chunk_size_ms = 50
+        total_duration = len(audio_segment)
+        for i in range(0, total_duration, chunk_size_ms):
+            chunk = audio_segment[i:i + chunk_size_ms]
+            samples = np.array(chunk.get_array_of_samples())
+            if chunk.channels == 2:
+                samples = samples.reshape((-1, 2))
+                samples = samples.mean(axis=1)
+            # FFT (주파수 스펙트럼)
+            fft = np.fft.fft(samples)
+            spectrum = np.abs(fft[:len(fft)//2])  # 양수 주파수만
+            spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+            data = {
+                "timestamp": i,
+                "spectrum": spectrum.tolist()
+            }
+            msg = String()
+            msg.data = json.dumps(data)
+            self.amplitude_publisher_.publish(msg)
+            time.sleep(chunk_size_ms / 1000.0)
+
+
 
   
     def play_mp3_list(self, files):
@@ -106,19 +148,6 @@ class Mp3Player(Node):
                     # 파일과 파일 사이에 효과음을 추가
                     final_audio += effect_sound + audio
 
-
-
-                # 역재생 사운드
-                # reverse_audio = audio.reverse()
-                # fast_reverse = reverse_audio.speedup(playback_speed=12.0)
-
-                # # 모든 파일은 정상 재생 후, 마지막 파일이 아니면 빠른 되감기 추가
-                # final_audio += audio
-                
-                # # 마지막 파일이 아니면 되감기 효과 추가
-                # if i < len(files) - 1:
-                #     final_audio += fast_reverse
-
                 self.get_logger().info(f"파일 재생 준비 완료: {file_name}, 길이: {duration}ms.")
                 self.save_log(f"파일 재생 준비 완료: {file_name}, 길이: {duration}ms.")
 
@@ -129,8 +158,10 @@ class Mp3Player(Node):
             # play(final_audio) 대신 export + aplay
             temp_wav_path = "/tmp/final_audio.wav"
             final_audio.export(temp_wav_path, format="wav")
-            os.system(f"aplay --device=default {temp_wav_path}")
+            #os.system(f"aplay --device=default {temp_wav_path}")
 
+            # ✅ WebSocket 전송 & 재생을 병렬로 실행
+            asyncio.run(self.parallel_play_and_stream(final_audio, temp_wav_path))
 
 
 
@@ -143,6 +174,14 @@ class Mp3Player(Node):
         except Exception as e:
             self.get_logger().error(f"MP3 파일 처리 중 오류 발생: {e}")
             self.save_log(f"MP3 파일 처리 중 오류 발생: {e}")
+
+
+    async def parallel_play_and_stream(self, audio_segment, wav_path):
+        await asyncio.gather(
+            asyncio.to_thread(self.publish_audio_spectrum, audio_segment),
+            asyncio.to_thread(os.system, f"aplay --device=default {wav_path}")
+        )
+
 
     def publish_music_status(self, status):
         """음악 재생 상태를 퍼블리시"""
