@@ -1,4 +1,3 @@
-
 import os
 import rclpy
 from rclpy.node import Node
@@ -15,7 +14,9 @@ from pydub import AudioSegment
 from pydub.playback import play
 from datetime import datetime
 import pygame
-
+import numpy as np
+import json
+from std_msgs.msg import String
 
 class UserQuestion(Node):
     def __init__(self):
@@ -51,6 +52,9 @@ class UserQuestion(Node):
 
         self.waiting_for_input_after_music = False  # 음악 종료 후 최초 입력 대기 플래그
         self.timer_30s = None  # 30초 타이머 초기화
+
+        self.visualizer_pub = self.create_publisher(String, "audio_visualizer", 10)
+
 
 
 
@@ -125,22 +129,22 @@ class UserQuestion(Node):
         """ 마이크 입력을 Google STT API로 실시간 전송 """
         self.get_logger().info('Starting microphone stream (continuous)...')
      
+     
         #self.stop_audio_stream()
 
         try:
             self.stream = self.p.open(
             format=pyaudio.paInt16,
-            channels=1,  # ✅ PulseAudio에서는 1 채널을 지원할 가능성이 높음
+            channels=1, # ✅ PulseAudio에서는 1 채널을 지원할 가능성이 높음
             rate=44100,
             input=True,
             frames_per_buffer=1024,
-            input_device_index=None,  # ✅ PulseAudio의 기본 입력 장치를 사용
+            input_device_index=None,   # ✅ PulseAudio의 기본 입력 장치를 사용
             stream_callback=self.audio_callback
         )
 
 
             time.sleep(0.5)  
-            #self.transcribe_streaming()  # ✅ 누락된 함수 호출 (아래에 정의)
             threading.Thread(target=self.transcribe_streaming, daemon=True).start()
         except Exception as e:
             self.get_logger().error(f"Failed to start microphone stream: {e}")
@@ -194,7 +198,7 @@ class UserQuestion(Node):
             self.get_logger().error(f"Error in streaming STT: {e}")
             self.force_restart_stt()
         finally:
-            self.transcribing = False  # ✅ 항상 플래그 초기화
+            self.transcribing = False   # ✅ 항상 플래그 초기화
 
 
     def audio_callback(self, in_data, frame_count, time_info, status):
@@ -212,9 +216,24 @@ class UserQuestion(Node):
         # ✅ "안녕" 감지 후 음성 데이터를 버퍼에 저장
         if self.trigger_detected:
             self.audio_buffer.append(in_data)
+            # === 실시간 오디오 시각화 데이터 publish ===
+            self.publish_audio_visualizer(in_data)
 
         return None, pyaudio.paContinue
     
+
+    def publish_audio_visualizer(self, in_data):
+        samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
+        # FFT (스펙트럼)
+        fft = np.fft.fft(samples)
+        spectrum = np.abs(fft[:len(fft)//2])
+        spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+        data = {
+            "spectrum": spectrum.tolist()
+        }
+        msg = String()
+        msg.data = json.dumps(data)
+        self.visualizer_pub.publish(msg)
 
 
     def process_responses(self, responses):
@@ -276,7 +295,7 @@ class UserQuestion(Node):
         """무음 상태에서 1초마다 경과 시간을 출력하는 스레드 실행"""
         
         if hasattr(self, 'silence_monitoring_thread') and self.silence_monitoring_thread.is_alive():
-            return  # 이미 실행 중이면 중복 실행 방지
+            return   # 이미 실행 중이면 중복 실행 방지
         
         self.silence_monitoring_thread = threading.Thread(target=self.monitor_silence,args=(3,), daemon=True)
         self.silence_monitoring_thread.start()
@@ -285,9 +304,10 @@ class UserQuestion(Node):
    
 
     def monitor_silence(self, silence_threshold):
-        """ 3초 이상 무음 상태가 지속되면 강제 Publish 또는 상태 초기화 """
+         """ 3초 이상 무음 상태가 지속되면 강제 Publish 또는 상태 초기화 """
         self.silence_seconds = 0  # 무음 지속 시간 초기화
         self.after_prompt = False  # 종료음 후 무음 감지 상태 초기화
+
 
         while self.trigger_detected:
             # 🔥 오디오 재생 중일 때 무음 감지 시작 방지
@@ -307,7 +327,7 @@ class UserQuestion(Node):
                 # 🔥 이미 퍼블리시된 경우 종료음 실행 방지
                 if self.force_published:
                     self.get_logger().info("이미 퍼블리시된 텍스트이므로 종료음 생략")
-                    self.force_published = False  # 플래그 리셋
+                    self.force_published = False # 플래그 리셋
                     break
 
                 # 🔥 무음 시간 동안 텍스트가 있는지 최종 확인
@@ -462,7 +482,8 @@ class UserQuestion(Node):
 
 
 
-    def publish_transcription(self, transcript):
+
+    ef publish_transcription(self, transcript):
         """ STT 결과를 퍼블리시 """
         if transcript.strip():
             if self.timer_30s and self.timer_30s.is_alive():
@@ -482,6 +503,7 @@ class UserQuestion(Node):
             self.partial_transcript = ""  # ✅ 퍼블리시 후 즉시 초기화
             self.trigger_detected = False  # ✅ 퍼블리시 후 trigger 상태 초기화
             self.waiting_for_input_after_music = False  # ✅ 입력 대기 상태 해제
+
 
 
 
@@ -512,7 +534,6 @@ class UserQuestion(Node):
             pygame.time.Clock().tick(10)
 
 
-
     def save_audio_clip(self):
         """ "안녕" 이후의 오디오를 WAV 파일로 저장 """
         if not self.audio_buffer:
@@ -530,7 +551,7 @@ class UserQuestion(Node):
 
         self.get_logger().info(f"Saved audio: {filename}")
         self.save_log(f"Saved audio: {filename}")
-        self.audio_buffer = []  
+        self.audio_buffer = []   
         
         
   
@@ -552,7 +573,6 @@ class UserQuestion(Node):
 
         # ✅ STT 재시작 – 쓰레드로 안전하게 분리
         threading.Thread(target=self.transcribe_streaming, daemon=True).start()
-
 
     def save_log(self, message):
         """ 로그를 파일에 저장 """
