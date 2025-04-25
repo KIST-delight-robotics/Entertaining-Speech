@@ -304,10 +304,9 @@ class UserQuestion(Node):
    
 
     def monitor_silence(self, silence_threshold):
-         """ 3초 이상 무음 상태가 지속되면 강제 Publish 또는 상태 초기화 """
+        """ 3초 이상 무음 상태가 지속되면 강제 Publish 또는 상태 초기화 """
         self.silence_seconds = 0  # 무음 지속 시간 초기화
         self.after_prompt = False  # 종료음 후 무음 감지 상태 초기화
-
 
         while self.trigger_detected:
             # 🔥 오디오 재생 중일 때 무음 감지 시작 방지
@@ -327,7 +326,7 @@ class UserQuestion(Node):
                 # 🔥 이미 퍼블리시된 경우 종료음 실행 방지
                 if self.force_published:
                     self.get_logger().info("이미 퍼블리시된 텍스트이므로 종료음 생략")
-                    self.force_published = False # 플래그 리셋
+                    self.force_published = False  # 플래그 리셋
                     break
 
                 # 🔥 무음 시간 동안 텍스트가 있는지 최종 확인
@@ -340,27 +339,21 @@ class UserQuestion(Node):
                     self.get_logger().info("무음 감지 중지: 퍼블리시 완료")
                     break
 
-                # 종료음 재생 전이면
                 if not self.after_prompt:
                     self.get_logger().info("무음성 3초 경과 (초기 체크): 종료음 재생 후 추가 무음 체크 시작")
                     self.play_effect_sound_prompt()  # 종료음 재생
-
-                    # 종료음 후에도 무음 체크를 위해 시간 갱신
                     self.last_speech_time = time.time()
-
-                    # 상태 전환
                     self.after_prompt = True
-                    self.silence_seconds = 0  # 무음 카운터 초기화
-                    continue  # 추가 무음 체크 계속
+                    self.silence_seconds = 0
+                    continue
 
-                # 종료음 후 3초 무음 상태 확인
                 else:
                     if not self.partial_transcript.strip():
                         self.get_logger().info(f"종료음 후 추가 무음 {self.silence_seconds}초 경과 (음성 없음)")
                         self.get_logger().info("추가 음성이 없으므로 초기 상태로 복귀")
                         self.trigger_detected = False
                         self.partial_transcript = ""
-                        self.after_prompt = False  # 상태 초기화
+                        self.after_prompt = False
                         break
                     else:
                         self.get_logger().info(f"종료음 후 추가 무음 {self.silence_seconds}초 경과 (음성 감지)")
@@ -368,7 +361,7 @@ class UserQuestion(Node):
                         self.publish_transcription(self.partial_transcript)
                         self.last_published_text = self.partial_transcript
                         self.partial_transcript = ""
-                        self.after_prompt = False  # 상태 초기화
+                        self.after_prompt = False
                         break
 
             time.sleep(0.1)
@@ -483,7 +476,7 @@ class UserQuestion(Node):
 
 
 
-    ef publish_transcription(self, transcript):
+    def publish_transcription(self, transcript):
         """ STT 결과를 퍼블리시 """
         if transcript.strip():
             if self.timer_30s and self.timer_30s.is_alive():
