@@ -1,4 +1,3 @@
-#루피 gpt + 영화음악db
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -42,11 +41,11 @@ class Mp3Recommender(Node):
         super().__init__('Mp3Recommender')
     
         # ✅ 로그 파일 경로 설정
-        self.log_file_path = "/home/delight/bumblebee_ws/_logs/Mp3Recommender_log.txt"
+        self.log_file_path = "/home/nvidia/ros2_ws/_logs/Mp3Recommender_log.txt"
         self.save_log("✅ Mp3Recommender Node Started")
 
         # ----- 환경 변수 / OpenAI API 키 로드 -----
-        load_dotenv("/home/delight/bumblebee_ws/src/.env")
+        load_dotenv("/home/nvidia/ros2_ws/src/.env")
         self.api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
         self.voice_id = "dtu2KmDq4zRNfRVuhajI"
         openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -55,7 +54,7 @@ class Mp3Recommender(Node):
 
         # speaker ↔ thread DB
         self.thread_map = SpeakerThreadMap(
-            "/home/delight/bumblebee_ws/src/pkg_rag/pkg_rag/speaker_thread.db"
+            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/speaker_thread.db"
         )
 
         # ----- SBERT 모델 초기화 -----
@@ -65,12 +64,12 @@ class Mp3Recommender(Node):
         )
 
         # ----- 음악 DB와 FAISS 인덱스 로딩 -----  
-        self.db_path = "/home/delight/bumblebee_ws/src/pkg_rag/pkg_rag/mp3_database_plus.db"
-        self.faiss_index_file = "/home/delight/bumblebee_ws/src/pkg_rag/pkg_rag/faiss_index_plus.bin"
+        self.db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus.db"
+        self.faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_plus.bin"
         self.faiss_index = self.load_faiss_index()
         self.metadata = self.load_metadata()
 
-        self.mp3_dir = "/home/delight/bumblebee/_langchain/beg-m3_new_database/mp3_database_plus"
+        self.mp3_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus"
         
         self.conversation_history = [
             {"role": "user", "content": "오늘 너무 피곤해서 아무것도 하기 싫어."},
@@ -148,7 +147,7 @@ class Mp3Recommender(Node):
             file_name = self.metadata.get(idx, "Unknown")
 
             file_path = os.path.abspath(os.path.join(
-                    "/home/delight/bumblebee_ws/src/pkg_rag/pkg_rag/mp3_database_EQ", file_name + ".mp3"
+                    "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_EQ", file_name + ".mp3"
                 ))
 
             if not file_name:
@@ -427,7 +426,7 @@ MP3 candidates:
     
     def save_log(self, message):
         """ 로그를 파일에 저장 """
-        log_file_path = "/home/delight/bumblebee_ws/_logs/Mp3Recommender_log.txt"
+        log_file_path = "/home/nvidia/ros2_ws/_logs/Mp3Recommender_log.txt"
         log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
         with open(log_file_path, "a", encoding="utf-8") as log_file:
             log_file.write(log_message)
