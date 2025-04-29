@@ -15,8 +15,8 @@ class Mp3Player(Node):
         super().__init__("Mp3Player")
 
         # 파일 경로
-        self.file_path = "/home/delight/bumblebee_ws/src/pkg_rag/pkg_rag/mp3_database_plus"
-        self.reply_path = "/home/delight/bumblebee_ws/src/pkg_spk/pkg_spk/reply.mp3"
+        self.file_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus"
+        self.reply_path = "/home/nvidia/ros2_ws/src/pkg_spk/pkg_spk/reply.mp3"
         self.api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
         self.voice_id = "dtu2KmDq4zRNfRVuhajI"
 
@@ -78,17 +78,38 @@ class Mp3Player(Node):
             self.get_logger().error(error_msg)
             self.save_log(error_msg)
 
+    # def play_mp3(self, file_path):
+    #     """
+    #     단일 MP3 파일 재생 (정규화 포함)
+    #     """
+    #     try:
+    #         sound = AudioSegment.from_file(file_path, format="mp3")
+    #         sound = self.match_target_amplitude(sound, -14.0)
+    #         play(sound)
+    #     except Exception as e:
+    #         self.get_logger().error(f"❌ MP3 재생 실패: {file_path} → {e}")
+    #         self.save_log(f"❌ MP3 재생 실패: {file_path} → {e}")
+
+
     def play_mp3(self, file_path):
         """
-        단일 MP3 파일 재생 (정규화 포함)
+        단일 MP3 파일 재생 (정규화 포함) - aplay 사용
         """
         try:
             sound = AudioSegment.from_file(file_path, format="mp3")
             sound = self.match_target_amplitude(sound, -14.0)
-            play(sound)
+
+            # 임시 wav 파일로 저장
+            temp_wav = "/tmp/temp_audio.wav"
+            sound.export(temp_wav, format="wav")
+
+            # 시스템 명령어로 재생
+            os.system(f"aplay {temp_wav}")
+            
         except Exception as e:
             self.get_logger().error(f"❌ MP3 재생 실패: {file_path} → {e}")
             self.save_log(f"❌ MP3 재생 실패: {file_path} → {e}")
+
 
     def text2speech(self, text):
         """
@@ -146,7 +167,7 @@ class Mp3Player(Node):
         """
         로그 파일에 저장
         """
-        log_file_path = "/home/delight/bumblebee_ws/_logs/Mp3Player_log.txt"
+        log_file_path = "/home/nvidia/ros2_ws/_logs/Mp3Player_log.txt"
         log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
         with open(log_file_path, "a", encoding="utf-8") as f:
             f.write(log_message)
