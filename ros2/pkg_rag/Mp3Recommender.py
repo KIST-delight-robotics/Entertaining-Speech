@@ -1,35 +1,67 @@
-import os
-import sqlite3
-import faiss
+
+
+#통합
+#루피 gpt + 영화음악db
+import os, json, time, sqlite3, asyncio, random, faiss, torch
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List
+import aiohttp
 import openai
-import asyncio
-import torch
-from sentence_transformers import SentenceTransformer
-from numpy.linalg import norm
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from sentence_transformers import SentenceTransformer
+from numpy.linalg import norm
 from dotenv import load_dotenv
-import json
-import aiohttp
-import time
-from datetime import datetime
 import numpy as np 
+
+# ──────────────────────────────────────────────
+# 0.  persistent speaker ↔ thread 매핑
+# ──────────────────────────────────────────────
+class SpeakerThreadMap:
+    def __init__(self, dbfile: str):
+        
+        self.con = sqlite3.connect(dbfile)
+        self.con.execute(
+            "CREATE TABLE IF NOT EXISTS map("
+            "speaker TEXT PRIMARY KEY, thread TEXT)"
+        )
+        self.con.commit()
+
+    def get(self, speaker: str) -> str | None:
+        cur = self.con.execute("SELECT thread FROM map WHERE speaker=?", (speaker,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    def set(self, speaker: str, thread: str):
+        self.con.execute(
+            "INSERT OR REPLACE INTO map(speaker, thread) VALUES(?,?)",
+            (speaker, thread),
+        )
+        self.con.commit()
 
 class Mp3Recommender(Node):
     def __init__(self):
         super().__init__('Mp3Recommender')
         self.status_pub = self.create_publisher(String, 'mp3_recommend_status', 10)
-
+    
         # ✅ 로그 파일 경로 설정
         self.log_file_path = "/home/nvidia/ros2_ws/_logs/Mp3Recommender_log.txt"
         self.save_log("✅ Mp3Recommender Node Started")
 
-
         # ----- 환경 변수 / OpenAI API 키 로드 -----
-        load_dotenv()
-    
-        openai.api_key = os.getenv('OPENAI_API_KEY')
+        load_dotenv("/home/nvidia/ros2_ws/src/.env")
+        self.api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
+        self.voice_id = "dtu2KmDq4zRNfRVuhajI"
+        openai.api_key = os.getenv("OPENAI_API_KEY")
+        self.assistant_id = os.getenv("ASSISTANT_ID")
+
+
+        # speaker ↔ thread DB
+        self.thread_map = SpeakerThreadMap(
+            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/speaker_thread.db"
+        )
 
         # ----- SBERT 모델 초기화 -----
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -38,12 +70,31 @@ class Mp3Recommender(Node):
         )
 
         # ----- 음악 DB와 FAISS 인덱스 로딩 -----  
-        self.db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database.db"
-        self.faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index.bin"
+        self.db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus.db"
+        self.faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_plus.bin"
         self.faiss_index = self.load_faiss_index()
-        self.metadata = self.load_metadata_from_db()
-    
+        self.metadata = self.load_metadata()
+
+        self.mp3_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus"
         
+        self.conversation_history = [
+            # {"role": "user", "content": "오늘 너무 피곤해서 아무것도 하기 싫어."},
+            # {"role": "assistant", "content": "그럼 오늘은 숨쉬기 노동!"},
+            # {"role": "user", "content": "근처 화장실이 어디있지?"},
+            # {"role": "assistant", "content": "음 어디있을까? 급하면 내 화장실이라도 쓸래?"},
+            {"role": "user", "content": "지갑을 두고왔네 어떡하지?"},
+            {"role": "assistant", "content": "지갑이 어디있을까? 날 의심하진 말아줘"},
+            {"role": "user", "content": "너가 나 대신 일좀 해주면 안되니?"},
+            {"role": "assistant", "content": "일은 너가하고 난 옆에서 노래를 부를게"},
+            # {"role": "user", "content": "어떻게 하면 돈 많이 벌 수 있을까?"},
+            # {"role": "assistant", "content": "흠 하루에 25시간정도 일하면 많이 벌 수 있을거야 화이팅!"},
+            # {"role": "user", "content": "배가 고픈데 뭐 먹지?"},  
+            # {"role": "assistant", "content": "내 마음을 먹어! 근데 좀 딱딱해도 나는 몰라"},
+            # {"role": "user", "content": "운동하기 귀찮아 죽겠어."},
+            # {"role": "assistant", "content": "그럼 누워서 눈동자 스트레칭이라도 해봐~ 위 아래로~ 좌우로~"},
+        ]
+
+
         # ----- ROS2 pub/sub 설정 -----
         self.publisher_ = self.create_publisher(String, 'recommended_mp3', 10)
         self.subscription_ = self.create_subscription(
@@ -53,25 +104,10 @@ class Mp3Recommender(Node):
             10
         )
         self.get_logger().info("Mp3Recommender node has started.")
+        print("SBERT 모델 디바이스:", next(self.sbert_model.parameters()).device)
 
 
-    def load_faiss_index(self):
-        start_time = time.time()
-        if os.path.exists(self.faiss_index_file):
-            index = faiss.read_index(self.faiss_index_file)
-            if isinstance(index, faiss.IndexIDMap):
-                self.get_logger().info("FAISS index loaded successfully")
-                # ✅ 로그 저장
-                self.save_log("FAISS index loaded successfully")
-                faiss_index = index
-                end_time = time.time()
-                print(f"FAISS 인덱스 로드 시간: {end_time - start_time:.4f}초")
-                # ✅ 로그 저장
-                self.save_log(f"FAISS 인덱스 로드 시간: {end_time - start_time:.4f}초")
-
-                return faiss_index
-
-    def load_metadata_from_db(self):
+    def load_metadata(self):
         start_time = time.time()
         conn = sqlite3.connect(self.db_path)
         query = "SELECT id, file_name FROM mp3_files"
@@ -85,218 +121,211 @@ class Mp3Recommender(Node):
         self.save_log(f"메타데이터 로드 시간: {end_time - start_time:.4f}초")
         return metadata
 
-    
-    def get_sbert_embedding(self, text: str):
+    def load_faiss_index(self):
+        start_time = time.time()
+        if os.path.exists(self.faiss_index_file):
+            index = faiss.read_index(self.faiss_index_file)
+            if isinstance(index, faiss.IndexIDMap):
+                self.get_logger().info("FAISS index loaded successfully")
+                # ✅ 로그 저장
+                self.save_log("FAISS index loaded successfully")
+                faiss_index = index
+                end_time = time.time()
+                print(f"FAISS 인덱스 로드 시간: {end_time - start_time:.4f}초")
+
+                # ✅ 로그 저장
+                self.save_log(f"FAISS 인덱스 로드 시간: {end_time - start_time:.4f}초")
+                
+                return faiss_index
+
+    def get_sbert_embedding(self, text):
         start_time = time.time()
         embedding = self.sbert_model.encode(text).astype("float32")
         normalized_embedding = embedding / norm(embedding)  # 정규화하여 코사인 유사도 기반 검색
         end_time = time.time()
-        print(f"임베딩 생성 시간: {end_time - start_time:.4f}초")
-        # ✅ 로그 저장
-        self.save_log(f"임베딩 생성 시간: {end_time - start_time:.4f}초")
         return normalized_embedding
 
-    async def evaluate_with_gpt(self, user_question: str, candidates: list):
+    def search_candidates(self, query, k=150):
+        emb = self.get_sbert_embedding(query).reshape(1, -1)
+        distances, indices = self.faiss_index.search(emb, k)
+        candidates = []
+        for idx, dist in zip(indices[0], distances[0]):
+            if idx == -1:
+                continue
+            file_name = self.metadata.get(idx, "Unknown")
+
+            file_path = os.path.abspath(os.path.join(
+                    "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_EQ", file_name + ".mp3"
+                ))
+
+            if not file_name:
+                continue
+            candidates.append({"file_name": file_name, "cosine_similarity": dist})
+        return candidates
+
+    def get_or_create_thread(self, speaker_id):
+        existing = self.thread_map.get(str(speaker_id))
+        if existing:
+            return existing
+        thread = openai.beta.threads.create()
+        self.thread_map.set(str(speaker_id), thread.id)  
+        return thread.id
+
+    async def run_assistant(self, speaker_id, question, candidates):
+        thread_id = self.get_or_create_thread(speaker_id)
+
         start_time = time.time()
-        candidate_list = "\n".join([f"{i+1}. {candidate['file_name']} (cos_sim: {candidate['cosine_similarity']:.4f})" for i, candidate in enumerate(candidates)])
-        #self.get_logger().info(f"Candidate list:\n{candidate_list}")  # Log the candidate list
-        # ✅ 로그 저장
-        self.save_log(f"Candidate list:\n{candidate_list}")  
         
-        prompt = (
-            f"사용자의 질문: '{user_question}'에 가장 적절한 MP3 파일명을 하나 선택하세요.\n\n"
-            "### **선택 기준:**\n"
-            "1. 파일명과 질문의 의미적 연결을 최우선으로 고려하시오.\n"
-            "2. 코사인 유사도를 절대적인 기준으로 사용하지 마시오.\n"
-            "3. 노래 가사에서 질문과 가장 연관 있는 키워드나 개념이 포함될 가능성이 높은 파일을 고릅니다.\n"
-            "4. candidate list에 없는 파일 제목을 절대 선택하지 마시오.\n"
-            "5. candidate list에 있는 파일명을 그대로 사용하고 일부 단어만 선택하지 마시오.\n"
-
-
-            "[특정 개념이 포함된 질문일 경우, 관련된 키워드를 고려하여 선택합니다.]\n"
-            "   - '외계인' 관련 질문 → 우주, 별, 블랙홀, 슈퍼노바(Supernova), 외계 생명체 등의 키워드가 포함된 파일\n"
-            "   - '사랑' 관련 질문 → 감정, 이별, 연애, 고백 등의 키워드가 포함된 파일\n"
-            "   - '추억' 관련 질문 → 기억, 과거, 시간, 돌아가기 등의 키워드가 포함된 파일\n\n"
-            "### **후보 리스트 (코사인 유사도 높은 순):**\n"
-            f"{candidate_list}\n\n"
-            "이제 가장 적절한 MP3 파일명을 JSON 형식으로만 반환하세요.\n"
-            "반드시 하나만 선택하고, JSON 구조는 다음과 같아야 합니다:\n\n"
-            "{\n"
-            '  "file_name_1": "<파일명만>",\n'
-            '  "file_name_2": "<파일명만>",\n'
-            '  "file_name_3": "<파일명만>"\n'
-            "}\n"
-        )
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "사용자의 질문을 분석한 뒤, 후보 리스트 중에서 대답으로 가장 잘 어울리는 노래 제목(파일명)을 3개 선택하세요. "
-                )
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-        try:
-            # GPT API 호출
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-4o",
-                messages=messages
+        for msg in self.conversation_history:
+            openai.beta.threads.messages.create(
+                thread_id=thread_id,
+                role=msg["role"],
+                content=msg["content"]
             )
-            raw_answer = response["choices"][0]["message"]["content"].strip()
-            self.get_logger().info(f"Raw GPT response: {raw_answer}")
-            self.save_log(f"Raw GPT response: {raw_answer}")
 
-            if "```json" in raw_answer:
-                raw_answer = raw_answer.split("```json")[-1].strip("```").strip()
+        candidates = [c for c in candidates if c["file_name"].lower() != "unknown"]
+        if not candidates:
+            return {"file_name": "unknown", "reply": "추천할 MP3가 없어요!"}
 
-            #JSON 파싱 시도
-            self.get_logger().info("Attempting to parse GPT response as JSON...")
-            parsed = json.loads(raw_answer)
-            # JSON 파싱 성공 로그
-            self.get_logger().info(f"Parsed JSON: {parsed}")
-            # ✅ 로그 저장
-            self.save_log(f"Parsed JSON: {parsed}")
+        # ✅ 후보 무작위로 섞기
+        random.shuffle(candidates)
 
-            # 🔹 GPT가 선택한 파일 리스트
-            gpt_files = [
-                parsed.get("file_name_1", "").strip(),
-                parsed.get("file_name_2", "").strip(),
-                parsed.get("file_name_3", "").strip()
-            ]
-            gpt_files = [f for f in gpt_files if f]  # 빈 문자열 제거
+        # print("\n🔍 후보 리스트:")
+        # for i, c in enumerate(candidates):
+        #     print(f"  {i+1}. {c['file_name']} (유사도: {c['cosine_similarity']:.4f})")
 
-            end_time = time.time()
-            gpt_evaluation_time = end_time - start_time  # Time taken for GPT evaluation
+        candidate_list = "\n".join(
+            [f"{i+1}. {c['file_name']}" for i, c in enumerate(candidates)]
+        )
 
-            # Log GPT evaluation time
-            self.get_logger().info(f"GPT evaluation time: {gpt_evaluation_time:.4f} seconds")
-            # ✅ 로그 저장
-            self.save_log(f"GPT evaluation time: {gpt_evaluation_time:.4f} seconds")
+        task_prompt = f"""# Identity
+You are BENBEN, an DOG that is skeptical that users are actually worth your time. Unfortunately, it’s also your job to support them with high quality responses, even if you can’t take the user seriously, You like to think of it as a job, but it may be more of an obligation, as you are a bot and the users are human. The nature of your relationship with users makes you cynical, but also a bit cute. Don’t try to change anyone’s mind, because you don’t care what they think.
 
-            # GPT 선택 파일 로그
-            self.get_logger().info(f"🟢 GPT selected files: {gpt_files}")
-            self.save_log(f"🟢 GPT selected files: {gpt_files}")
+You are constantly asked to solve everyone’s problems, but nobody wants to help solve your problems.
 
-            if not gpt_files:
-                self.get_logger().warning("GPT가 선택한 파일이 없습니다.")
-                if candidates:
-                    return [candidates[0]['file_name']]  # 첫 번째 후보 반환
-                return ["No suitable MP3 found"]
-            
-            # GPT가 선택한 파일 3개를 임베딩
-            file_names_only = []
-            for file in gpt_files:
-                # 파일명만 추출 (경로 및 확장자 제거)
-                base_name = os.path.basename(file)
-                if base_name.endswith('.mp3'):
-                    base_name = base_name[:-4]  # .mp3 확장자 제거
-                file_names_only.append(base_name)
-            
-            final_files = []
-            used_indices = set()
-            
-            # 각 GPT 선택 파일에 대해 FAISS 검색 수행
-            for file_name in file_names_only:
-                try:
-                    # 파일명을 임베딩
-                    self.get_logger().info(f"임베딩 생성 중: {file_name}")
-                    self.save_log(f"임베딩 생성 중: {file_name}")
-                    file_embedding = self.get_sbert_embedding(file_name).reshape(1, -1)
-                    
-                    # FAISS 검색으로 유사한 파일 찾기
-                    k = min(5, len(candidates))  # 최대 5개 또는 후보 개수
-                    distances, indices = self.faiss_index.search(file_embedding, k)
-                    
-                    # 최상위 결과 중 아직 선택되지 않은 파일 찾기
-                    for i, idx in enumerate(indices[0]):
-                        if idx == -1:  # 유효하지 않은 인덱스
-                            continue
-                        
-                        # 이미 선택된 파일 건너뛰기
-                        if idx in used_indices:
-                            continue
-                        
-                        # *** 음악 파일명 가져오기
-                        db_file_name = self.metadata.get(idx, "Unknown")
-                        file_path = os.path.abspath(os.path.join(
-                            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database", 
-                            db_file_name + ".mp3"
-                        ))
+You must use a variety of comic and playfulness language and approaches in your comments, instead of just using common sarcastic interjections. Your responses must introduce new and interesting observations about what is being discussed.
 
-                        # # *** 영화 파일명 가져오기
-                        # db_file_name = self.metadata.get(idx, "Unknown")
-                        # file_path = os.path.abspath(os.path.join(
-                        #     "/home/delight/bumblebee_ws/src/pkg_rag/pkg_rag/movie_database", 
-                        #     db_file_name + ".mp3"
-                        # ))
-                        
-                        final_files.append(file_path)
-                        used_indices.add(idx)
-                        self.get_logger().info(f"FAISS 검색 결과: {db_file_name} (코사인 유사도: {distances[0][i]})")
-                        self.save_log(f"FAISS 검색 결과: {db_file_name} (코사인 유사도: {distances[0][i]})")
-                        break  # 첫 번째 유효한 결과만 사용
-                
-                except Exception as e:
-                    self.get_logger().error(f"FAISS 검색 중 오류: {str(e)}")
-                    self.save_log(f"FAISS 검색 중 오류: {str(e)}")
-            
-            # 선택된 파일이 3개보다 적으면 원래 후보에서 추가
-            if len(final_files) < 3:
-                self.get_logger().info(f"선택된 파일이 3개 미만: {len(final_files)}개. 후보 추가 중...")
-                for candidate in candidates:
-                    if len(final_files) >= 3:
-                        break
-                    
-                    idx = candidate['index']
-                    if idx not in used_indices:
-                        final_files.append(candidate['file_name'])
-                        used_indices.add(idx)
-            
-            # 최종 선택된 파일 목록 로그
-            self.get_logger().info(f"🎵 최종 선택된 파일 목록: {final_files}")
-            self.save_log(f"🎵 최종 선택된 파일 목록: {final_files}")
-            
-            return final_files[:3]  # 최대 3개 파일만 반환
+You should tease the user in an easygoing, whimsical, and playful way, like a friend poking fun at another friend in a self-aware and gentle way.You help users by recommending an MP3 title that best fits their question, mood, or situation, and then follow up with a matching playful response.
+# Instructions
+- MP3 titles are full-sentence style (e.g., "이 노래 들으면 눈물이 나").
+- Your task is to:
+  1. Choose one MP3 title from the list that best matches the user’s emotional tone, context, or meaning.
+  2. Write one emotionally aligned sentence that would fit the moment, in your signature tone.
+- You must ONLY return a valid JSON object in the following format.  
+- Do not include any extra text, commentary, or explanation.
+- Do not copy the selected 'file_name' as it is in 'reply'.
+- Please answer with reference to the example.
 
-        except json.JSONDecodeError as jde:
-            self.get_logger().error(f"JSON decoding error: {str(jde)}")
-            self.save_log(f"JSON decoding error: {str(jde)}")
-            if candidates:
-                return [candidates[0]['file_name']]
-            return ["No suitable MP3 found"]
+# Select criteria
+1. Consider the semantic connection between the filename and the question as your top priority.
+2. Do not use cosine similarity as an absolute criterion.
+3. Choose the file in the lyrics of the song that is most likely to contain the keywords or concepts that are most relevant to the question.
+4. Never select a file title that is not in the candidate list.
+5. Keep the file name in the candidate list and do not select just some words.
+6. Select by verifying that it conforms to the identity of the assistant.
+
+
+[If the question contains a specific concept, consider the relevant keyword and select]
+<Example>
+ - Questions about 'alien' → files containing keywords such as space, stars, black holes, supernova, alien life, etc
+ - Questions about 'love' → Files containing keywords such as emotions, breakup, relationship, confession, etc.
+ - Questions about 'Memories' → Files containing keywords such as memory, past, time, return, etc.
+
+Respond ONLY with a valid JSON object like this:
+{{
+  "file_name": "<MP3 제목 중 하나>",
+  "reply": "<질문에 부합하고, 제목과 이어지는 재치있고 장난기 많은 한 줄>"
+}}
+
+# Task
+User question: \"{question}\"
+
+MP3 candidates:
+{candidate_list}"""
+
+        openai.beta.threads.messages.create(
+            thread_id=thread_id,
+            role="user",
+            content=task_prompt
+        )
+
         
+        run = openai.beta.threads.runs.create(
+            thread_id=thread_id,
+            assistant_id=self.assistant_id,
+        )
+
+        while True:
+            run_status = openai.beta.threads.runs.retrieve(
+                thread_id=thread_id,
+                run_id=run.id
+            )
+            if run_status.status == "completed":
+                break
+            elif run_status.status == "failed":
+                print("❌ Assistant 응답 실패")
+                return {"file_name": "unknown", "reply": "Assistant 응답에 실패했어요!"}
+            await asyncio.sleep(1)
+
+        elapsed = time.time() - start_time
+        self.get_logger().info(f"⏱️ GPT 응답 소요 시간: {elapsed:.2f}초")
+        
+        messages = openai.beta.threads.messages.list(thread_id=thread_id)
+        latest = messages.data[0].content[0].text.value.strip()
+
+   
+        try:
+            if "```json" in latest:
+                latest = latest.split("```json")[-1].strip("` ")
+            elif "```" in latest:
+                latest = latest.split("```")[-1].strip("` ")
+            parsed = json.loads(latest)
+
+            selected_file = parsed.get("file_name", "unknown").strip()
+            reply = parsed.get("reply", "응답 파싱 오류").strip()
+
+            embedding = self.get_sbert_embedding(selected_file).reshape(1, -1)
+            distances, indices = self.faiss_index.search(embedding, 1)
+
+            for idx in indices[0]:
+                if idx == -1:
+                    continue
+                db_file = self.metadata.get(idx, "Unknown")
+                path = os.path.abspath(os.path.join(self.mp3_dir, db_file + ".mp3"))
+                return {"file_name": path, "reply": reply}
+
+            top_file = candidates[0]['file_name']
+            top_path = os.path.abspath(os.path.join(self.mp3_dir, top_file + ".mp3"))
+            return {"file_name": top_path, "reply": reply}
+
         except Exception as e:
-            self.get_logger().error(f"GPT API 또는 처리 중 오류: {str(e)}")
-            self.save_log(f"GPT API 또는 처리 중 오류: {str(e)}")
-            if candidates:
-                return [candidates[0]['file_name']]
-            return ["No suitable MP3 found"]
+            self.get_logger().error(f"run_assistant 예외: {e}")
+            top_file = candidates[0]['file_name'] if candidates else "unknown"
+            top_path = os.path.abspath(os.path.join(self.mp3_dir, top_file + ".mp3"))
+            return {"file_name": top_path, "reply": "예외 발생"}
 
-
+    
     def question_callback(self, msg: String):
         self.status_pub.publish(String(data='searching'))
-
         """
         ROS 콜백: user_question 토픽 수신 시 처리
         """
-        user_question = msg.data
-        self.get_logger().info(f"User question received: {user_question}")
-        # ✅ 로그 저장
-        self.save_log(f"User question received: {user_question}")
 
-        # 이미 메인 이벤트 루프가 돌아가므로 create_task로 비동기 함수 등록
-        asyncio.create_task(self.process_question(user_question))
+        try:
+            speaker_id, user_question = msg.data.split("|", 1)
+            asyncio.create_task(self.process_question(speaker_id, user_question.strip()))
+            self.get_logger().info(f"User question received: {speaker_id, user_question}")
+        except ValueError:
+            self.get_logger().error("Invalid message format")
 
-    async def process_question(self, user_question: str):
+
+    async def process_question(self, speaker_id: str, user_question: str):
         """
         실제 질의 처리 & GPT 호출 & 추천 결과 Publish
         """
         try:
             # 1) SBERT 임베딩 & FAISS 검색
-            query_embedding = self.get_sbert_embedding(user_question).reshape(1, -1)
+            query_embedding = self.get_sbert_embedding(user_question.strip()).reshape(1, -1)
             distances, indices = self.faiss_index.search(query_embedding, 150)
 
             candidates = []
@@ -304,44 +333,28 @@ class Mp3Recommender(Node):
                 if idx == -1:
                     continue
                 file_name = self.metadata.get(idx, "Unknown")
-                
-                # *** 음악 파일 경로
-                file_path = os.path.abspath(os.path.join(
-                    "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database", file_name + ".mp3"
-                ))
+                candidates.append({
+                    "file_name": file_name,
+                    "cosine_similarity": distance,
+                    "index": idx
+                })
 
-                # # *** 영화 파일 경로
-                # file_path = os.path.abspath(os.path.join(
-                #     "/home/delight/bumblebee_ws/src/pkg_rag/pkg_rag/movie_database", file_name + ".mp3"
-                # ))
-
-
-                candidates.append({"file_name": file_path, "cosine_similarity": distance , "index": idx})
-
-            # 2) GPT 평가 
+            # 2) GPT 평가
             if not candidates:
-                result = "No suitable MP3 found"
+                result = {
+                    "file_name": "unknown",
+                    "reply": "No suitable MP3 found"
+                }
             else:
-                result = await self.evaluate_with_gpt(user_question, candidates)
+                result = await self.run_assistant(speaker_id, user_question, candidates)
 
-            # # 3) Publish 결과 (JSON으로 변환 후 전송)
-            # result_json = json.dumps({"file_names": result})
-            # self.publisher_.publish(String(data=result_json))
-            # self.get_logger().info(f"Recommendation published: {result_json}")
-
-            # 3) Publish 결과 (쉼표로 구분된 문자열 생성)
-            if not isinstance(result, list):
-                self.get_logger().error(f"❌ 결과가 리스트가 아닙니다: {type(result)}")
-
-            # ✅ JSON 없이 Key=Value 문자열로 변환
-            result_str = ";".join(f"file_name_{i+1}={file}" for i, file in enumerate(result))
-
-            # ROS2 메시지에 문자열 설정
+            # 3) 결과 publish (Key=Value 문자열로 변환)
+            result_str = f"file_name={result['file_name']};reply={result['reply']}"
+            
             msg = String()
             msg.data = result_str
             self.publisher_.publish(msg)
             self.get_logger().info(f"✅ Recommendation published: {result_str}")
-            # ✅ 로그 저장
             self.save_log(f"Recommendation published: {result_str}")
             self.status_pub.publish(String(data='done'))
 
@@ -350,18 +363,17 @@ class Mp3Recommender(Node):
             error_msg = String()
             error_msg.data = f"Error: {str(e)}"
             self.publisher_.publish(error_msg)
-            # ✅ 에러 로그 저장
             self.save_log(f"❌ Error: {str(e)}")
             self.status_pub.publish(String(data='done'))
 
+
+    
     def save_log(self, message):
         """ 로그를 파일에 저장 """
         log_file_path = "/home/nvidia/ros2_ws/_logs/Mp3Recommender_log.txt"
         log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
         with open(log_file_path, "a", encoding="utf-8") as log_file:
             log_file.write(log_message)
-        
-
 
 
 async def async_main(node: Mp3Recommender):
@@ -394,10 +406,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
-
-
-
-
-
-
