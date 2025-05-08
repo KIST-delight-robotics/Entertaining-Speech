@@ -1,28 +1,35 @@
+
+#통합
+import os
+import requests
+import threading
+from datetime import datetime
+
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from pydub import AudioSegment
 from pydub.playback import play
-import os
-import json
-import random
-from datetime import datetime
-import unicodedata
-import re
 import asyncio
-import websockets
-import numpy as np  # 위에 추가
+import numpy as np
+import json
 import time
+import websockets
+
+import wave
+import pyaudio
 
 class Mp3Player(Node):
     def __init__(self):
         super().__init__("Mp3Player")
-        self.file_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database"
-        # self.file_path = "/home/delight/bumblebee_ws/src/pkg_rag/pkg_rag/movie_database"
 
-        self.effect_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/effects"
+        # 파일 경로
+        self.file_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus"
+        self.reply_path = "/home/nvidia/ros2_ws/src/pkg_spk/pkg_spk/reply.mp3"
+        self.api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
+        self.voice_id = "dtu2KmDq4zRNfRVuhajI"
 
-        # MP3 추천 파일 구독
+        # 구독: 추천된 MP3
         self.subscription_ = self.create_subscription(
             String,
             "recommended_mp3",
@@ -30,51 +37,69 @@ class Mp3Player(Node):
             10
         )
 
-        # 퍼블리셔 추가 (음악 재생 상태 전송)
+        # 퍼블리시: 음악 재생 상태
         self.publisher_ = self.create_publisher(String, "music_status", 10)
         self.amplitude_publisher_ = self.create_publisher(String, "audio_amplitude", 10)
         self.is_playing = False  # 재생 중 여부 플래그
 
-
     def mp3_callback(self, msg):
-        """수신된 JSON 추천 MP3 데이터를 파싱하여 리스트로 변환 후 재생"""
-        if self.is_playing:
-            self.get_logger().warn("이미 음악이 재생 중입니다. 새 요청을 무시합니다.")
-            return
-        self.is_playing = True
-
-
-
-
+        """
+        수신된 추천 MP3 (key=value;key=value 형태) 파싱 → 음악 + TTS 재생
+        """
         try:
-            # ✅ JSON 없이 Key=Value 문자열을 파싱
-            recommended_files = []
-            pairs = msg.data.split(";")
-            
-            for pair in pairs:
-                key_value = pair.split("=")
-                if len(key_value) == 2:
-                    recommended_files.append(key_value[1].strip())
+            result_dict = {}
+            for pair in msg.data.split(";"):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    result_dict[k.strip()] = v.strip()
 
-            self.get_logger().info(f"🎵 수신된 추천 MP3 파일들: {recommended_files}")
-            self.save_log(f"🎵 수신된 추천 MP3 파일들: {recommended_files}")
-            
+            file_path = result_dict.get("file_name", "")
+            reply_text = result_dict.get("reply", "")
 
-            # MP3 재생 시작 전 'music_playing' 퍼블리시
+            if not file_path:
+                self.get_logger().warn("파일 경로가 비어 있습니다.")
+                return
+
+            # 전체 경로가 아니면 조립
+            if not os.path.isabs(file_path):
+                file_path = os.path.join(self.file_path, file_path)
+
+            self.get_logger().info(f"🎵 추천 MP3: {file_path}")
+            self.get_logger().info(f"💬 Assistant 응답: {reply_text}")
+            self.save_log(f"🎵 추천 MP3: {file_path}")
+            self.save_log(f"💬 Assistant 응답: {reply_text}")
+
+            # 🎯 TTS 스레드 실행
+            tts_thread = threading.Thread(
+                target=self.text2speech, args=(reply_text,)
+            )
+            tts_thread.start()
+
+            # 🎵 음악 먼저 재생
             self.publish_music_status("music_playing")
+            self.play_mp3(file_path)
 
-            # MP3 파일들을 순차적으로 재생
-            self.play_mp3_list(recommended_files)
-
-            # MP3 재생이 끝나면 'music_done' 퍼블리시
+            # 🎧 TTS 재생
+            tts_thread.join()
+            self.play_mp3(self.reply_path)
             self.publish_music_status("music_done")
 
         except Exception as e:
-            self.get_logger().error(f"❌ MP3 재생 중 오류 발생: {e}")
-            # ✅ 로그 저장
-            self.save_log(f"❌ MP3 재생 중 오류 발생: {e}")
-        finally:
-            self.is_playing = False  # 재생 완료 후 플래그 해제
+            error_msg = f"❌ MP3 재생 중 오류 발생: {e}"
+            self.get_logger().error(error_msg)
+            self.save_log(error_msg)
+
+    # def play_mp3(self, file_path):
+    #     """
+    #     단일 MP3 파일 재생 (정규화 포함)
+    #     """
+    #     try:
+    #         sound = AudioSegment.from_file(file_path, format="mp3")
+    #         sound = self.match_target_amplitude(sound, -14.0)
+    #         play(sound)
+    #     except Exception as e:
+    #         self.get_logger().error(f"❌ MP3 재생 실패: {file_path} → {e}")
+    #         self.save_log(f"❌ MP3 재생 실패: {file_path} → {e}")
 
 
 
@@ -100,104 +125,179 @@ class Mp3Player(Node):
             self.amplitude_publisher_.publish(msg)
             time.sleep(chunk_size_ms / 1000.0)
 
+    # def play_mp3(self, file_path):
+    #     """
+    #     단일 MP3 파일 재생 (정규화 포함) - aplay 사용
+    #     """
+    #     try:
+    #         sound = AudioSegment.from_file(file_path, format="mp3")
+    #         self.publish_audio_spectrum(sound)
+    #         sound = self.match_target_amplitude(sound, -14.0)
+
+    #         # 임시 wav 파일로 저장
+    #         temp_wav = "/tmp/temp_audio.wav"
+    #         sound.export(temp_wav, format="wav")
+
+    #         # # 시스템 명령어로 재생
+    #         os.system(f"aplay {temp_wav}")
+            
+
+    #     except Exception as e:
+    #         self.get_logger().error(f"❌ MP3 재생 실패: {file_path} → {e}")
+    #         self.save_log(f"❌ MP3 재생 실패: {file_path} → {e}")
 
 
-  
-    def play_mp3_list(self, files):
-        """MP3 파일들을 로드하여 순차적으로 재생"""
-        effect_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/effects"  # ✅ 효과음 디렉토리 경로
+    # def play_mp3(self, file_path):
+    #     try:
+    #         sound = AudioSegment.from_file(file_path, format="mp3")
+    #         sound = self.match_target_amplitude(sound, -14.0)
+    #         temp_wav = "/tmp/temp_audio.wav"
+    #         sound.export(temp_wav, format="wav")
+    #         # os.system(f"aplay -D hw3,0 {temp_wav}")
 
+
+
+    #         wf = wave.open(temp_wav, 'rb')
+    #         p = pyaudio.PyAudio()
+    #         chunk_size = 1024
+
+    #         stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
+    #                         channels=wf.getnchannels(),
+    #                         rate=wf.getframerate(),
+    #                         output=True,
+    #                         output_device_index=26
+    #                         )
+
+    #         data = wf.readframes(chunk_size)
+    #         while data:
+    #             stream.write(data)
+    #             # 스펙트럼 퍼블리시
+    #             samples = np.frombuffer(data, dtype=np.int16)
+    #             if wf.getnchannels() == 2:
+    #                 samples = samples.reshape((-1, 2)).mean(axis=1)
+    #             fft = np.fft.fft(samples)
+    #             spectrum = np.abs(fft[:len(fft)//2])
+    #             spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+    #             msg = String()
+    #             msg.data = json.dumps({"spectrum": spectrum.tolist()})
+    #             self.amplitude_publisher_.publish(msg)
+    #             data = wf.readframes(chunk_size)
+
+    #         stream.stop_stream()
+    #         stream.close()
+    #         p.terminate()
+    #         wf.close()
+    #     except Exception as e:
+    #         self.get_logger().error(f"❌ MP3 재생 실패: {file_path} → {e}")
+    #         self.save_log(f"❌ MP3 재생 실패: {file_path} → {e}")
+
+    def play_mp3(self, file_path):
         try:
-            final_audio = AudioSegment.silent(duration=200)
-            # ✅ 효과음 디렉토리에서 mp3 또는 wav 파일만 필터링하여 리스트 생성
-            effect_files = [f for f in os.listdir(effect_dir) if f.endswith(('.mp3', '.wav'))]
+            sound = AudioSegment.from_file(file_path, format="mp3")
+            sound = self.match_target_amplitude(sound, -14.0)
+            
+            # 임시 WAV로 변환 후 저장
+            temp_wav = "/tmp/temp_audio.wav"
+            sound.export(temp_wav, format="wav")
 
-            for i, file_name in enumerate(files):
-                file_name = file_name.strip()
-
-                # 절대 경로가 아니면 기본 디렉토리를 추가
-                if not os.path.isabs(file_name):
-                    file_name = os.path.join(self.file_path, file_name)
-
-                if not os.path.exists(file_name):
-                    self.get_logger().error(f"MP3 파일 '{file_name}'이(가) 존재하지 않습니다.")
-                    self.save_log(f"MP3 파일 '{file_name}'이(가) 존재하지 않습니다.")
-                    continue
-
-                # MP3 파일 로드 및 처리
-                audio = AudioSegment.from_file(file_name, format="mp3")
-                duration = len(audio)
-
-                #볼륨 정규화 (다른 곡과 음량 차이가 클 경우)
-                target_db = -20.0  # 기준 음량 (dBFS)
-                change_in_dB = target_db - audio.dBFS
-                audio = audio.apply_gain(change_in_dB)  # 음량 정규화
-
-                # ✅ 랜덤 효과음 선택 후 로드
-                random_effect = random.choice(effect_files)
-                effect_sound_path = os.path.join(effect_dir, random_effect)
-                effect_sound = AudioSegment.from_file(effect_sound_path, format="mp3")  # ✅ 효과음 로드
-
-                self.get_logger().info(f"🎵 선택된 랜덤 효과음: {random_effect}")
-                self.save_log(f"🎵 선택된 랜덤 효과음: {random_effect}")
-                
-                # 첫 번째 파일은 바로 추가
-                if i == 0:
-                    final_audio += audio
-                else:
-                    # 파일과 파일 사이에 효과음을 추가
-                    final_audio += effect_sound + audio
-
-                self.get_logger().info(f"파일 재생 준비 완료: {file_name}, 길이: {duration}ms.")
-                self.save_log(f"파일 재생 준비 완료: {file_name}, 길이: {duration}ms.")
-
-            self.get_logger().info("MP3 재생 시작...")
-            self.save_log("MP3 재생 시작...")
-            # play(final_audio)
-
-            # play(final_audio) 대신 export + aplay
-            temp_wav_path = "/tmp/final_audio.wav"
-            final_audio.export(temp_wav_path, format="wav")
-            #os.system(f"aplay --device=default {temp_wav_path}")
-
-            # ✅ WebSocket 전송 & 재생을 병렬로 실행
-            asyncio.run(self.parallel_play_and_stream(final_audio, temp_wav_path))
-
-
-
-
-
-            self.get_logger().info("MP3 재생 완료.")
-            self.save_log("MP3 재생 완료.")
-
+            # 스펙트럼과 재생 병렬로 실행
+            playback_thread = threading.Thread(target=self.publish_and_play, args=(temp_wav,))
+            playback_thread.start()
+            playback_thread.join()
 
         except Exception as e:
-            self.get_logger().error(f"MP3 파일 처리 중 오류 발생: {e}")
-            self.save_log(f"MP3 파일 처리 중 오류 발생: {e}")
+            self.get_logger().error(f"❌ MP3 재생 실패: {file_path} → {e}")
+            self.save_log(f"❌ MP3 재생 실패: {file_path} → {e}")
+
+    def publish_and_play(self, wav_path):
+        wf = wave.open(wav_path, 'rb')
+        chunk_size = 1024
+
+        def publish_spectrum():
+            data = wf.readframes(chunk_size)
+            while data:
+                samples = np.frombuffer(data, dtype=np.int16)
+                if wf.getnchannels() == 2:
+                    samples = samples.reshape((-1, 2)).mean(axis=1)
+                fft = np.fft.fft(samples)
+                spectrum = np.abs(fft[:len(fft)//2])
+                spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+                msg = String()
+                msg.data = json.dumps({"spectrum": spectrum.tolist()})
+                self.amplitude_publisher_.publish(msg)
+                data = wf.readframes(chunk_size)
+                time.sleep(chunk_size / wf.getframerate())
+
+        spectrum_thread = threading.Thread(target=publish_spectrum)
+        spectrum_thread.start()
+
+        # 시스템 명령어 aplay로 재생 (즉각적인 출력)
+        os.system(f"aplay {wav_path}")  # 🔥실제 출력장치로 변경(카드2)
+        spectrum_thread.join()
+        wf.close()
 
 
-    async def parallel_play_and_stream(self, audio_segment, wav_path):
-        await asyncio.gather(
-            asyncio.to_thread(self.publish_audio_spectrum, audio_segment),
-            asyncio.to_thread(os.system, f"aplay --device=default {wav_path}")
-        )
 
+    def text2speech(self, text):
+        """
+        ElevenLabs TTS 호출 → reply.mp3 저장
+        """
+        api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
+        voice_id = "dtu2KmDq4zRNfRVuhajI"
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+
+        headers = {
+            "xi-api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg"
+        }
+
+        data = {
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+                "stability": 0.94,
+                "similarity_boost": 0.96,
+                "style": 0.10
+            }
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=data)
+            if response.status_code == 200:
+                with open(self.reply_path, "wb") as f:
+                    f.write(response.content)
+                print(f"🟢 음성 변환 성공 → {self.reply_path}")
+            else:
+                print(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
+        except Exception as e:
+            print(f"🔴 TTS 호출 실패: {e}")
+
+    def match_target_amplitude(self, sound, target_dBFS):
+        """
+        주어진 오디오를 타깃 dBFS로 정규화
+        """
+        change_in_dBFS = target_dBFS - sound.dBFS
+        return sound.apply_gain(change_in_dBFS)
 
     def publish_music_status(self, status):
-        """음악 재생 상태를 퍼블리시"""
+        """
+        음악 재생 상태 퍼블리시
+        """
         msg = String()
         msg.data = status
         self.publisher_.publish(msg)
-        self.get_logger().info(f"Published music status: {status}")
-        self.save_log(f"Published music status: {status}")
+        self.get_logger().info(f"📡 음악 상태: {status}")
+        self.save_log(f"📡 음악 상태: {status}")
 
     def save_log(self, message):
-        """ 로그를 파일에 저장 """
+        """
+        로그 파일에 저장
+        """
         log_file_path = "/home/nvidia/ros2_ws/_logs/Mp3Player_log.txt"
         log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
-        with open(log_file_path, "a", encoding="utf-8") as log_file:
-            log_file.write(log_message)
-
+        with open(log_file_path, "a", encoding="utf-8") as f:
+            f.write(log_message)
 
 
 def main(args=None):
