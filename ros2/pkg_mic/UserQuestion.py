@@ -1,6 +1,4 @@
 
-#통합
-
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -16,8 +14,6 @@ import pyaudio
 import webrtcvad
 import soundfile as sf
 import tempfile
-import nemo.collections.asr as nemo_asr  # ★ NeMo
-
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -54,161 +50,6 @@ from std_msgs.msg import String
 
 load_dotenv("/home/nvidia/ros2_ws/src/.env")
 
-class NeMoEmbedder:
-    """Wraps NVIDIA NeMo speaker verification model → 256‑d embeddings."""
-
-    def __init__(self, device: str):
-        self.device = device
-        # 전화품질(telephony) ECAPA‑TDNN – 256‑d
-        self.model = nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(
-            #"speakerverification_speakernet"
-            #"ecapa_tdnn"
-            "titanet_large"
-        ).to(device)
-        self.model.eval()
-
-    def __call__(self, pcm16: np.ndarray, sr: int = 16000) -> np.ndarray:
-        # Normalize PCM16 to float32 in range [-1.0, 1.0]
-        audio_float32 = pcm16.astype(np.float32) / 32768.0
-
-        # Write to a temporary WAV file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp_wav:
-            sf.write(tmp_wav.name, audio_float32, sr)
-            tmp_wav.flush()
-
-            # Extract embedding
-            with torch.inference_mode():
-                emb = self.model.get_embedding(tmp_wav.name)  # (1, 256)
-
-        emb = emb.squeeze(0).cpu().numpy()
-        # print(f"[NeMoEmbedder] self.device: {self.device}")
-        # print(f"[NeMoEmbedder] 모델 실제 디바이스: {next(self.model.parameters()).device}")
-        return emb / (np.linalg.norm(emb) + 1e-9)  # (256,)
-        
-
-
-
-class RealTimeDiarizer:
-    """NeMo ECAPA + NumPy cosine search with sticky IDs."""
-
-    def __init__(
-        self,
-        sample_rate: int = 16_000,
-        window_dur: float = 2.0,
-        hop_dur: float = 1.0,
-        thr_same: float = 0.85,
-        thr_new: float = 0.40,
-        switch_needed: int = 3,
-        update_alpha: float = 0.02,
-        vad_level: int = 2,
-        device: Optional[str] = None,
-    ):
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.embedder = NeMoEmbedder(self.device)
-
-        self.sr = sample_rate
-        self.win = int(window_dur * sample_rate)
-        self.hop = int(hop_dur * sample_rate)
-        self.vad = webrtcvad.Vad(vad_level) if vad_level >= 0 else None
-
-        # Speaker DB
-        self.cents: list[np.ndarray] = []
-        self.ids: list[int] = []
-        self.next_id = 1
-
-        # Params
-        self.TS = thr_same
-        self.TN = thr_new
-        self.switch_needed = switch_needed
-        self.update_alpha = update_alpha
-
-        # Runtime state
-        self.active_id: Optional[int] = None
-        self.cand_id: Optional[int] = None
-        self.cand_cnt = 0
-        self.buf = np.zeros((0,), dtype=np.int16)
-        self.lock = threading.Lock()
-
-    # ── helpers ────────────────────────────────────────────────
-    def _has_voice(self, pcm: bytes) -> bool:
-        if not self.vad:
-            return True
-        flen = int(0.03 * self.sr) * 2
-        if len(pcm) < flen:
-            return False
-        step = (len(pcm) - flen) // 2 or flen
-        return any(self.vad.is_speech(pcm[i : i + flen], self.sr) for i in (0, step, 2 * step))
-
-    @staticmethod
-    def _cos(a: np.ndarray, b: np.ndarray) -> float:
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
-
-    def _update_centroid(self, idx: int, emb: np.ndarray):
-        self.cents[idx] = (
-            (1 - self.update_alpha) * self.cents[idx] + self.update_alpha * emb
-        )
-        self.cents[idx] /= np.linalg.norm(self.cents[idx]) + 1e-9
-
-    # ── streaming API ──────────────────────────────────────────
-    def accept_audio(self, pcm: bytes) -> Optional[int]:
-        pcm16 = np.frombuffer(pcm, dtype=np.int16)
-        self.buf = np.concatenate([self.buf, pcm16])
-        if len(self.buf) < self.win:
-            return self.active_id
-        frame = self.buf[: self.win]
-        self.buf = self.buf[self.hop :]
-        if self.vad and not self._has_voice(frame.tobytes()):
-            return self.active_id
-
-        emb = self.embedder(frame)
-
-        with self.lock:
-            if not self.cents:
-                self.cents.append(emb.copy()); self.ids.append(self.next_id)
-                self.active_id = self.next_id; self.next_id += 1
-                print(f"[DIAR] first speaker → ID {self.active_id}")
-                return self.active_id
-            sims = [self._cos(emb, c) for c in self.cents]
-            best_idx = int(np.argmax(sims)); best_sim = sims[best_idx]
-            best_id = self.ids[best_idx]
-            print(f"[DIAR] sim={best_sim:.3f} best_id={best_id} active={self.active_id} cand={self.cand_id}/{self.cand_cnt}")
-            if best_sim >= self.TS:
-                self._update_centroid(best_idx, emb)
-                if best_id == self.active_id:
-                    self.cand_id = None; self.cand_cnt = 0
-                else:
-                    if self.cand_id == best_id:
-                        self.cand_cnt += 1
-                    else:
-                        self.cand_id = best_id; self.cand_cnt = 1
-                    if self.cand_cnt >= self.switch_needed:
-                        print(f"[DIAR] >>> ID switch {self.active_id} → {best_id}")
-                        self.active_id = best_id; self.cand_id = None; self.cand_cnt = 0
-                return self.active_id
-            if best_sim < self.TN:
-                return self.active_id  # ignore low‑sim
-            return self.active_id      # ambiguous
-
-    # ── clip identification ───────────────────────────────────
-    def identify_speaker(self, pcm: bytes) -> Optional[int]:
-        emb = self.embedder(np.frombuffer(pcm, dtype=np.int16))
-        with self.lock:
-            sims = [self._cos(emb, c) for c in self.cents]
-            if not sims:
-                self.cents.append(emb.copy()); self.ids.append(self.next_id)
-                cid = self.next_id; self.next_id += 1; self.active_id = cid
-                return cid
-            best_idx = int(np.argmax(sims)); best_sim = sims[best_idx]
-            best_id = self.ids[best_idx]
-            if best_sim >= self.TS:
-                self.active_id = best_id; return best_id
-            if best_sim < self.TN:
-                self.cents.append(emb.copy()); self.ids.append(self.next_id)
-                cid = self.next_id; self.next_id += 1; self.active_id = cid
-                return cid
-            self.active_id = best_id; return best_id
-
-            
 # ──────────────────────────────────────────────────────────────────────────────
 # UserQuestion 노드
 # ──────────────────────────────────────────────────────────────────────────────
@@ -248,14 +89,7 @@ class UserQuestion(Node):
         self.last_speech_time = time.time()
         self.is_sound_playing = False
         
-        # 화자 식별기
-        self.spkr = RealTimeDiarizer(
-            device="cpu",      # or "cpu"
-            thr_same=0.72,      # 같은 화자 판정
-            thr_new=0.30,       # 새 화자 판정
-            switch_needed=3     # 동일 후보 3프레임(≈2.25 s) 연속일 때만 ID 스위치
-        )
-        self.current_speaker_id = 0
+       
 
         # ✅ 강제 퍼블리시 방지를 위한 플래그 추가
         self.force_published = False 
@@ -264,19 +98,6 @@ class UserQuestion(Node):
 
         self.waiting_for_input_after_music = False  # 음악 종료 후 최초 입력 대기 플래그
         self.timer_30s = None  # 30초 타이머 초기화
-
-        # PyAudio 세팅 (16 kHz mono)
-        self.p = pyaudio.PyAudio()
-        # self.stream = self.p.open(
-        #     format=pyaudio.paInt16,
-        #     channels=1,
-        #     rate=16000,
-        #     input=True,
-        #     frames_per_buffer=1024,
-        #     stream_callback=self.audio_callback,
-        # )
-        # # STT 스레드 시작
-        # threading.Thread(target=self.transcribe_streaming, daemon=True).start()
         self.device_index = 24
         
         self.stream = None
@@ -287,9 +108,13 @@ class UserQuestion(Node):
 
 
         self.visualizer_queue = queue.Queue(maxsize=100)
-        self.diarizer_queue = queue.Queue(maxsize=100)
+
         threading.Thread(target=self.visualizer_worker, daemon=True).start()
-        threading.Thread(target=self.diarizer_worker, daemon=True).start()
+
+        self.is_speaking = False  # STT 인식 중인지 여부
+        self.current_speaker_id = 1  # 최초 화자 id 1로 시작
+
+
 
         self.start_audio_stream()
 
@@ -354,6 +179,8 @@ class UserQuestion(Node):
         self.trigger_detected = False
         self.waiting_for_input_after_music = False
         self.partial_transcript = ""
+        self.current_speaker_id += 1  # 새로운 화자 id 할당
+        self.get_logger().info(f"새로운 speaker_id 할당: {self.current_speaker_id}")
 
 
 
@@ -422,7 +249,6 @@ class UserQuestion(Node):
             sample_rate_hertz=16000,
             language_code="ko-KR",
             model='telephony',
-            diarization_config=diar_cfg,
             enable_automatic_punctuation = True
         )
         streaming_config = speech.StreamingRecognitionConfig(
@@ -439,51 +265,7 @@ class UserQuestion(Node):
             self.force_restart_stt()
         finally:
             self.transcribing = False  # ✅ 항상 플래그 초기화
-            
-    # def audio_callback(self, in_data, frame_count, time_info, status):
-    
-    #     # 1) 화자 식별
-    #     spk = self.spkr.accept_audio(in_data)
-    #     if spk is not None:
-    #         self.current_speaker_id = spk
-
-    #     # 2) STT 큐에 넣기 (음악 재생 중이거나 ignore 플래그일 땐 제외)
-    #     if not (self.music_playing or self.ignore_stt):
-    #         self.audio_stream.put(in_data)
-    #         if self.trigger_detected:
-    #             self.audio_buffer.append(in_data)
-
-    #     return None, pyaudio.paContinue
-
-
-    #     # ✅ "안녕!" 감지 후 음성 데이터를 버퍼에 저장
-    #     if self.trigger_detected:
-    #         self.audio_buffer.append(in_data)
-    #         # === 실시간 오디오 시각화 데이터 publish ===
-    #         self.publish_audio_visualizer(in_data)
-
-    #     return None, pyaudio.paContinue
-
-
-    # def audio_callback(self, in_data, frame_count, time_info, status):
-
-
-    #     # 1) 화자 식별
-    #     spk = self.spkr.accept_audio(in_data)
-    #     if spk is not None:
-    #         self.current_speaker_id = spk
-
-    #     # 2) STT 큐에 넣기 (음악 재생 중이거나 ignore 플래그일 땐 제외)
-    #     if not (self.music_playing or self.ignore_stt):
-    #         self.audio_stream.put(in_data)
-    #         if self.trigger_detected:
-    #             self.audio_buffer.append(in_data)
-                
-    #         # 🔥 시각화 데이터 publish를 여기서 실행해야 합니다!
-    #         self.publish_audio_visualizer(in_data)
-
-    #     return None, pyaudio.paContinue
-
+ 
 
 
     def audio_callback(self, in_data, frame_count, time_info, status):
@@ -493,12 +275,8 @@ class UserQuestion(Node):
         except queue.Full:
             pass
 
-        # 2) 화자 식별용 큐에 저장 (blocking 없이)
-        try:
-            self.diarizer_queue.put_nowait(in_data)
-        except queue.Full:
-            pass
-
+      
+    
         # 3) STT 큐 등 기존 로직
         if not (self.music_playing or self.ignore_stt):
             self.audio_stream.put(in_data)
@@ -514,12 +292,7 @@ class UserQuestion(Node):
             self.publish_audio_visualizer(in_data)
 
 
-    def diarizer_worker(self):
-        while True:
-            in_data = self.diarizer_queue.get()
-            spk = self.spkr.accept_audio(in_data)
-            if spk is not None:
-                self.current_speaker_id = spk
+  
 
 
     def publish_audio_visualizer(self, in_data):
@@ -540,6 +313,7 @@ class UserQuestion(Node):
 
 
 
+
     def process_responses(self, responses):
         silence_threshold = 3  # 3초 무음 시 퍼블리시
         for resp in responses:
@@ -552,6 +326,7 @@ class UserQuestion(Node):
                     continue
 
                 if txt:
+                    self.is_speaking = True  # 말하고 있음 (텍스트 인식됨)
                     self.last_speech_time = time.time()
                     self.silence_seconds = 0
 
@@ -560,6 +335,8 @@ class UserQuestion(Node):
                         self.waiting_for_input_after_music = False  # 최초 입력 감지 완료
                         self.get_logger().info("🎤 음악 종료 후 최초 입력 감지됨. 무음 체크 시작.")
                         self.start_silence_monitoring()
+                else:
+                    self.is_speaking = False  # 말 안 하고 있음 (텍스트 없음)
 
                 self.get_logger().info(f'Transcript: {txt} (Final: {is_final})')
 
@@ -573,7 +350,7 @@ class UserQuestion(Node):
                             self.play_effect_sound()
                             self.trigger_detected = True
                             self.audio_buffer = []  # 본 질문 음성 버퍼링 시작
-                            self.current_speaker_id = 0  # 임시 speaker_id
+                            
                             self.start_silence_monitoring()
                         continue
 
@@ -590,23 +367,13 @@ class UserQuestion(Node):
                 if is_final and self.partial_transcript.strip():
                     # 본 질문 음성 → 화자 식별 진행 (identify_speaker로 변경)
                     try:
-                        spk_audio = b''.join(self.audio_buffer)
-                        self.get_logger().info(f"🔍 spk_audio length: {len(spk_audio)} bytes")  # ✅ 길이 확인
-
-                        speaker_id = self.spkr.identify_speaker(spk_audio)  # 🔥 identify_speaker 사용
-                        if speaker_id is not None:
-                            self.current_speaker_id = speaker_id
-                            self.get_logger().info(f"🎙️ Identified speaker_id: {speaker_id}")
-                        else:
-                            self.current_speaker_id = 0  # fallback
-                            self.get_logger().info("❌ Speaker identification failed, fallback to 0")
-
+                        
                         # 퍼블리시
                         self.publish_transcription(self.partial_transcript)
                         self.save_audio_clip()
 
-                        # 화자 식별기 버퍼 초기화
-                        self.spkr.buffer = np.zeros((0,), dtype="int16")  # 🔥 추가
+                   
+                      
                         return
                     except Exception as e:
                         self.get_logger().error(f"Speaker identification error: {e}")
@@ -808,26 +575,11 @@ class UserQuestion(Node):
             # 🔥 비상상황: 플래그 해제
             self.is_sound_playing = False
 
-    # ── Audio callback -------------------------------------------------------
 
-    # audio_q: queue.Queue = queue.Queue()
-
-    # def audio_callback(self, in_data, frame_count, time_info, status):
-    #     # 화자 식별 업데이트
-    #     for spk, _ in self.spkr.accept_audio(in_data):
-    #         self.current_speaker_id = spk
-    #     # STT 스트림에 푸시
-    #     self.audio_q.put(in_data)
-    #     return None, pyaudio.paContinue
 
     # ── ROS 퍼블리시 ---------------------------------------------------------
 
     def publish_transcription(self, text: str):
-        # msg = String()
-        # msg.data = f"speaker{self.current_speaker_id:03d}|{text}"
-        # self.publisher_.publish(msg)
-        # self.get_logger().info(f"🗣 {msg.data}")
-
 
 
         if text.strip():
@@ -953,3 +705,5 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+
+
