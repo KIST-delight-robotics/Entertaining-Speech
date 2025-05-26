@@ -1,4 +1,7 @@
 
+
+#통합
+
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -14,6 +17,8 @@ import pyaudio
 import webrtcvad
 import soundfile as sf
 import tempfile
+import nemo.collections.asr as nemo_asr  # ★ NeMo
+
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -24,7 +29,7 @@ from dotenv import load_dotenv
 import pygame
 import json
 from std_msgs.msg import String
-import numpy as np
+
 
 import os
 import rclpy
@@ -42,11 +47,12 @@ from pydub import AudioSegment
 from pydub.playback import play
 from datetime import datetime
 import pygame
-import numpy as np
+
 import json
 from std_msgs.msg import String
-
-
+import librosa
+import librosa.display
+from scipy import ndimage 
 
 load_dotenv("/home/nvidia/ros2_ws/src/.env")
 
@@ -98,6 +104,19 @@ class UserQuestion(Node):
 
         self.waiting_for_input_after_music = False  # 음악 종료 후 최초 입력 대기 플래그
         self.timer_30s = None  # 30초 타이머 초기화
+
+        # PyAudio 세팅 (16 kHz mono)
+        self.p = pyaudio.PyAudio()
+        # self.stream = self.p.open(
+        #     format=pyaudio.paInt16,
+        #     channels=1,
+        #     rate=16000,
+        #     input=True,
+        #     frames_per_buffer=1024,
+        #     stream_callback=self.audio_callback,
+        # )
+        # # STT 스레드 시작
+        # threading.Thread(target=self.transcribe_streaming, daemon=True).start()
         self.device_index = 24
         
         self.stream = None
@@ -113,7 +132,15 @@ class UserQuestion(Node):
 
         self.is_speaking = False  # STT 인식 중인지 여부
         self.current_speaker_id = 1  # 최초 화자 id 1로 시작
-
+        # 음성 강조 스펙트럼 시각화를 위한 변수 추가
+        self.baseline_spectrum = None
+        self.spectrum_history = []
+        self.history_size = 50
+        self.sample_rate = 16000
+        
+        # 주파수 계산을 위한 변수
+        self.fft_size = 1024
+        self.freqs = np.fft.fftfreq(self.fft_size, 1/self.sample_rate)[:self.fft_size//2]
 
 
         self.start_audio_stream()
@@ -265,7 +292,51 @@ class UserQuestion(Node):
             self.force_restart_stt()
         finally:
             self.transcribing = False  # ✅ 항상 플래그 초기화
- 
+            
+    # def audio_callback(self, in_data, frame_count, time_info, status):
+    
+    #     # 1) 화자 식별
+    #     spk = self.spkr.accept_audio(in_data)
+    #     if spk is not None:
+    #         self.current_speaker_id = spk
+
+    #     # 2) STT 큐에 넣기 (음악 재생 중이거나 ignore 플래그일 땐 제외)
+    #     if not (self.music_playing or self.ignore_stt):
+    #         self.audio_stream.put(in_data)
+    #         if self.trigger_detected:
+    #             self.audio_buffer.append(in_data)
+
+    #     return None, pyaudio.paContinue
+
+
+    #     # ✅ "안녕!" 감지 후 음성 데이터를 버퍼에 저장
+    #     if self.trigger_detected:
+    #         self.audio_buffer.append(in_data)
+    #         # === 실시간 오디오 시각화 데이터 publish ===
+    #         self.publish_audio_visualizer(in_data)
+
+    #     return None, pyaudio.paContinue
+
+
+    # def audio_callback(self, in_data, frame_count, time_info, status):
+
+
+    #     # 1) 화자 식별
+    #     spk = self.spkr.accept_audio(in_data)
+    #     if spk is not None:
+    #         self.current_speaker_id = spk
+
+    #     # 2) STT 큐에 넣기 (음악 재생 중이거나 ignore 플래그일 땐 제외)
+    #     if not (self.music_playing or self.ignore_stt):
+    #         self.audio_stream.put(in_data)
+    #         if self.trigger_detected:
+    #             self.audio_buffer.append(in_data)
+                
+    #         # 🔥 시각화 데이터 publish를 여기서 실행해야 합니다!
+    #         self.publish_audio_visualizer(in_data)
+
+    #     return None, pyaudio.paContinue
+
 
 
     def audio_callback(self, in_data, frame_count, time_info, status):
@@ -295,20 +366,187 @@ class UserQuestion(Node):
   
 
 
+    # def publish_audio_visualizer(self, in_data):
+    #     samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
+    #     # FFT (스펙트럼)
+    #     fft = np.fft.fft(samples)
+    #     spectrum = np.abs(fft[:len(fft)//2])
+    #     spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+    #     data = {
+    #         "spectrum": spectrum.tolist()
+    #     }
+    #     msg = String()
+    #     msg.data = json.dumps({"spectrum": spectrum.tolist()})
+    #     self.visualizer_pub.publish(msg)
+
+
+
     def publish_audio_visualizer(self, in_data):
+        # 현재 단순한 FFT 구현을 음성 강조 버전으로 교체
         samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
-        # FFT (스펙트럼)
+        
+        # 샘플 크기 조정 (FFT 크기에 맞춤)
+        if len(samples) > self.fft_size:
+            samples = samples[:self.fft_size]
+        elif len(samples) < self.fft_size:
+            # 제로 패딩
+            padded_samples = np.zeros(self.fft_size)
+            padded_samples[:len(samples)] = samples
+            samples = padded_samples
+        
+        # 1. 기본 FFT 계산
         fft = np.fft.fft(samples)
         spectrum = np.abs(fft[:len(fft)//2])
-        spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-        data = {
-            "spectrum": spectrum.tolist()
-        }
+        
+        # 2. 음성 주파수 가중치 적용
+        voice_emphasized = self.apply_voice_emphasis(spectrum, self.freqs)
+        
+        # 3. 실시간 베이스라인 업데이트 및 차감
+        self.update_baseline(voice_emphasized)
+        baseline_subtracted = self.subtract_baseline(voice_emphasized)
+        
+        # 4. 동적 범위 압축
+        compressed_spectrum = self.dynamic_range_compression(baseline_subtracted)
+        
+        # 5. 스펙트럼 평활화
+        smoothed_spectrum = self.smooth_spectrum(compressed_spectrum)
+        
+        # 6. 자동 게인 조정
+        final_spectrum = self.auto_gain_control(smoothed_spectrum)
+        
+        # 7. 정규화
+        if np.max(final_spectrum) > 0:
+            final_spectrum = final_spectrum / np.max(final_spectrum)
+        
+        # 음성 강도 지표 계산
+        voice_strength = self.calculate_voice_strength(final_spectrum, self.freqs)
+        
+        # 메시지 발송
         msg = String()
-        msg.data = json.dumps({"spectrum": spectrum.tolist()})
+        msg.data = json.dumps({
+            "spectrum": final_spectrum.tolist(),
+            "voice_strength": voice_strength,
+            "is_speaking": self.is_speaking,
+            "enhancement_applied": True
+        })
         self.visualizer_pub.publish(msg)
 
 
+
+    def apply_voice_emphasis(self, spectrum, freqs):
+        """음성 주파수 대역에 가중치 적용"""
+        weighted_spectrum = spectrum.copy()
+        
+        # 음성 주파수 대역별 가중치 설정
+        voice_bands = {
+            (80, 300): 2.0,    # 기본 주파수 (남성 음성)
+            (150, 400): 2.5,   # 기본 주파수 (여성 음성)  
+            (300, 3400): 3.0,  # 음성 명료도 핵심 대역
+            (1000, 4000): 2.0, # 자음 구분 중요 대역
+            (4000, 8000): 1.5  # 고음역 명료도
+        }
+        
+        for (low_freq, high_freq), weight in voice_bands.items():
+            # 주파수 대역 인덱스 찾기
+            low_idx = np.searchsorted(freqs, low_freq)
+            high_idx = np.searchsorted(freqs, high_freq)
+            
+            # 인덱스 범위 체크
+            low_idx = max(0, min(low_idx, len(weighted_spectrum)-1))
+            high_idx = max(0, min(high_idx, len(weighted_spectrum)))
+            
+            # 해당 대역에 가중치 적용
+            if high_idx > low_idx:
+                weighted_spectrum[low_idx:high_idx] *= weight
+        
+        return weighted_spectrum
+
+    def dynamic_range_compression(self, spectrum):
+        """동적 범위 압축으로 음성 신호 강조"""
+        # 로그 스케일 변환으로 동적 범위 압축
+        log_spectrum = np.log1p(spectrum + 1e-10)  # 작은 값 추가로 log(0) 방지
+        
+        # 적응적 임계값 설정
+        threshold = np.percentile(log_spectrum, 75)
+        
+        # 임계값 이상 신호 강조
+        enhanced = np.where(log_spectrum > threshold, 
+                        log_spectrum * 1.5, 
+                        log_spectrum)
+        
+        # 원래 스케일로 복원
+        return np.expm1(enhanced)
+
+    def update_baseline(self, spectrum):
+        """실시간으로 베이스라인 업데이트"""
+        self.spectrum_history.append(spectrum.copy())
+        
+        if len(self.spectrum_history) > self.history_size:
+            self.spectrum_history.pop(0)
+        
+        # 최근 스펙트럼들의 최소값을 베이스라인으로 사용
+        if len(self.spectrum_history) >= 10:
+            stacked_spectrums = np.array(self.spectrum_history)
+            self.baseline_spectrum = np.percentile(stacked_spectrums, 20, axis=0)
+
+    def subtract_baseline(self, spectrum):
+        """베이스라인 차감으로 음성 신호 강조"""
+        if self.baseline_spectrum is not None:
+            # 베이스라인 차감
+            enhanced = spectrum - self.baseline_spectrum * 0.8
+            # 음수값 방지
+            enhanced = np.maximum(enhanced, spectrum * 0.1)
+            return enhanced
+        return spectrum
+
+    def smooth_spectrum(self, spectrum):
+        """스펙트럼 평활화"""
+        # 간단한 이동평균 필터 사용 (scipy 없이)
+        window_size = 3
+        smoothed = np.zeros_like(spectrum)
+        
+        for i in range(len(spectrum)):
+            start_idx = max(0, i - window_size // 2)
+            end_idx = min(len(spectrum), i + window_size // 2 + 1)
+            smoothed[i] = np.mean(spectrum[start_idx:end_idx])
+        
+        return smoothed
+
+    def auto_gain_control(self, spectrum):
+        """자동 게인 조정"""
+        # 현재 스펙트럼의 RMS 계산
+        current_rms = np.sqrt(np.mean(spectrum**2))
+        
+        # 목표 RMS 레벨
+        target_rms = 0.3
+        
+        if current_rms > 0:
+            gain_factor = target_rms / current_rms
+            # 과도한 증폭 방지
+            gain_factor = np.clip(gain_factor, 0.1, 3.0)
+            return spectrum * gain_factor
+        
+        return spectrum
+
+    def calculate_voice_strength(self, spectrum, freqs):
+        """음성 강도 지표 계산"""
+        # 음성 핵심 대역 (300-3400Hz) 에너지 비율
+        voice_band_mask = (freqs >= 300) & (freqs <= 3400)
+        
+        if np.any(voice_band_mask):
+            voice_energy = np.sum(spectrum[voice_band_mask])
+            total_energy = np.sum(spectrum)
+            
+            voice_ratio = voice_energy / total_energy if total_energy > 0 else 0
+            
+            # 0-1 범위로 정규화하고 비선형 강조
+            return np.power(voice_ratio, 0.7)  # 제곱근보다 약간 강한 강조
+        
+        return 0.0
+
+
+
+ 
 
 
 
@@ -575,7 +813,17 @@ class UserQuestion(Node):
             # 🔥 비상상황: 플래그 해제
             self.is_sound_playing = False
 
+    # ── Audio callback -------------------------------------------------------
 
+    # audio_q: queue.Queue = queue.Queue()
+
+    # def audio_callback(self, in_data, frame_count, time_info, status):
+    #     # 화자 식별 업데이트
+    #     for spk, _ in self.spkr.accept_audio(in_data):
+    #         self.current_speaker_id = spk
+    #     # STT 스트림에 푸시
+    #     self.audio_q.put(in_data)
+    #     return None, pyaudio.paContinue
 
     # ── ROS 퍼블리시 ---------------------------------------------------------
 
