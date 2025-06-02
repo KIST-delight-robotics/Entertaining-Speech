@@ -1,3 +1,6 @@
+
+#밈이미지시도(0602)
+#루피 gpt + 영화음악db + ****이미지 선정
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -217,6 +220,14 @@ class Mp3Recommender(Node):
     - 어울린다는 것은 사용자의 의도와 맥락을 고려해서 선택된 MP3 제목이 이미지 파일명과 부합함을 의미합니다.
     - 가장 중요한 것은 선정할 이미지와 MP3 제목이 최적으로 일치하는가 입니다.
     - Return a valid JSON object ONLY.
+    - Do not include any extra text, commentary, or explanation.
+    - Do not copy the selected 'mp3_title' as it is in image 'file_name'.
+
+    # Select Criteria
+    1. Don't use cosine similarity as an absolute criterion.
+    2. Never select a file title that is not on the candidate list.
+    3. Keep the file name in the candidate list and do not select only some words.
+    4. Make sure you match your assistant's identity and select.
 
     # Output format
     {{
@@ -416,39 +427,9 @@ class Mp3Recommender(Node):
             else:
                 result = await self.run_assistant(thread_id, user_question, candidates)
 
-            # 3) 결과 publish (Key=Value 문자열로 변환)
-            result_str = f"file_name={result['file_name']};reply={result['reply']}"
             
-            msg = String()
-            msg.data = result_str
-            self.publisher_.publish(msg)
-            self.get_logger().info(f"✅ Recommendation published: {result_str}")
-            self.save_log(f"Recommendation published: {result_str}")
 
-
-            # 3-1. 추천 결과 퍼블리시 직후 "done" 상태 퍼블리시
-            status_msg = String()
-            status_msg.data = "done"
-            self.status_publisher.publish(status_msg)  # <-- 추가
-
-            # # 4) 이미지 검색 & GPT 평가
-            # img_cands = self.search_images(result['reply'])
-            # best_img = await self.evaluate_image_with_gpt(user_question, result['file_name'], result['reply'], img_cands)
-            # # if best_img:
-            # #     img_msg = String()
-            # #     img_msg.data = f"file_name={best_img['file_path']}"
-            # #     self.image_publisher_.publish(img_msg)
-            # #     self.save_log(f"Image published: {img_msg.data}")
-
-
-            # if best_img:
-            #     file_name_with_ext = os.path.basename(best_img['file_path'])
-            #     img_msg = String()
-            #     img_msg.data = file_name_with_ext  # 파일명만 전송
-            #     self.image_publisher_.publish(img_msg)
-            #     self.save_log(f"Image published: {file_name_with_ext}")
-
-
+    
 
             # 4) 이미지 검색 & 즉시 퍼블리시
             img_cands = self.search_images(result['reply'])
@@ -471,6 +452,24 @@ class Mp3Recommender(Node):
                 
                 self.direct_image_publisher_.publish(final_img_msg)
                 self.save_log(f"Direct image published: /images/{file_name_with_ext}")
+
+            # 3) 결과 publish (Key=Value 문자열로 변환)
+            result_str = f"file_name={result['file_name']};reply={result['reply']}"
+            
+            msg = String()
+            msg.data = result_str
+            self.publisher_.publish(msg)
+            self.get_logger().info(f"✅ Recommendation published: {result_str}")
+            self.save_log(f"Recommendation published: {result_str}")
+
+
+            # 3-1. 추천 결과 퍼블리시 직후 "done" 상태 퍼블리시
+            status_msg = String()
+            status_msg.data = "done"
+            self.status_publisher.publish(status_msg)  # <-- 추가
+
+
+
 
         except Exception as e:
             self.get_logger().error(f"Error during processing: {str(e)}")
@@ -674,4 +673,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
