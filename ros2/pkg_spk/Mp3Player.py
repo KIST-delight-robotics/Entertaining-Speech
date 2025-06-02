@@ -1,5 +1,3 @@
-
-#통합
 import os
 import requests
 import threading
@@ -37,10 +35,42 @@ class Mp3Player(Node):
             10
         )
 
+
         # 퍼블리시: 음악 재생 상태
         self.publisher_ = self.create_publisher(String, "music_status", 10)
         self.amplitude_publisher_ = self.create_publisher(String, "audio_amplitude", 10)
         self.is_playing = False  # 재생 중 여부 플래그
+
+
+
+
+        self.current_image_path = None
+        self.image_subscription_ = self.create_subscription(
+            String, "recommended_image", self.image_callback, 10
+        )
+        self.image_publisher_ = self.create_publisher(String, "current_music_image", 10)
+
+
+
+    # def image_callback(self, msg):
+    #     if msg.data.startswith("file_name="):
+    #         self.current_image_path = msg.data.split("=", 1)[1]
+    #     else:
+    #         self.current_image_path = None
+
+
+    def image_callback(self, msg):
+        """이미지 파일명 수신 및 저장"""
+        if msg.data and msg.data.strip():
+            self.current_image_path = f"/images/{msg.data}"  # 웹 경로로 변환
+            # 즉시 퍼블리시 (사전 로딩 효과)
+            img_msg = String()
+            img_msg.data = self.current_image_path
+            self.image_publisher_.publish(img_msg)
+            self.get_logger().info(f"이미지 수신: {self.current_image_path}")
+        else:
+            self.current_image_path = None
+            self.get_logger().info("이미지 수신: 없음")
 
     def mp3_callback(self, msg):
         """
@@ -75,14 +105,28 @@ class Mp3Player(Node):
             )
             tts_thread.start()
 
-            # 🎵 음악 먼저 재생
+
+            if self.current_image_path:
+                img_msg = String()
+                img_msg.data = self.current_image_path
+                self.image_publisher_.publish(img_msg)
+                self.get_logger().info(f"🖼️ 음악 재생 시작 - 이미지 표시: {self.current_image_path}")
+            
+            # === 음악 재생 ===
             self.publish_music_status("music_playing")
             self.play_mp3(file_path)
-
-            # 🎧 TTS 재생
+            
+            # === 음악 재생 끝 - 이미지 숨김 ===
+            empty_img_msg = String()
+            empty_img_msg.data = ""
+            self.image_publisher_.publish(empty_img_msg)
+            self.get_logger().info("🖼️ 음악 재생 끝 - 이미지 숨김")
+            
+            # === TTS 재생 ===
             tts_thread.join()
             self.play_mp3(self.reply_path)
             self.publish_music_status("music_done")
+
 
         except Exception as e:
             error_msg = f"❌ MP3 재생 중 오류 발생: {e}"
