@@ -1,3 +1,6 @@
+
+
+//밈이미지(0602) - 스펙트럼 시작점 개선완료
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
@@ -96,10 +99,22 @@ function SpectrumVisualizer() {
             const selectedGif = availableGifs[randomIndex];
             console.log('선택된 gif:', selectedGif);
             setCurrentGif(selectedGif);
+            // 다른 상태들 초기화
+            setCurrentImage(null);
+            setImageVisible(false);
+            setCanShowSpectrum(false);
+          } else if (message.data === 'processing') {
+            console.log('⚙️ processing 상태');
+            setRecommendStatus('processing');
+            // GIF는 계속 표시
+
+
+
         } else if (message.data === 'done') {
             // 즉시 done 처리하지 않고 음악 재생 여부 확인
             if (!musicPlaying) {
                 setRecommendStatus('done');
+                setCurrentGif(''); // GIF 숨김
             }
         } else {
             setRecommendStatus(message.data);
@@ -148,7 +163,7 @@ function SpectrumVisualizer() {
     ctx.fillStyle = musicPlaying ? '#000' : '#222222';
     ctx.fillRect(0, 0, width, height);
   
-    if (recommendStatus === 'searching') {
+    if (recommendStatus === 'searching'&& !imageVisible) {
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, width, height);
       return;
@@ -244,9 +259,24 @@ function SpectrumVisualizer() {
         
         if (message.data && message.data.trim() !== "") {
             const imagePath = message.data;
+           
+
+
+
             console.log('🖼️ 이미지 표시:', imagePath);
             setCurrentImage(imagePath);
             setImageVisible(true);
+            setCurrentGif(''); // 이 줄 추가
+
+
+
+
+            // searching 상태도 해제
+            if (recommendStatus === 'searching') {
+              setRecommendStatus('processing');
+  }
+
+
         } else {
             console.log('🖼️ 이미지 숨김');
             setCurrentImage(null);
@@ -275,9 +305,38 @@ function SpectrumVisualizer() {
 
 // 5. 이미지 표시 컴포넌트
 const renderImage = () => {
-    if (!currentImage || recommendStatus === 'searching') {
+    if (!currentImage || !imageVisible){
         return null;
     }
+
+
+    // [수정] 파일명만 정확하게 인코딩하는 로직으로 변경
+    const createSafeUrl = (path) => {
+      try {
+          // 1. 마지막 '/'를 기준으로 디렉터리 경로와 파일명을 분리합니다.
+          const lastSlashIndex = path.lastIndexOf('/');
+          const directoryPath = path.substring(0, lastSlashIndex + 1); // 예: "/images/"
+          const fileName = path.substring(lastSlashIndex + 1);      // 예: "어.. 얘 멋있다!.jpg"
+
+          // 2. 파일명 부분만 완벽하게 인코딩합니다.
+          const encodedFileName = encodeURIComponent(fileName);
+
+          // 3. 디렉터리 경로와 인코딩된 파일명을 다시 합쳐 완전한 URL을 만듭니다.
+          return directoryPath + encodedFileName;
+      } catch (e) {
+          console.error("URL 생성 중 오류 발생:", e);
+          return path; // 오류 발생 시 원본 경로 반환
+      }
+  };
+
+  const safeImageUrl = createSafeUrl(currentImage);
+
+
+
+
+
+
+
 
     return (
         <div style={{
@@ -285,26 +344,73 @@ const renderImage = () => {
             top: '50%',
             left: '50%',
             transform: 'translate(-50%, -50%)',
-            zIndex: 10,
+            zIndex: 15,
             maxWidth: '80%',
             maxHeight: '80%'
         }}>
             <img 
-                src={currentImage} 
+                src={safeImageUrl} 
                 alt="Music Visual"
                 style={{
                     maxWidth: '100%',
                     maxHeight: '100%',
                     objectFit: 'contain',
                     borderRadius: '10px',
-                    boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.3)'                    
                 }}
-                onLoad={() => console.log('🖼️ 이미지 로드 성공:', currentImage)}
-                onError={() => console.error('🖼️ 이미지 로드 실패:', currentImage)}
+                onLoad={() => console.log('🖼️ 이미지 로드 성공:', safeImageUrl)}
+                onError={() => console.error('🖼️ 이미지 로드 실패:', safeImageUrl)}
             />
         </div>
     );
 };
+
+
+// renderImage 함수 다음에 이 함수를 새로 추가
+const renderGif = () => {
+  // 이미지가 표시 중일 때는 GIF 절대 표시하지 않음
+  if (currentImage && imageVisible) {
+      return null;
+  }
+  
+  // searching 상태이고 GIF가 선택되었을 때만 표시
+  if (recommendStatus === 'searching' && currentGif) {
+      return (
+          <div style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              zIndex: 5, // 이미지보다 낮은 우선순위로 변경
+              backgroundColor: '#fff',
+              width: `${canvasSize.width}px`,
+              height: `${canvasSize.height}px`,
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center'
+          }}>
+              <img 
+                  src={`/${currentGif}`}
+                  alt="추천 중..." 
+                  style={{
+                      maxWidth: '500%',
+                      maxHeight: '500%',
+                      objectFit: 'contain'
+                  }}
+                  onLoad={() => {
+                      console.log('🎬 GIF 로드 완료:', currentGif);
+                  }}
+                  onError={(e) => {
+                      console.error('🎬 GIF 로드 실패:', currentGif);
+                  }}
+              />
+          </div>
+      );
+  }
+  
+  return null;
+};
+
 
 
   
@@ -329,8 +435,8 @@ const renderImage = () => {
       padding: 0,
       boxSizing: 'border-box',
       position: 'relative',
-      backgroundColor: recommendStatus === 'searching' ? '#fff' : 
-                       musicPlaying ? '#000' : '#222222'
+      backgroundColor: (recommendStatus === 'searching' && !imageVisible) ? '#fff' : 
+                 (musicPlaying || imageVisible) ? '#000' : '#222222'
     }}>
 
 
@@ -351,7 +457,8 @@ const renderImage = () => {
       {musicPlaying && renderImage()}
       
       {/* 추천 중일 때 gif 오버레이 */}
-      {recommendStatus === 'searching' && currentGif && (
+      {renderGif()}
+      {/* {recommendStatus === 'searching' && currentGif && (
         <div style={{
           position: 'absolute',
           top: '50%',
@@ -363,7 +470,8 @@ const renderImage = () => {
           height: `${canvasSize.height}px`,
           display: 'flex',
           justifyContent: 'center',
-          alignItems: 'center'
+          alignItems: 'center',
+          zIndex: 10 // 이미지보다 낮은 우선순위
         }}>
           <img 
             src={`/${currentGif}`}
@@ -378,7 +486,17 @@ const renderImage = () => {
             }}
           />
         </div>
-      )}
+      )} */}
+
+
+
+
+
+
+
+
+
+
     </div>
   );
   
