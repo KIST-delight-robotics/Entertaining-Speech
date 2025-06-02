@@ -1,5 +1,3 @@
-
-#루피 gpt + 영화음악db + ****이미지 선정
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -433,14 +431,46 @@ class Mp3Recommender(Node):
             status_msg.data = "done"
             self.status_publisher.publish(status_msg)  # <-- 추가
 
-            # 4) 이미지 검색 & GPT 평가
+            # # 4) 이미지 검색 & GPT 평가
+            # img_cands = self.search_images(result['reply'])
+            # best_img = await self.evaluate_image_with_gpt(user_question, result['file_name'], result['reply'], img_cands)
+            # # if best_img:
+            # #     img_msg = String()
+            # #     img_msg.data = f"file_name={best_img['file_path']}"
+            # #     self.image_publisher_.publish(img_msg)
+            # #     self.save_log(f"Image published: {img_msg.data}")
+
+
+            # if best_img:
+            #     file_name_with_ext = os.path.basename(best_img['file_path'])
+            #     img_msg = String()
+            #     img_msg.data = file_name_with_ext  # 파일명만 전송
+            #     self.image_publisher_.publish(img_msg)
+            #     self.save_log(f"Image published: {file_name_with_ext}")
+
+
+
+            # 4) 이미지 검색 & 즉시 퍼블리시
             img_cands = self.search_images(result['reply'])
             best_img = await self.evaluate_image_with_gpt(user_question, result['file_name'], result['reply'], img_cands)
+            
             if best_img:
-                img_msg = String()
-                img_msg.data = f"file_name={best_img['file_path']}"
-                self.image_publisher_.publish(img_msg)
-                self.save_log(f"Image published: {img_msg.data}")
+                file_name_with_ext = os.path.basename(best_img['file_path'])
+                
+                # 확장자 추가 처리
+                if not any(file_name_with_ext.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif']):
+                    file_name_with_ext += '.jpg'  # 기본 확장자 추가
+                
+                # current_music_image 토픽으로 직접 퍼블리시
+                final_img_msg = String()
+                final_img_msg.data = f"/images/{file_name_with_ext}"
+                
+                # 새로운 퍼블리셔 생성 (current_music_image로 직접)
+                if not hasattr(self, 'direct_image_publisher_'):
+                    self.direct_image_publisher_ = self.create_publisher(String, 'current_music_image', 10)
+                
+                self.direct_image_publisher_.publish(final_img_msg)
+                self.save_log(f"Direct image published: /images/{file_name_with_ext}")
 
         except Exception as e:
             self.get_logger().error(f"Error during processing: {str(e)}")
@@ -644,3 +674,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
