@@ -1,5 +1,3 @@
-
-
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
@@ -27,9 +25,13 @@ function downsampleArray(arr, targetLen) {
 function SpectrumVisualizer() {
   const [spectrum, setSpectrum] = useState([]);
   const [musicPlaying, setMusicPlaying] = useState(false);
+  const [currentImage, setCurrentImage] = useState(null); // 이미지 상태 추가
   const canvasRef = useRef(null);
   const [recommendStatus, setRecommendStatus] = useState('done');
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 400 });
+  const [imageVisible, setImageVisible] = useState(false);
+  const [canShowSpectrum, setCanShowSpectrum] = useState(false);
+
 
 
 
@@ -57,16 +59,19 @@ function SpectrumVisualizer() {
         
         if (message.data === 'music_playing') {
             setMusicPlaying(true);
+            setCanShowSpectrum(false); // 스펙트럼 표시 초기화
             
-            // GIF를 일정 시간 보여준 후 스펙트럼으로 전환
-            setTimeout(() => {
-                setRecommendStatus('done');
-                console.log('음악 재생 - 스펙트럼 표시로 전환');
-            }, 1500); // 1.5초 후 스펙트럼 표시
+            // // GIF를 일정 시간 보여준 후 스펙트럼으로 전환
+            // setTimeout(() => {
+            //     setRecommendStatus('done');
+            //     console.log('음악 재생 - 스펙트럼 표시로 전환');
+            // }, 1500); // 1.5초 후 스펙트럼 표시
             
         } else if (message.data === 'music_done') {
             setMusicPlaying(false);
             setRecommendStatus('done');
+            setCanShowSpectrum(false);
+            setImageVisible(false);
         }
     });
 
@@ -148,6 +153,13 @@ function SpectrumVisualizer() {
       ctx.fillRect(0, 0, width, height);
       return;
     }
+
+
+    // 음악이 재생 중이지만 아직 스펙트럼을 표시할 수 없는 상태
+    if (musicPlaying && !canShowSpectrum) {
+      console.log('🎵 음악 재생 중 - 이미지 표시 대기로 스펙트럼 숨김');
+      return;
+  }
   
     const central = getCentralSlice(spectrum, 0.6);
     const numBars = 43;
@@ -180,7 +192,7 @@ function SpectrumVisualizer() {
       ctx.lineTo(x, centerY + barHeight);
       ctx.stroke();
     }
-  }, [spectrum, musicPlaying, recommendStatus, canvasSize]);
+  }, [spectrum, musicPlaying, recommendStatus, canvasSize, canShowSpectrum]);
   
   
 
@@ -216,6 +228,85 @@ function SpectrumVisualizer() {
     
     return () => window.removeEventListener('resize', updateCanvasSize);
   }, []);
+
+
+
+  // 4. 이미지 토픽 구독 추가
+  useEffect(() => {
+    const imageListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/current_music_image',
+        messageType: 'std_msgs/String'
+    });
+
+    imageListener.subscribe((message) => {
+        console.log('🖼️ 이미지 메시지 수신:', message.data);
+        
+        if (message.data && message.data.trim() !== "") {
+            const imagePath = message.data;
+            console.log('🖼️ 이미지 표시:', imagePath);
+            setCurrentImage(imagePath);
+            setImageVisible(true);
+        } else {
+            console.log('🖼️ 이미지 숨김');
+            setCurrentImage(null);
+            setImageVisible(false);
+
+
+            // 이미지가 숨김 상태가 되면 스펙트럼 시각화 시작
+            if (musicPlaying) {
+              console.log('🎵 이미지 숨김 완료 - 스펙트럼 시각화 시작');
+              setCanShowSpectrum(true);
+              setRecommendStatus('done');
+          }
+
+
+
+
+
+        }
+    });
+
+    return () => {
+        console.log('🖼️ 이미지 리스너 해제');
+        imageListener.unsubscribe();
+    };
+}, [musicPlaying]);
+
+// 5. 이미지 표시 컴포넌트
+const renderImage = () => {
+    if (!currentImage || recommendStatus === 'searching') {
+        return null;
+    }
+
+    return (
+        <div style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            zIndex: 10,
+            maxWidth: '80%',
+            maxHeight: '80%'
+        }}>
+            <img 
+                src={currentImage} 
+                alt="Music Visual"
+                style={{
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    objectFit: 'contain',
+                    borderRadius: '10px',
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+                }}
+                onLoad={() => console.log('🖼️ 이미지 로드 성공:', currentImage)}
+                onError={() => console.error('🖼️ 이미지 로드 실패:', currentImage)}
+            />
+        </div>
+    );
+};
+
+
   
 
 
@@ -241,6 +332,10 @@ function SpectrumVisualizer() {
       backgroundColor: recommendStatus === 'searching' ? '#fff' : 
                        musicPlaying ? '#000' : '#222222'
     }}>
+
+
+
+    {!(musicPlaying && currentImage) && (  
       <canvas 
         ref={canvasRef}
         style={{
@@ -250,6 +345,10 @@ function SpectrumVisualizer() {
           display: 'block'
         }}
       />
+    )}
+
+      {/* 이미지 표시 - 음악 재생 중에만 */}
+      {musicPlaying && renderImage()}
       
       {/* 추천 중일 때 gif 오버레이 */}
       {recommendStatus === 'searching' && currentGif && (
@@ -291,3 +390,6 @@ function SpectrumVisualizer() {
 }
 
 export default SpectrumVisualizer;
+
+
+
