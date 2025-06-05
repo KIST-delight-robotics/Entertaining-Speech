@@ -1,7 +1,4 @@
 
-
-#통합
-
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -293,49 +290,6 @@ class UserQuestion(Node):
         finally:
             self.transcribing = False  # ✅ 항상 플래그 초기화
             
-    # def audio_callback(self, in_data, frame_count, time_info, status):
-    
-    #     # 1) 화자 식별
-    #     spk = self.spkr.accept_audio(in_data)
-    #     if spk is not None:
-    #         self.current_speaker_id = spk
-
-    #     # 2) STT 큐에 넣기 (음악 재생 중이거나 ignore 플래그일 땐 제외)
-    #     if not (self.music_playing or self.ignore_stt):
-    #         self.audio_stream.put(in_data)
-    #         if self.trigger_detected:
-    #             self.audio_buffer.append(in_data)
-
-    #     return None, pyaudio.paContinue
-
-
-    #     # ✅ "안녕!" 감지 후 음성 데이터를 버퍼에 저장
-    #     if self.trigger_detected:
-    #         self.audio_buffer.append(in_data)
-    #         # === 실시간 오디오 시각화 데이터 publish ===
-    #         self.publish_audio_visualizer(in_data)
-
-    #     return None, pyaudio.paContinue
-
-
-    # def audio_callback(self, in_data, frame_count, time_info, status):
-
-
-    #     # 1) 화자 식별
-    #     spk = self.spkr.accept_audio(in_data)
-    #     if spk is not None:
-    #         self.current_speaker_id = spk
-
-    #     # 2) STT 큐에 넣기 (음악 재생 중이거나 ignore 플래그일 땐 제외)
-    #     if not (self.music_playing or self.ignore_stt):
-    #         self.audio_stream.put(in_data)
-    #         if self.trigger_detected:
-    #             self.audio_buffer.append(in_data)
-                
-    #         # 🔥 시각화 데이터 publish를 여기서 실행해야 합니다!
-    #         self.publish_audio_visualizer(in_data)
-
-    #     return None, pyaudio.paContinue
 
 
 
@@ -366,70 +320,27 @@ class UserQuestion(Node):
   
 
 
-    # def publish_audio_visualizer(self, in_data):
-    #     samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
-    #     # FFT (스펙트럼)
-    #     fft = np.fft.fft(samples)
-    #     spectrum = np.abs(fft[:len(fft)//2])
-    #     spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-    #     data = {
-    #         "spectrum": spectrum.tolist()
-    #     }
-    #     msg = String()
-    #     msg.data = json.dumps({"spectrum": spectrum.tolist()})
-    #     self.visualizer_pub.publish(msg)
-
-
 
     def publish_audio_visualizer(self, in_data):
         # 현재 단순한 FFT 구현을 음성 강조 버전으로 교체
         samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
         
-        # 샘플 크기 조정 (FFT 크기에 맞춤)
-        if len(samples) > self.fft_size:
-            samples = samples[:self.fft_size]
-        elif len(samples) < self.fft_size:
-            # 제로 패딩
-            padded_samples = np.zeros(self.fft_size)
-            padded_samples[:len(samples)] = samples
-            samples = padded_samples
-        
+ 
         # 1. 기본 FFT 계산
         fft = np.fft.fft(samples)
         spectrum = np.abs(fft[:len(fft)//2])
+
+        # Mp3Player.py와 동일한 정규화
+        spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
         
-        # 2. 음성 주파수 가중치 적용
-        voice_emphasized = self.apply_voice_emphasis(spectrum, self.freqs)
-        
-        # 3. 실시간 베이스라인 업데이트 및 차감
-        self.update_baseline(voice_emphasized)
-        baseline_subtracted = self.subtract_baseline(voice_emphasized)
-        
-        # 4. 동적 범위 압축
-        compressed_spectrum = self.dynamic_range_compression(baseline_subtracted)
-        
-        # 5. 스펙트럼 평활화
-        smoothed_spectrum = self.smooth_spectrum(compressed_spectrum)
-        
-        # 6. 자동 게인 조정
-        final_spectrum = self.auto_gain_control(smoothed_spectrum)
-        
-        # 7. 정규화
-        if np.max(final_spectrum) > 0:
-            final_spectrum = final_spectrum / np.max(final_spectrum)
-        
-        # 음성 강도 지표 계산
-        voice_strength = self.calculate_voice_strength(final_spectrum, self.freqs)
-        
-        # 메시지 발송
+        # Mp3Player.py와 동일한 JSON 구조로 발송
         msg = String()
-        msg.data = json.dumps({
-            "spectrum": final_spectrum.tolist(),
-            "voice_strength": voice_strength,
-            "is_speaking": self.is_speaking,
-            "enhancement_applied": True
-        })
+        msg.data = json.dumps({"spectrum": spectrum.tolist()})
         self.visualizer_pub.publish(msg)
+
+        
+        
+
 
 
 
@@ -953,5 +864,4 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-
 
