@@ -1,6 +1,3 @@
-
-#밈이미지시도(0602)
-#루피 gpt + 영화음악db + ****이미지 선정
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -45,9 +42,9 @@ class Mp3Recommender(Node):
         self.mp3_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus"
         
         # 이미지 인덱스/메타
-        self.image_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_new.db"
-        self.image_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_image_new.bin"
-        self.image_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_new"
+        self.image_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus.db"
+        self.image_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_image_plus.bin"
+        self.image_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus"
 
 
         # 인덱스와 메타데이터 로드
@@ -210,8 +207,32 @@ class Mp3Recommender(Node):
                 self.get_logger().warning("No valid image candidates after filtering")
                 return None
             
-            # 최대 80개로 제한
-            filtered = filtered[:80]
+            # MP3 파일명에서 확장자 제거 및 경로 정리
+            mp3_filename_only = os.path.splitext(os.path.basename(mp3_title))[0]
+
+            # 코사인 유사도 0.95 이상이면서 파일명이 동일한 이미지 찾기
+            exact_match_candidates = []
+            for candidate in filtered:
+                score = candidate.get('score', 0)
+                file_name = candidate.get('file_name', '')
+                
+                # 확장자 제거하고 파일명만 비교
+                candidate_filename_only = os.path.splitext(file_name)[0]
+                
+                # 높은 유사도이면서 파일명이 동일한 경우
+                if score >= 0.95 and mp3_filename_only == candidate_filename_only:
+                    exact_match_candidates.append(candidate)
+
+            # 동일한 파일명의 높은 유사도 이미지가 있으면 바로 반환
+            if exact_match_candidates:
+                # 유사도가 가장 높은 것을 선택
+                best_match = max(exact_match_candidates, key=lambda x: x.get('score', 0))
+                self.get_logger().info(f"Found exact filename match with high similarity: {best_match['file_name']} (score: {best_match.get('score', 0):.3f})")
+                return best_match
+            
+            # === 기존 로직 계속 진행 ===
+            # 최대 100개로 제한
+            filtered = filtered[:100]
             items = "\n".join([f"{i+1}. {c['file_name']}" for i, c in enumerate(filtered)])
             
             prompt = f"""
@@ -286,12 +307,8 @@ class Mp3Recommender(Node):
                     self.get_logger().warning("No file_name in GPT response")
                     return filtered[0] if filtered else None
                 
-                # ===== 새로 추가된 FAISS 검증 과정 =====
-                # 선택된 파일의 임베딩을 통한 실제 존재 여부 확인
+                # ===== FAISS 검증 과정 =====
                 try:
-                    # 이미지 디렉토리 경로가 있다고 가정 (self.image_dir 또는 적절한 경로)
-                    # MP3와 동일한 방식으로 이미지 FAISS 인덱스가 있다고 가정 (self.image_faiss_index, self.image_metadata)
-                    
                     # 선택된 파일명으로 임베딩 생성
                     embedding = self.get_sbert_embedding(selected_filename).reshape(1, -1)
                     
@@ -326,7 +343,6 @@ class Mp3Recommender(Node):
                     
                 except Exception as faiss_error:
                     self.get_logger().warning(f"FAISS validation error: {faiss_error}")
-                # ===== FAISS 검증 과정 끝 =====
                 
                 # 기존 방식으로 폴백: 선택된 파일명과 일치하는 후보 찾기
                 for candidate in filtered:
