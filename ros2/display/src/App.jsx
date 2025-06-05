@@ -1,5 +1,6 @@
 
 
+
 //밈이미지(0602) - 스펙트럼 시작점 개선완료
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
@@ -34,8 +35,12 @@ function SpectrumVisualizer() {
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 400 });
   const [imageVisible, setImageVisible] = useState(false);
   const [canShowSpectrum, setCanShowSpectrum] = useState(false);
+  // 🆕 방향 상태 추가
+  const [soundDirection, setSoundDirection] = useState(0);
+  const [screenFlipped, setScreenFlipped] = useState(false);
 
-
+// 🆕 trigger_detected 상태 추가 (기존 플래그 재사용)
+  const [triggerDetected, setTriggerDetected] = useState(false);
 
 
     // gif 파일명들을 여기에 추가 (실제 파일명으로 수정하세요)
@@ -48,6 +53,71 @@ function SpectrumVisualizer() {
       '6.gif'
     ];
   const [currentGif, setCurrentGif] = useState('');
+
+
+  // 🆕 trigger_detected 상태 구독
+  useEffect(() => {
+    const triggerListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/trigger_status',
+        messageType: 'std_msgs/String'
+    });
+
+    triggerListener.subscribe((message) => {
+        const isTriggered = message.data === "triggered";
+        console.log('🎯 trigger_detected 상태:', isTriggered);
+        setTriggerDetected(isTriggered);
+    });
+
+    return () => triggerListener.unsubscribe();
+  }, []);
+
+  // 🆕 스펙트럼 표시 조건 함수 (기존 trigger_detected 플래그 활용)
+  const shouldShowSpectrum = () => {
+    if (musicPlaying) {
+      return canShowSpectrum; // 음악 재생 중일 때는 기존 로직
+    } else {
+      // 음악이 재생 중이 아닐 때는 trigger_detected에 따라 결정
+      return triggerDetected && recommendStatus !== 'searching';
+    }
+  };
+
+
+
+
+
+
+
+  // 🆕 사운드 방향 토픽 구독 추가
+  useEffect(() => {
+    const directionListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/sound_direction_angle',
+        messageType: 'std_msgs/Float32'
+    });
+
+    directionListener.subscribe((message) => {
+        const angle = message.data;
+        setSoundDirection(angle);
+        
+        // 180~360도일 때 화면 상하반전
+        if (angle >= 180 && angle <= 360) {
+            setScreenFlipped(true);
+            console.log(`🔄 화면 반전: ${angle}도`);
+        } else {
+            setScreenFlipped(false);
+            console.log(`➡️ 정상 화면: ${angle}도`);
+        }
+    });
+
+    return () => directionListener.unsubscribe();
+  }, []);
+
+
+
+
+
+
 
   // 1. 음악 상태 구독 - 타이밍 개선된 버전
   useEffect(() => {
@@ -158,6 +228,8 @@ function SpectrumVisualizer() {
   
     canvas.width = width;
     canvas.height = height;
+
+
   
     // 전체 화면 배경색
     ctx.fillStyle = musicPlaying ? '#000' : '#222222';
@@ -169,15 +241,41 @@ function SpectrumVisualizer() {
       return;
     }
 
+      // 🆕 마이크 입력 시 trigger_detected=false일 때 배경색만 표시
+    if (!musicPlaying && !triggerDetected) {
+      console.log('🎵 마이크 모드 - trigger_detected=false, 배경색만 표시');
+      // 배경색은 이미 위에서 설정했으므로 그대로 return
+      return;
+    }
 
-    // 음악이 재생 중이지만 아직 스펙트럼을 표시할 수 없는 상태
+    // 🆕 음악 재생 중 스펙트럼 표시 조건 (기존 로직 유지)
     if (musicPlaying && !canShowSpectrum) {
       console.log('🎵 음악 재생 중 - 이미지 표시 대기로 스펙트럼 숨김');
       return;
-  }
+    }
+
+    // 🆕 마이크 입력 시 스펙트럼 표시 조건
+    if (!musicPlaying && recommendStatus === 'searching') {
+      console.log('🎵 마이크 모드 - 검색 중이므로 스펙트럼 숨김');
+      return;
+    }
+
+
+  //   // 🆕 스펙트럼 표시 조건 체크 (기존 trigger_detected 플래그 활용)
+  //   if (!shouldShowSpectrum()) {
+  //     console.log('🎵 trigger_detected=false - 스펙트럼 숨김');
+  //     return;
+  //   }
+
+
+  //   // 음악이 재생 중이지만 아직 스펙트럼을 표시할 수 없는 상태
+  //   if (musicPlaying && !canShowSpectrum) {
+  //     console.log('🎵 음악 재생 중 - 이미지 표시 대기로 스펙트럼 숨김');
+  //     return;
+  // }
   
     const central = getCentralSlice(spectrum, 0.6);
-    const numBars = 43;
+    const numBars =43;
     let bars = downsampleArray(central, numBars);
     bars = bars.map(v => Math.min(1, v * 10));
   
@@ -207,7 +305,7 @@ function SpectrumVisualizer() {
       ctx.lineTo(x, centerY + barHeight);
       ctx.stroke();
     }
-  }, [spectrum, musicPlaying, recommendStatus, canvasSize, canShowSpectrum]);
+  }, [spectrum, musicPlaying, recommendStatus, canvasSize, canShowSpectrum,triggerDetected]);
   
   
 
@@ -335,9 +433,6 @@ const renderImage = () => {
 
 
 
-
-
-
     return (
         <div style={{
             position: 'absolute',
@@ -412,11 +507,16 @@ const renderGif = () => {
 };
 
 
+const getScreenTransform = () => {
+  if (screenFlipped) {
+    return 'scaleY(-1)'; // 상하반전
+  }
+  return 'scaleY(1)'; // 정상
+};
+
+
 
   
-
-
-
 
 
 
@@ -436,8 +536,35 @@ const renderGif = () => {
       boxSizing: 'border-box',
       position: 'relative',
       backgroundColor: (recommendStatus === 'searching' && !imageVisible) ? '#fff' : 
-                 (musicPlaying || imageVisible) ? '#000' : '#222222'
+                 (musicPlaying || imageVisible) ? '#000' : '#222222',
+
+      // 🆕 화면 변환 적용
+      transform: getScreenTransform(),
+      transition: 'transform 0.5s ease-in-out' // 부드러운 전환 효과
     }}>
+
+      {/* 🆕 방향 정보 표시 (디버깅용 - 원하면 제거) */}
+      <div style={{
+        position: 'absolute',
+        top: '10px',
+        right: '10px',
+        color: screenFlipped ? '#ff6b6b' : '#4ecdc4',
+        fontSize: '16px',
+        fontWeight: 'bold',
+        zIndex: 100,
+        transform: screenFlipped ? 'scaleY(-1)' : 'scaleY(1)', // 텍스트는 정상 방향 유지
+        backgroundColor: 'rgba(0,0,0,0.7)',
+        padding: '5px 10px',
+        borderRadius: '5px'
+      }}>
+        방향: {Math.round(soundDirection)}° {screenFlipped ? '(반전)' : '(정상)'}
+      </div>
+
+      
+
+
+
+
 
 
 
@@ -458,35 +585,7 @@ const renderGif = () => {
       
       {/* 추천 중일 때 gif 오버레이 */}
       {renderGif()}
-      {/* {recommendStatus === 'searching' && currentGif && (
-        <div style={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          zIndex: 10,
-          backgroundColor: '#fff',
-          width: `${canvasSize.width}px`,
-          height: `${canvasSize.height}px`,
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 10 // 이미지보다 낮은 우선순위
-        }}>
-          <img 
-            src={`/${currentGif}`}
-            alt="추천 중..." 
-            style={{
-              maxWidth: '500%',
-              maxHeight: '500%',
-              objectFit: 'contain'
-            }}
-            onError={(e) => {
-              console.error('이미지 로드 실패:', currentGif);
-            }}
-          />
-        </div>
-      )} */}
+ 
 
 
 
@@ -508,6 +607,5 @@ const renderGif = () => {
 }
 
 export default SpectrumVisualizer;
-
 
 
