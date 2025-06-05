@@ -1,8 +1,0 @@
-faiss-gpu
-sentence-transformers
-langchain
-openai
-numpy==1.23.5
-pandas
-langchain_community
-langchain_ollama
