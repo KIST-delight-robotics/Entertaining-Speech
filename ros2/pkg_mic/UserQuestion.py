@@ -1,4 +1,6 @@
 
+#통합
+
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -69,6 +71,9 @@ class UserQuestion(Node):
         # ROS 2 인터페이스
         stt_group = ReentrantCallbackGroup()
         self.publisher_ = self.create_publisher(String, "user_question", 10)
+        # 🆕 트리거 상태 퍼블리시용 추가
+        self.trigger_status_pub = self.create_publisher(String, "/trigger_status", 10)
+        
 
         # self.create_subscription(
         #     String, "processing_done", self.processing_done_callback, 10
@@ -158,6 +163,16 @@ class UserQuestion(Node):
         self.force_restart_stt()
 
 
+    def publish_trigger_status(self):
+            """🆕 기존 trigger_detected 플래그 상태를 프론트엔드로 전송"""
+            status = "triggered" if self.trigger_detected else "waiting"
+            msg = String()
+            msg.data = status
+            self.trigger_status_pub.publish(msg)
+            self.get_logger().info(f"Trigger status published: {status}")
+
+
+
     def music_status_callback(self, msg):
         """ 음악 상태에 따라 STT 동작 제어 """
         if msg.data == "music_playing":
@@ -176,6 +191,8 @@ class UserQuestion(Node):
             self.trigger_detected = True
             self.waiting_for_input_after_music = True
             self.partial_transcript = ""
+            # 🆕 트리거 상태 퍼블리시 (대기 상태)
+            self.publish_trigger_status()
 
             # 마이크 입력 다시 시작 및 STT 재개
             self.start_audio_stream()
@@ -205,6 +222,8 @@ class UserQuestion(Node):
         self.partial_transcript = ""
         self.current_speaker_id += 1  # 새로운 화자 id 할당
         self.get_logger().info(f"새로운 speaker_id 할당: {self.current_speaker_id}")
+        # 🆕 trigger_detected 상태 전송
+        self.publish_trigger_status()
 
 
 
@@ -496,9 +515,13 @@ class UserQuestion(Node):
                         if len(split_text) > 1:
                             self.partial_transcript = split_text[1].strip()
                             self.get_logger().info(f"Trigger detected. Capturing transcript: {self.partial_transcript}")
+
                             self.play_effect_sound()
                             self.trigger_detected = True
+                            # 🆕 트리거 감지 상태 전송
+                            self.publish_trigger_status()
                             self.audio_buffer = []  # 본 질문 음성 버퍼링 시작
+                            
                             
                             self.start_silence_monitoring()
                         continue
@@ -760,6 +783,9 @@ class UserQuestion(Node):
             self.partial_transcript = ""  # ✅ 퍼블리시 후 즉시 초기화
             self.trigger_detected = False  # ✅ 퍼블리시 후 trigger 상태 초기화
             self.waiting_for_input_after_music = False  # ✅ 입력 대기 상태 해제
+
+            # 🆕 trigger_detected 상태 전송
+            self.publish_trigger_status()
 
     def play_effect_sound_rag(self):
         # 효과음 파일이 저장된 디렉토리 경로
