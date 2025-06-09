@@ -39,6 +39,12 @@ function SpectrumVisualizer() {
   const [soundDirection, setSoundDirection] = useState(0);
   const [screenFlipped, setScreenFlipped] = useState(false);
 
+  // 🆕 누락된 상태 변수들 추가
+  const [fixedDirection, setFixedDirection] = useState(null);
+  const [isDirectionFixed, setIsDirectionFixed] = useState(false);
+
+  
+
 // 🆕 trigger_detected 상태 추가 (기존 플래그 재사용)
   const [triggerDetected, setTriggerDetected] = useState(false);
 
@@ -53,6 +59,43 @@ function SpectrumVisualizer() {
       '6.gif'
     ];
   const [currentGif, setCurrentGif] = useState('');
+
+
+
+
+  useEffect(() => {
+    const gifStatusListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/gif_status',
+        messageType: 'std_msgs/String'
+    });
+  
+    gifStatusListener.subscribe((message) => {
+        console.log('🎬 UserQuestion GIF 신호 수신:', message.data);
+        
+        if (message.data === 'show_gif') {
+            // 즉시 searching 상태로 변경하고 GIF 표시
+            setRecommendStatus('searching');
+            
+            const randomIndex = Math.floor(Math.random() * availableGifs.length);
+            const selectedGif = availableGifs[randomIndex];
+            console.log('🎬 강제 GIF 표시:', selectedGif);
+            setCurrentGif(selectedGif);
+            
+            // 다른 상태들 초기화
+            setCurrentImage(null);
+            setImageVisible(false);
+            setCanShowSpectrum(false);
+        }
+    });
+  
+    return () => gifStatusListener.unsubscribe();
+  }, [availableGifs]);
+
+
+
+
+
 
 
   // 🆕 trigger_detected 상태 구독
@@ -86,9 +129,7 @@ function SpectrumVisualizer() {
 
 
 
-
-
-  // 🆕 사운드 방향 토픽 구독 추가
+  // 🆕 실시간 각도 구독 (주석 해제 및 수정)
   useEffect(() => {
     const directionListener = new ROSLIB.Topic({
         ros: ros,
@@ -100,20 +141,50 @@ function SpectrumVisualizer() {
         const angle = message.data;
         setSoundDirection(angle);
         
-        // 180~360도일 때 화면 상하반전
-        if (angle >= 180 && angle <= 360) {
-            setScreenFlipped(true);
-            console.log(`🔄 화면 반전: ${angle}도`);
+        // 🆕 고정 모드가 아닐 때만 실시간 화면 방향 변경
+        if (!isDirectionFixed) {
+            if (angle >= 180 && angle <= 360) {
+                setScreenFlipped(true);
+                console.log(`🔄 실시간 화면 반전: ${angle}도`);
+            } else {
+                setScreenFlipped(false);
+                console.log(`➡️ 실시간 정상 화면: ${angle}도`);
+            }
         } else {
-            setScreenFlipped(false);
-            console.log(`➡️ 정상 화면: ${angle}도`);
+            console.log(`📍 실시간 각도: ${angle}도 (고정 모드: ${fixedDirection}도 유지)`);
         }
     });
 
     return () => directionListener.unsubscribe();
+  }, [isDirectionFixed, fixedDirection]);
+
+  // 🆕 고정 각도 토픽 구독 (수정)
+  useEffect(() => {
+    const fixedDirectionListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/fixed_direction',
+        messageType: 'std_msgs/Float32'
+    });
+
+    fixedDirectionListener.subscribe((message) => {
+        const fixedAngle = message.data;
+        console.log('🔒 고정 각도 수신:', fixedAngle);
+        
+        setFixedDirection(fixedAngle);
+        setIsDirectionFixed(true);
+        
+        // 고정 각도에 따른 화면 방향 설정
+        if (fixedAngle >= 180 && fixedAngle <= 360) {
+            setScreenFlipped(true);
+            console.log(`🔒 화면 반전 고정: ${fixedAngle}도`);
+        } else {
+            setScreenFlipped(false);
+            console.log(`🔒 정상 화면 고정: ${fixedAngle}도`);
+        }
+    });
+
+    return () => fixedDirectionListener.unsubscribe();
   }, []);
-
-
 
 
 
@@ -509,9 +580,9 @@ const renderGif = () => {
 
 const getScreenTransform = () => {
   if (screenFlipped) {
-    return 'scaleY(-1)'; // 상하반전
+    return 'scaleY(-1) scaleX(-1)'; // 상하반전
   }
-  return 'scaleY(1)'; // 정상
+  return 'scaleY(1) scaleX(1)'; // 정상
 };
 
 
@@ -557,7 +628,10 @@ const getScreenTransform = () => {
         padding: '5px 10px',
         borderRadius: '5px'
       }}>
-        방향: {Math.round(soundDirection)}° {screenFlipped ? '(반전)' : '(정상)'}
+        {isDirectionFixed 
+          ? `🔒 고정: ${Math.round(fixedDirection)}° ${screenFlipped ? '(반전)' : '(정상)'}`
+          : `📍 실시간: ${Math.round(soundDirection)}° ${screenFlipped ? '(반전)' : '(정상)'}`
+        }
       </div>
 
       
@@ -607,5 +681,4 @@ const getScreenTransform = () => {
 }
 
 export default SpectrumVisualizer;
-
 
