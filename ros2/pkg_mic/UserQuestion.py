@@ -48,7 +48,7 @@ from datetime import datetime
 import pygame
 
 import json
-from std_msgs.msg import String
+from std_msgs.msg import String, Float32
 import librosa
 import librosa.display
 from scipy import ndimage 
@@ -73,6 +73,7 @@ class UserQuestion(Node):
         self.publisher_ = self.create_publisher(String, "user_question", 10)
         # 🆕 트리거 상태 퍼블리시용 추가
         self.trigger_status_pub = self.create_publisher(String, "/trigger_status", 10)
+        self.gif_status_pub = self.create_publisher(String, "/gif_status", 10)
         
 
         # self.create_subscription(
@@ -80,6 +81,7 @@ class UserQuestion(Node):
         # )
         self.processing_subscription = self.create_subscription(String, "processing_done", self.processing_done_callback, 10)
         self.music_status_subscription = self.create_subscription(String, "music_status", self.music_status_callback, 10)
+
 
 
 
@@ -143,6 +145,21 @@ class UserQuestion(Node):
         # 주파수 계산을 위한 변수
         self.fft_size = 1024
         self.freqs = np.fft.fftfreq(self.fft_size, 1/self.sample_rate)[:self.fft_size//2]
+
+        # 🆕 현재 각도 저장 및 고정 각도 퍼블리시용
+        self.current_direction = 0.0
+        self.fixed_direction_pub = self.create_publisher(Float32, "/fixed_direction", 10)
+        
+        # 🆕 실시간 각도 구독
+        self.direction_sub = self.create_subscription(
+            Float32, 
+            '/sound_direction_angle', 
+            self.direction_callback, 
+            10
+        )
+
+
+
 
 
         self.start_audio_stream()
@@ -761,6 +778,12 @@ class UserQuestion(Node):
 
     # ── ROS 퍼블리시 ---------------------------------------------------------
 
+
+
+    def direction_callback(self, msg):
+        """실시간 각도 업데이트"""
+        self.current_direction = msg.data
+
     def publish_transcription(self, text: str):
 
 
@@ -769,6 +792,24 @@ class UserQuestion(Node):
                 self.timer_30s.cancel()  # ✅ 퍼블리시 후 타이머 종료
 
             self.force_published = True
+
+            # 🆕 질문 퍼블리시와 동시에 현재 각도를 고정 각도로 전송
+            fixed_msg = Float32()
+            fixed_msg.data = self.current_direction
+            self.fixed_direction_pub.publish(fixed_msg)
+            self.get_logger().info(f"🔒 고정 각도 설정: {self.current_direction}도")
+
+            # 🆕 2단계: GIF 표시 신호 즉시 전송
+            gif_msg = String()
+            gif_msg.data = "show_gif"
+            self.gif_status_pub.publish(gif_msg)
+            self.get_logger().info("🎬 GIF 표시 신호 전송")
+
+            
+
+
+
+
 
             msg = String()
             msg.data = f"speaker{self.current_speaker_id:03d}|{text}"
@@ -784,8 +825,8 @@ class UserQuestion(Node):
             self.trigger_detected = False  # ✅ 퍼블리시 후 trigger 상태 초기화
             self.waiting_for_input_after_music = False  # ✅ 입력 대기 상태 해제
 
-            # 🆕 trigger_detected 상태 전송
-            self.publish_trigger_status()
+            # # 🆕 trigger_detected 상태 전송
+            # self.publish_trigger_status()
 
     def play_effect_sound_rag(self):
         # 효과음 파일이 저장된 디렉토리 경로
@@ -890,4 +931,3 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-
