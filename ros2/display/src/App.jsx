@@ -1,5 +1,6 @@
 
 
+
 //밈이미지(0602) - 스펙트럼 시작점 개선완료
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
@@ -48,6 +49,7 @@ function SpectrumVisualizer() {
   const [triggerDetected, setTriggerDetected] = useState(false);
   const [currentGif, setCurrentGif] = useState('');
 
+  
 
 
   // 🆕 수정: 의존성 제거 및 안정적인 구독
@@ -226,8 +228,60 @@ useEffect(() => {
 
 
 
+  // 🆕 이전 스펙트럼 값을 저장하는 ref
+  const previousSpectrumRef = useRef([]);
+  
+  // 🆕 향상된 스무딩 함수
+  const applyAdvancedSmoothing = (newSpectrum) => {
+    const previous = previousSpectrumRef.current;
+    
+    if (previous.length === 0) {
+      previousSpectrumRef.current = [...newSpectrum];
+      return newSpectrum;
+    }
 
-  // 2. 상황에 따라 구독 토픽 자동 변경
+    const smoothed = newSpectrum.map((current, index) => {
+      const prev = previous[index] || 0;
+      
+      // 🆕 음악 특성에 맞는 스무딩
+      if (current > prev) {
+        // 비트/드럼 등 급격한 증가: 빠른 반응 (40% 새값)
+        return prev * 0.4 + current * 0.6;
+      } else {
+        // 소리 감소: 자연스러운 감쇠 (8% 새값)
+        return prev * 0.6 + current * 0.4;
+      }
+    });
+    
+    // 이전 값 업데이트
+    previousSpectrumRef.current = [...smoothed];
+    return smoothed;
+  };
+
+
+
+  // // 2. 상황에 따라 구독 토픽 자동 변경
+  // useEffect(() => {
+  //   const topicName = musicPlaying ? '/audio_amplitude' : '/audio_visualizer';
+  //   const spectrumListener = new ROSLIB.Topic({
+  //     ros: ros,
+  //     name: topicName,
+  //     messageType: 'std_msgs/String'
+  //   });
+  //   spectrumListener.subscribe((message) => {
+  //     try {
+  //       const data = JSON.parse(message.data);
+  //       if (data.spectrum) setSpectrum(data.spectrum);
+  //     } catch (e) {
+  //       console.error('JSON parse error:', e);
+  //     }
+  //   });
+  //   return () => spectrumListener.unsubscribe();
+  // }, [musicPlaying]);
+
+
+
+  // 스펙트럼 구독 (useRef 버전)
   useEffect(() => {
     const topicName = musicPlaying ? '/audio_amplitude' : '/audio_visualizer';
     const spectrumListener = new ROSLIB.Topic({
@@ -235,20 +289,26 @@ useEffect(() => {
       name: topicName,
       messageType: 'std_msgs/String'
     });
+    
     spectrumListener.subscribe((message) => {
       try {
         const data = JSON.parse(message.data);
-        if (data.spectrum) setSpectrum(data.spectrum);
+        if (data.spectrum) {
+          const smoothedData = applyAdvancedSmoothing(data.spectrum);
+          setSpectrum(smoothedData);
+        }
       } catch (e) {
         console.error('JSON parse error:', e);
       }
     });
-    return () => spectrumListener.unsubscribe();
+    
+    return () => {
+      spectrumListener.unsubscribe();
+      // 토픽 변경 시 이전 값 초기화
+      previousSpectrumRef.current = [];
+    };
   }, [musicPlaying]);
 
-
-
-  
 
   useEffect(() => {
     const canvas = canvasRef.current;
