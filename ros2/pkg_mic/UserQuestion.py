@@ -1,6 +1,4 @@
 
-#통합
-
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -52,6 +50,7 @@ from std_msgs.msg import String, Float32
 import librosa
 import librosa.display
 from scipy import ndimage 
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
 load_dotenv("/home/nvidia/ros2_ws/src/.env")
 
@@ -68,12 +67,23 @@ class UserQuestion(Node):
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/home/nvidia/ros2_ws/my-service-account.json"
         self.client = speech.SpeechClient()
 
+
+        # 🆕 신뢰성 높은 QoS 설정
+        reliable_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+
+
         # ROS 2 인터페이스
         stt_group = ReentrantCallbackGroup()
         self.publisher_ = self.create_publisher(String, "user_question", 10)
         # 🆕 트리거 상태 퍼블리시용 추가
         self.trigger_status_pub = self.create_publisher(String, "/trigger_status", 10)
         self.gif_status_pub = self.create_publisher(String, "/gif_status", 10)
+        #self.gif_status_pub = self.create_publisher(String, "/gif_status", reliable_qos)
         
 
         # self.create_subscription(
@@ -143,7 +153,7 @@ class UserQuestion(Node):
         self.sample_rate = 16000
         
         # 주파수 계산을 위한 변수
-        self.fft_size = 1024
+        self.fft_size = 512
         self.freqs = np.fft.fftfreq(self.fft_size, 1/self.sample_rate)[:self.fft_size//2]
 
         # 🆕 현재 각도 저장 및 고정 각도 퍼블리시용
@@ -256,7 +266,7 @@ class UserQuestion(Node):
             channels=1,  # ✅ PulseAudio에서는 1 채널을 지원할 가능성이 높음
             rate=16000,
             input=True,
-            frames_per_buffer=1024,
+            frames_per_buffer=512,
             input_device_index=None,  # ✅ PulseAudio의 기본 입력 장치를 사용
             stream_callback=self.audio_callback
         )
@@ -793,23 +803,21 @@ class UserQuestion(Node):
 
             self.force_published = True
 
+
+            # 🆕 2단계: searching 상태 신호 전송 (기존 gif_status_pub 활용)
+            status_msg = String()
+            status_msg.data = "searching"  # gif_status 대신 searching으로 통일
+            self.gif_status_pub.publish(status_msg)
+            self.get_logger().info("📊 UserQuestion에서 searching 상태 전송")
+            time.sleep(0.5)
+
+
             # 🆕 질문 퍼블리시와 동시에 현재 각도를 고정 각도로 전송
             fixed_msg = Float32()
             fixed_msg.data = self.current_direction
             self.fixed_direction_pub.publish(fixed_msg)
             self.get_logger().info(f"🔒 고정 각도 설정: {self.current_direction}도")
-
-            # 🆕 2단계: GIF 표시 신호 즉시 전송
-            gif_msg = String()
-            gif_msg.data = "show_gif"
-            self.gif_status_pub.publish(gif_msg)
-            self.get_logger().info("🎬 GIF 표시 신호 전송")
-
             
-
-
-
-
 
             msg = String()
             msg.data = f"speaker{self.current_speaker_id:03d}|{text}"
