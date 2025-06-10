@@ -1,4 +1,5 @@
 
+
 //밈이미지(0602) - 스펙트럼 시작점 개선완료
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
@@ -47,49 +48,6 @@ function SpectrumVisualizer() {
   const [triggerDetected, setTriggerDetected] = useState(false);
   const [currentGif, setCurrentGif] = useState('');
 
-
-
-  //   // gif 파일명들을 여기에 추가 (실제 파일명으로 수정하세요)
-  // const availableGifs = [
-  //     '1.gif',
-  //     '2.gif', 
-  //     '3.gif',
-  //     '4.gif',
-  //     '5.gif',
-  //     '6.gif'
-  //   ];
-
-
-
-
-  // useEffect(() => {
-  //   const gifStatusListener = new ROSLIB.Topic({
-  //       ros: ros,
-  //       name: '/gif_status',
-  //       messageType: 'std_msgs/String'
-  //   });
-  
-  //   gifStatusListener.subscribe((message) => {
-  //       console.log('🎬 UserQuestion GIF 신호 수신:', message.data);
-        
-  //       if (message.data === 'searching') {
-  //           // 즉시 searching 상태로 변경하고 GIF 표시
-  //           setRecommendStatus('searching');
-            
-  //           const randomIndex = Math.floor(Math.random() * availableGifs.length);
-  //           const selectedGif = availableGifs[randomIndex];
-  //           console.log('🎬 강제 GIF 표시:', selectedGif);
-  //           setCurrentGif(selectedGif);
-            
-  //           // 다른 상태들 초기화
-  //           setCurrentImage(null);
-  //           setImageVisible(false);
-  //           setCanShowSpectrum(false);
-  //       }
-  //   });
-  
-  //   return () => gifStatusListener.unsubscribe();
-  // }, [availableGifs]);
 
 
   // 🆕 수정: 의존성 제거 및 안정적인 구독
@@ -253,11 +211,7 @@ useEffect(() => {
             setMusicPlaying(true);
             setCanShowSpectrum(false); // 스펙트럼 표시 초기화
             
-            // // GIF를 일정 시간 보여준 후 스펙트럼으로 전환
-            // setTimeout(() => {
-            //     setRecommendStatus('done');
-            //     console.log('음악 재생 - 스펙트럼 표시로 전환');
-            // }, 1500); // 1.5초 후 스펙트럼 표시
+
             
         } else if (message.data === 'music_done') {
             setMusicPlaying(false);
@@ -270,54 +224,6 @@ useEffect(() => {
     return () => statusListener.unsubscribe();
   }, []);
 
-  // // 2. mp3_recommend_status 토픽 구독 - 즉시 처리
-  // useEffect(() => {
-  //   // const statusListener = new ROSLIB.Topic({
-  //   //     ros: ros,
-  //   //     name: '/mp3_recommend_status',
-  //   //     messageType: 'std_msgs/String'
-  //   // });
-
-  //   const statusListener = new ROSLIB.Topic({
-  //     ros: ros,
-  //     name: '/gif_status',
-  //     messageType: 'std_msgs/String'
-  // });
-
-  //   statusListener.subscribe((message) => {
-  //       console.log('추천 상태:', message.data);
-        
-  //       if (message.data === 'searching') {
-  //           setRecommendStatus('searching');
-            
-  //           const randomIndex = Math.floor(Math.random() * availableGifs.length);
-  //           const selectedGif = availableGifs[randomIndex];
-  //           console.log('선택된 gif:', selectedGif);
-  //           setCurrentGif(selectedGif);
-  //           // 다른 상태들 초기화
-  //           setCurrentImage(null);
-  //           setImageVisible(false);
-  //           setCanShowSpectrum(false);
-  //         } else if (message.data === 'processing') {
-  //           console.log('⚙️ processing 상태');
-  //           setRecommendStatus('processing');
-  //           // GIF는 계속 표시
-
-
-
-  //       } else if (message.data === 'done') {
-  //           // 즉시 done 처리하지 않고 음악 재생 여부 확인
-  //           if (!musicPlaying) {
-  //               setRecommendStatus('done');
-  //               setCurrentGif(''); // GIF 숨김
-  //           }
-  //       } else {
-  //           setRecommendStatus(message.data);
-  //       }
-  //   });
-
-  //   return () => statusListener.unsubscribe();
-  // }, [availableGifs, musicPlaying]);
 
 
 
@@ -386,18 +292,6 @@ useEffect(() => {
     }
 
 
-  //   // 🆕 스펙트럼 표시 조건 체크 (기존 trigger_detected 플래그 활용)
-  //   if (!shouldShowSpectrum()) {
-  //     console.log('🎵 trigger_detected=false - 스펙트럼 숨김');
-  //     return;
-  //   }
-
-
-  //   // 음악이 재생 중이지만 아직 스펙트럼을 표시할 수 없는 상태
-  //   if (musicPlaying && !canShowSpectrum) {
-  //     console.log('🎵 음악 재생 중 - 이미지 표시 대기로 스펙트럼 숨김');
-  //     return;
-  // }
   
     const central = getCentralSlice(spectrum, 0.6);
     const numBars =43;
@@ -559,24 +453,28 @@ const renderImage = () => {
 
 
     return (
-        <div style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            zIndex: 15,
-            maxWidth: '80%',
-            maxHeight: '80%'
-        }}>
+      <div style={{
+        position: 'absolute',
+        top: '0',              // 🆕 화면 맨 위부터
+        left: '0',             // 🆕 화면 맨 왼쪽부터
+        width: '100vw',        // 🆕 화면 전체 너비
+        height: '100vh',       // 🆕 화면 전체 높이
+        zIndex: 15,
+        display: 'flex',       // 🆕 중앙 정렬을 위한 flexbox
+        justifyContent: 'center',
+        alignItems: 'center'
+    }}>
             <img 
                 src={safeImageUrl} 
                 alt="Music Visual"
                 style={{
-                    maxWidth: '100%',
-                    maxHeight: '100%',
-                    objectFit: 'contain',
-                    borderRadius: '10px',
-                    boxShadow: '0 4px 20px rgba(0,0,0,0.3)'                    
+                  width: 'auto',              // 🆕 너비 자동 (비율 유지)
+                  height: '100vh',            // 🆕 세로를 화면에 꽉 차게
+                  minWidth: '100vw',           // 🆕 최소 너비로 화면 전체 커버
+                  objectFit: 'contain',         // 넘치는 부분 자르기
+                  objectPosition: 'center',   // 중앙 정렬
+                  borderRadius: '0px',
+                  boxShadow: 'none'     
                 }}
                 onLoad={() => console.log('🖼️ 이미지 로드 성공:', safeImageUrl)}
                 onError={() => console.error('🖼️ 이미지 로드 실패:', safeImageUrl)}
