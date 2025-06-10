@@ -27,7 +27,10 @@ function downsampleArray(arr, targetLen) {
   return result;
 }
 function SpectrumVisualizer() {
-  const [spectrum, setSpectrum] = useState([]);
+  // 🆕 분리된 스펙트럼 상태
+  const [musicSpectrum, setMusicSpectrum] = useState([]);
+  const [micSpectrum, setMicSpectrum] = useState([]);
+
   const [musicPlaying, setMusicPlaying] = useState(false);
   const [currentImage, setCurrentImage] = useState(null); // 이미지 상태 추가
   const canvasRef = useRef(null);
@@ -259,6 +262,38 @@ useEffect(() => {
   };
 
 
+  // 🆕 마이크용 별도 스무딩 함수
+  const previousMicSpectrumRef = useRef([]);
+
+  const applyMicSmoothing = (newSpectrum) => {
+    const previous = previousMicSpectrumRef.current;
+    
+    if (previous.length === 0) {
+      previousMicSpectrumRef.current = [...newSpectrum];
+      return newSpectrum;
+    }
+
+    // 마이크용 다른 스무딩 설정 (예시)
+    const smoothed = newSpectrum.map((current, index) => {
+      const prev = previous[index] || 0;
+      
+      if (current > prev) {
+        return prev * 0.6 + current * 0.4; // 더 빠른 반응
+      } else {
+        return prev * 0.6 + current * 0.4; // 더 빠른 감쇠
+      //   return prev * 0.5 + current * 0.5; // 더 빠른 반응
+      // } else {
+      //   return prev * 0.8 + current * 0.2; // 더 빠른 감쇠
+
+      }
+    });
+    
+    previousMicSpectrumRef.current = [...smoothed];
+    return smoothed;
+  };
+
+
+
 
   // // 2. 상황에 따라 구독 토픽 자동 변경
   // useEffect(() => {
@@ -280,101 +315,165 @@ useEffect(() => {
   // }, [musicPlaying]);
 
 
-
-  // 스펙트럼 구독 (useRef 버전)
+  // 🆕 음악 스펙트럼 구독
   useEffect(() => {
-    const topicName = musicPlaying ? '/audio_amplitude' : '/audio_visualizer';
-    const spectrumListener = new ROSLIB.Topic({
+    if (!musicPlaying) return;
+    
+    const musicSpectrumListener = new ROSLIB.Topic({
       ros: ros,
-      name: topicName,
+      name: '/audio_amplitude',
       messageType: 'std_msgs/String'
     });
     
-    spectrumListener.subscribe((message) => {
+    musicSpectrumListener.subscribe((message) => {
       try {
         const data = JSON.parse(message.data);
         if (data.spectrum) {
           const smoothedData = applyAdvancedSmoothing(data.spectrum);
-          setSpectrum(smoothedData);
+          setMusicSpectrum(smoothedData);
         }
       } catch (e) {
-        console.error('JSON parse error:', e);
+        console.error('Music spectrum JSON parse error:', e);
       }
     });
     
     return () => {
-      spectrumListener.unsubscribe();
-      // 토픽 변경 시 이전 값 초기화
+      musicSpectrumListener.unsubscribe();
       previousSpectrumRef.current = [];
     };
   }, [musicPlaying]);
 
-
+  // 🆕 마이크 스펙트럼 구독
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || spectrum.length === 0) return;
+    if (musicPlaying) return;
+    
+    const micSpectrumListener = new ROSLIB.Topic({
+      ros: ros,
+      name: '/audio_visualizer',
+      messageType: 'std_msgs/String'
+    });
+    
+    micSpectrumListener.subscribe((message) => {
+      try {
+        const data = JSON.parse(message.data);
+        if (data.spectrum) {
+          const smoothedData = applyMicSmoothing(data.spectrum);
+          setMicSpectrum(smoothedData);
+        }
+      } catch (e) {
+        console.error('Mic spectrum JSON parse error:', e);
+      }
+    });
+    
+    return () => {
+      micSpectrumListener.unsubscribe();
+      previousMicSpectrumRef.current = [];
+    };
+  }, [musicPlaying]);
+
+
+
+  // 🆕 음악 스펙트럼 렌더링
+useEffect(() => {
+  if (!musicPlaying || musicSpectrum.length === 0) return;
   
+  const canvas = canvasRef.current;
+  if (!canvas) return;
+  
+  const ctx = canvas.getContext('2d');
+  const { width, height } = canvasSize;
+  
+  canvas.width = width;
+  canvas.height = height;
+  
+  // 음악용 배경
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, width, height);
+  
+  if (!canShowSpectrum) return;
+  
+  // 🆕 음악용 스펙트럼 처리 (기존 로직 유지)
+  const central = getCentralSlice(musicSpectrum, 0.6);
+  const numBars = 43;
+  let bars = downsampleArray(central, numBars);
+  bars = bars.map(v => Math.min(1, v * 10));
+  
+  const scale = Math.min(width / 1018, height / 240);
+  const barWidth = 10 * scale;
+  const gap = 14 * scale;
+  const maxBarHeight = 120 * scale;
+  const totalWidth = numBars * barWidth + (numBars - 1) * gap;
+  const xOffset = (width - totalWidth) / 2;
+  const centerY = height / 2;
+  
+  ctx.strokeStyle = '#ff00cc';
+  ctx.lineWidth = barWidth;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  
+  for (let i = 0; i < numBars; i++) {
+    const x = xOffset + i * (barWidth + gap) + barWidth / 2;
+    const barHeight = bars[i] * maxBarHeight;
+    ctx.beginPath();
+    ctx.moveTo(x, centerY - barHeight);
+    ctx.lineTo(x, centerY + barHeight);
+    ctx.stroke();
+  }
+}, [musicSpectrum, musicPlaying, canvasSize, canShowSpectrum]);
+
+  // 🆕 마이크 스펙트럼 렌더링
+  useEffect(() => {
+    if (musicPlaying || micSpectrum.length === 0) return;
+    
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
     const ctx = canvas.getContext('2d');
     const { width, height } = canvasSize;
-  
+    
     canvas.width = width;
     canvas.height = height;
-
-
-  
-    // 전체 화면 배경색
-    ctx.fillStyle = musicPlaying ? '#000' : '#222222';
+    
+    // 마이크용 배경
+    ctx.fillStyle = '#222222';
     ctx.fillRect(0, 0, width, height);
-  
-    if (recommendStatus === 'searching'&& !imageVisible) {
+    
+    if (recommendStatus === 'searching' && !imageVisible) {
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, width, height);
       return;
     }
-
-      // 🆕 마이크 입력 시 trigger_detected=false일 때 배경색만 표시
-    if (!musicPlaying && !triggerDetected) {
+    
+    if (!triggerDetected) {
       console.log('🎵 마이크 모드 - trigger_detected=false, 배경색만 표시');
-      // 배경색은 이미 위에서 설정했으므로 그대로 return
       return;
     }
-
-    // 🆕 음악 재생 중 스펙트럼 표시 조건 (기존 로직 유지)
-    if (musicPlaying && !canShowSpectrum) {
-      console.log('🎵 음악 재생 중 - 이미지 표시 대기로 스펙트럼 숨김');
-      return;
-    }
-
-    // 🆕 마이크 입력 시 스펙트럼 표시 조건
-    if (!musicPlaying && recommendStatus === 'searching') {
+    
+    if (recommendStatus === 'searching') {
       console.log('🎵 마이크 모드 - 검색 중이므로 스펙트럼 숨김');
       return;
     }
-
-
-  
-    const central = getCentralSlice(spectrum, 0.6);
-    const numBars =43;
+    
+    // 🆕 마이크용 스펙트럼 처리 (나중에 다르게 커스터마이징 가능)
+    const central = getCentralSlice(micSpectrum, 0.6);
+    const numBars = 43;
     let bars = downsampleArray(central, numBars);
     bars = bars.map(v => Math.min(1, v * 10));
-  
-    // 캔버스 크기에 비례한 스펙트럼 크기 (원본 비율 유지)
-    const scale = Math.min(width / 1018, height / 240); // 원본 크기 기준 스케일
     
+    const scale = Math.min(width / 1018, height / 240);
     const barWidth = 10 * scale;
     const gap = 14 * scale;
     const maxBarHeight = 120 * scale;
-    
     const totalWidth = numBars * barWidth + (numBars - 1) * gap;
-    
-    // 화면 중앙에 배치
     const xOffset = (width - totalWidth) / 2;
     const centerY = height / 2;
-  
-    ctx.strokeStyle = musicPlaying ? '#ff00cc' : '#fff';
+    
+    ctx.strokeStyle = '#fff';
     ctx.lineWidth = barWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+
+
   
     for (let i = 0; i < numBars; i++) {
       const x = xOffset + i * (barWidth + gap) + barWidth / 2;
@@ -384,9 +483,7 @@ useEffect(() => {
       ctx.lineTo(x, centerY + barHeight);
       ctx.stroke();
     }
-  }, [spectrum, musicPlaying, recommendStatus, canvasSize, canShowSpectrum,triggerDetected]);
-  
-  
+  }, [micSpectrum, musicPlaying, recommendStatus, canvasSize, triggerDetected, imageVisible]);
 
 
 
