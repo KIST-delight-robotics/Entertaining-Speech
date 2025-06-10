@@ -1,6 +1,4 @@
 
-
-
 //밈이미지(0602) - 스펙트럼 시작점 개선완료
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
@@ -47,50 +45,100 @@ function SpectrumVisualizer() {
 
 // 🆕 trigger_detected 상태 추가 (기존 플래그 재사용)
   const [triggerDetected, setTriggerDetected] = useState(false);
-
-
-    // gif 파일명들을 여기에 추가 (실제 파일명으로 수정하세요)
-  const availableGifs = [
-      '1.gif',
-      '2.gif', 
-      '3.gif',
-      '4.gif',
-      '5.gif',
-      '6.gif'
-    ];
   const [currentGif, setCurrentGif] = useState('');
 
 
 
+  //   // gif 파일명들을 여기에 추가 (실제 파일명으로 수정하세요)
+  // const availableGifs = [
+  //     '1.gif',
+  //     '2.gif', 
+  //     '3.gif',
+  //     '4.gif',
+  //     '5.gif',
+  //     '6.gif'
+  //   ];
 
-  useEffect(() => {
-    const gifStatusListener = new ROSLIB.Topic({
-        ros: ros,
-        name: '/gif_status',
-        messageType: 'std_msgs/String'
-    });
+
+
+
+  // useEffect(() => {
+  //   const gifStatusListener = new ROSLIB.Topic({
+  //       ros: ros,
+  //       name: '/gif_status',
+  //       messageType: 'std_msgs/String'
+  //   });
   
-    gifStatusListener.subscribe((message) => {
-        console.log('🎬 UserQuestion GIF 신호 수신:', message.data);
+  //   gifStatusListener.subscribe((message) => {
+  //       console.log('🎬 UserQuestion GIF 신호 수신:', message.data);
         
-        if (message.data === 'show_gif') {
-            // 즉시 searching 상태로 변경하고 GIF 표시
-            setRecommendStatus('searching');
+  //       if (message.data === 'searching') {
+  //           // 즉시 searching 상태로 변경하고 GIF 표시
+  //           setRecommendStatus('searching');
             
-            const randomIndex = Math.floor(Math.random() * availableGifs.length);
-            const selectedGif = availableGifs[randomIndex];
-            console.log('🎬 강제 GIF 표시:', selectedGif);
-            setCurrentGif(selectedGif);
+  //           const randomIndex = Math.floor(Math.random() * availableGifs.length);
+  //           const selectedGif = availableGifs[randomIndex];
+  //           console.log('🎬 강제 GIF 표시:', selectedGif);
+  //           setCurrentGif(selectedGif);
             
-            // 다른 상태들 초기화
-            setCurrentImage(null);
-            setImageVisible(false);
-            setCanShowSpectrum(false);
-        }
-    });
+  //           // 다른 상태들 초기화
+  //           setCurrentImage(null);
+  //           setImageVisible(false);
+  //           setCanShowSpectrum(false);
+  //       }
+  //   });
   
-    return () => gifStatusListener.unsubscribe();
-  }, [availableGifs]);
+  //   return () => gifStatusListener.unsubscribe();
+  // }, [availableGifs]);
+
+
+  // 🆕 수정: 의존성 제거 및 안정적인 구독
+useEffect(() => {
+  const gifStatusListener = new ROSLIB.Topic({
+      ros: ros,
+      name: '/gif_status',
+      messageType: 'std_msgs/String'
+  });
+
+  gifStatusListener.subscribe((message) => {
+      console.log('🎬 GIF 상태 수신:', message.data);
+      
+      if (message.data === 'searching') {  // 🆕 UserQuestion.py와 일치
+          // 🆕 중복 실행 방지
+          setRecommendStatus(prevStatus => {
+              if (prevStatus !== 'searching') {
+                  // 🆕 availableGifs를 직접 참조 대신 상수 사용
+                  const gifs = ['1.gif', '2.gif', '3.gif', '4.gif', '5.gif', '6.gif'];
+                  const randomIndex = Math.floor(Math.random() * gifs.length);
+                  const selectedGif = gifs[randomIndex];
+                  
+                  console.log('🎬 선택된 gif:', selectedGif);
+                  setCurrentGif(selectedGif);
+                  setCurrentImage(null);
+                  setImageVisible(false);
+                  setCanShowSpectrum(false);
+                  
+                  return 'searching';
+              }
+              return prevStatus; // 이미 searching이면 변경하지 않음
+          });
+      } else if (message.data === 'done') {
+          setRecommendStatus(prevStatus => {
+              if (!musicPlaying) {
+                  setCurrentGif('');
+                  return 'done';
+              }
+              return prevStatus;
+          });
+      }
+  });
+
+  return () => {
+      console.log('🔌 gif_status 리스너 정리');
+      gifStatusListener.unsubscribe();
+  };
+}, []); // 🆕 의존성 배열을 비움 (한 번만 실행)
+
 
 
 
@@ -222,48 +270,54 @@ function SpectrumVisualizer() {
     return () => statusListener.unsubscribe();
   }, []);
 
-  // 2. mp3_recommend_status 토픽 구독 - 즉시 처리
-  useEffect(() => {
-    const statusListener = new ROSLIB.Topic({
-        ros: ros,
-        name: '/mp3_recommend_status',
-        messageType: 'std_msgs/String'
-    });
+  // // 2. mp3_recommend_status 토픽 구독 - 즉시 처리
+  // useEffect(() => {
+  //   // const statusListener = new ROSLIB.Topic({
+  //   //     ros: ros,
+  //   //     name: '/mp3_recommend_status',
+  //   //     messageType: 'std_msgs/String'
+  //   // });
 
-    statusListener.subscribe((message) => {
-        console.log('추천 상태:', message.data);
+  //   const statusListener = new ROSLIB.Topic({
+  //     ros: ros,
+  //     name: '/gif_status',
+  //     messageType: 'std_msgs/String'
+  // });
+
+  //   statusListener.subscribe((message) => {
+  //       console.log('추천 상태:', message.data);
         
-        if (message.data === 'searching') {
-            setRecommendStatus('searching');
+  //       if (message.data === 'searching') {
+  //           setRecommendStatus('searching');
             
-            const randomIndex = Math.floor(Math.random() * availableGifs.length);
-            const selectedGif = availableGifs[randomIndex];
-            console.log('선택된 gif:', selectedGif);
-            setCurrentGif(selectedGif);
-            // 다른 상태들 초기화
-            setCurrentImage(null);
-            setImageVisible(false);
-            setCanShowSpectrum(false);
-          } else if (message.data === 'processing') {
-            console.log('⚙️ processing 상태');
-            setRecommendStatus('processing');
-            // GIF는 계속 표시
+  //           const randomIndex = Math.floor(Math.random() * availableGifs.length);
+  //           const selectedGif = availableGifs[randomIndex];
+  //           console.log('선택된 gif:', selectedGif);
+  //           setCurrentGif(selectedGif);
+  //           // 다른 상태들 초기화
+  //           setCurrentImage(null);
+  //           setImageVisible(false);
+  //           setCanShowSpectrum(false);
+  //         } else if (message.data === 'processing') {
+  //           console.log('⚙️ processing 상태');
+  //           setRecommendStatus('processing');
+  //           // GIF는 계속 표시
 
 
 
-        } else if (message.data === 'done') {
-            // 즉시 done 처리하지 않고 음악 재생 여부 확인
-            if (!musicPlaying) {
-                setRecommendStatus('done');
-                setCurrentGif(''); // GIF 숨김
-            }
-        } else {
-            setRecommendStatus(message.data);
-        }
-    });
+  //       } else if (message.data === 'done') {
+  //           // 즉시 done 처리하지 않고 음악 재생 여부 확인
+  //           if (!musicPlaying) {
+  //               setRecommendStatus('done');
+  //               setCurrentGif(''); // GIF 숨김
+  //           }
+  //       } else {
+  //           setRecommendStatus(message.data);
+  //       }
+  //   });
 
-    return () => statusListener.unsubscribe();
-  }, [availableGifs, musicPlaying]);
+  //   return () => statusListener.unsubscribe();
+  // }, [availableGifs, musicPlaying]);
 
 
 
@@ -681,4 +735,3 @@ const getScreenTransform = () => {
 }
 
 export default SpectrumVisualizer;
-
