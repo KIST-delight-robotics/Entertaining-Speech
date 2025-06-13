@@ -566,7 +566,55 @@ useEffect(() => {
   }, [micSpectrum, musicPlaying, recommendStatus, canvasSize, triggerDetected, imageVisible]);
 
 
-  // 🆕 대기 스펙트럼 렌더링 (Mp3Player.py 스타일과 동일)
+  // // 🆕 대기 스펙트럼 렌더링 (Mp3Player.py 스타일과 동일)
+  // useEffect(() => {
+  //   if (!isWaitingAudioMode || waitingSpectrum.length === 0) return;
+    
+  //   const canvas = canvasRef.current;
+  //   if (!canvas) return;
+    
+  //   const ctx = canvas.getContext('2d');
+  //   const { width, height } = canvasSize;
+    
+  //   canvas.width = width;
+  //   canvas.height = height;
+    
+  //   // 대기용 배경 (음악과 동일)
+  //   ctx.fillStyle = '#fff';
+  //   ctx.fillRect(0, 0, width, height);
+    
+  //   // 🆕 대기용 스펙트럼 처리 (음악용과 동일한 로직)
+  //   const central = getCentralSlice(waitingSpectrum, 0.6);
+  //   const numBars = 43;
+  //   let bars = downsampleArray(central, numBars);
+  //   bars = bars.map(v => Math.min(1, v * 10));
+    
+  //   const scale = Math.min(width / 1018, height / 240);
+  //   const barWidth = 10 * scale;
+  //   const gap = 14 * scale;
+  //   const maxBarHeight = 120 * scale;
+  //   const totalWidth = numBars * barWidth + (numBars - 1) * gap;
+  //   const xOffset = (width - totalWidth) / 2;
+  //   const centerY = height / 2;
+    
+  //   // 대기 모드 전용 색상 (주황색으로 구분)
+  //   ctx.strokeStyle = '#ff9500';
+  //   ctx.lineWidth = barWidth;
+  //   ctx.lineCap = 'round';
+  //   ctx.lineJoin = 'round';
+    
+  //   for (let i = 0; i < numBars; i++) {
+  //     const x = xOffset + i * (barWidth + gap) + barWidth / 2;
+  //     const barHeight = bars[i] * maxBarHeight;
+  //     ctx.beginPath();
+  //     ctx.moveTo(x, centerY - barHeight);
+  //     ctx.lineTo(x, centerY + barHeight);
+  //     ctx.stroke();
+  //   }
+  // }, [waitingSpectrum, isWaitingAudioMode, canvasSize]);
+
+
+  // 🆕 대기 스펙트럼 렌더링 (원형 버전)
   useEffect(() => {
     if (!isWaitingAudioMode || waitingSpectrum.length === 0) return;
     
@@ -579,38 +627,56 @@ useEffect(() => {
     canvas.width = width;
     canvas.height = height;
     
-    // 대기용 배경 (음악과 동일)
+    // 대기용 흰 배경
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, width, height);
     
-    // 🆕 대기용 스펙트럼 처리 (음악용과 동일한 로직)
-    const central = getCentralSlice(waitingSpectrum, 0.6);
-    const numBars = 43;
-    let bars = downsampleArray(central, numBars);
-    bars = bars.map(v => Math.min(1, v * 10));
-    
-    const scale = Math.min(width / 1018, height / 240);
-    const barWidth = 10 * scale;
-    const gap = 14 * scale;
-    const maxBarHeight = 120 * scale;
-    const totalWidth = numBars * barWidth + (numBars - 1) * gap;
-    const xOffset = (width - totalWidth) / 2;
+    // 🆕 원형 스펙트럼 설정
+    const centerX = width / 2;
     const centerY = height / 2;
     
-    // 대기 모드 전용 색상 (주황색으로 구분)
-    ctx.strokeStyle = '#ff9500';
-    ctx.lineWidth = barWidth;
+    // 화면의 더 큰 비율 사용 (화면을 꽉 차게)
+    const screenSize = Math.min(width, height);
+    const baseRadius = Math.min(width, height) * 0.2; // 기본 반지름 (화면 크기의 20%)
+    const maxBarLength = Math.min(width, height) * 0.3; // 최대 바 길이 (화면 크기의 25%)
+    
+    // 스펙트럼 데이터 처리
+    const central = getCentralSlice(waitingSpectrum, 0.6);
+    const numBars = 64; // 원형에서는 더 많은 바를 사용 (360도를 균등 분할)
+    let bars = downsampleArray(central, numBars);
+    bars = bars.map(v => Math.min(1, v * 8)); // 강도 조절
+    
+    // 원형 렌더링
+    ctx.strokeStyle = '#333333'; // 흰 배경에 맞는 어두운 색상
+    ctx.lineWidth = Math.max(2, Math.min(width, height) * 0.008); // 화면 크기에 비례한 선 두께
     ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
     
     for (let i = 0; i < numBars; i++) {
-      const x = xOffset + i * (barWidth + gap) + barWidth / 2;
-      const barHeight = bars[i] * maxBarHeight;
+      // 각도 계산 (360도를 균등 분할)
+      const angle = (i / numBars) * 2 * Math.PI;
+      
+      // 바의 길이 계산
+      const barLength = bars[i] * maxBarLength;
+      
+      // 시작점과 끝점 계산
+      const startX = centerX + Math.cos(angle) * baseRadius;
+      const startY = centerY + Math.sin(angle) * baseRadius;
+      const endX = centerX + Math.cos(angle) * (baseRadius + barLength);
+      const endY = centerY + Math.sin(angle) * (baseRadius + barLength);
+      
+      // 바 그리기
       ctx.beginPath();
-      ctx.moveTo(x, centerY - barHeight);
-      ctx.lineTo(x, centerY + barHeight);
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
       ctx.stroke();
     }
+    
+    // 🆕 중앙 원 그리기 (선택사항 - 시각적 완성도 향상)
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, baseRadius * 0.1, 0, 2 * Math.PI);
+    ctx.fillStyle = '#333333';
+    ctx.fill();
+    
   }, [waitingSpectrum, isWaitingAudioMode, canvasSize]);
 
 
@@ -623,7 +689,18 @@ useEffect(() => {
     const updateCanvasSize = () => {
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
-      
+
+      // 🆕 대기 모드일 때는 화면 전체 사용
+      if (isWaitingAudioMode) {
+        setCanvasSize({ 
+          width: viewportWidth, 
+          height: viewportHeight 
+        });
+        return;
+      }
+
+    
+        
       // 오디오 스펙트럼의 원본 비율 (4.24:1)
       const spectrumAspectRatio = 1018 / 240; // 4.24
       
@@ -647,7 +724,7 @@ useEffect(() => {
     window.addEventListener('resize', updateCanvasSize);
     
     return () => window.removeEventListener('resize', updateCanvasSize);
-  }, []);
+  }, [isWaitingAudioMode]);
 
 
 
@@ -960,10 +1037,25 @@ const getScreenTransform = () => {
       <canvas 
         ref={canvasRef}
         style={{
-          width: `${canvasSize.width}px`,
-          height: `${canvasSize.height}px`,
+          // width: `${canvasSize.width}px`,
+          // height: `${canvasSize.height}px`,
+          // border: 'none',
+          // display: 'block'
+
+          // 🆕 대기 모드일 때는 화면 전체, 다른 모드일 때는 기존 크기
+          width: isWaitingAudioMode ? '100vw' : `${canvasSize.width}px`,
+          height: isWaitingAudioMode ? '100vh' : `${canvasSize.height}px`,
+          // 🆕 대기 모드일 때는 절대 위치로 화면 전체 덮기
+          position: isWaitingAudioMode ? 'fixed' : 'relative',
+          top: isWaitingAudioMode ? '0' : 'auto',
+          left: isWaitingAudioMode ? '0' : 'auto',
+          zIndex: isWaitingAudioMode ? 10 : 'auto',
+          // 🆕 테두리 완전 제거
           border: 'none',
-          display: 'block'
+          outline: 'none',
+          display: 'block',
+          // 🆕 모바일 터치 하이라이트 제거
+          WebkitTapHighlightColor: 'transparent'
         }}
       />
     )}
