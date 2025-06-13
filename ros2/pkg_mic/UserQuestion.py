@@ -7,7 +7,6 @@ from __future__ import annotations
 from typing import Optional
 import os, threading, time, queue, random, asyncio, wave
 from datetime import datetime
-
 import numpy as np
 import torch
 import pyaudio
@@ -15,36 +14,17 @@ import webrtcvad
 import soundfile as sf
 import tempfile
 import nemo.collections.asr as nemo_asr  # ★ NeMo
-
-import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-from std_msgs.msg import String
 from google.cloud import speech
 from dotenv import load_dotenv
 import pygame
-import json
-from std_msgs.msg import String
-
-
-import os
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
-from google.cloud import speech
-import pyaudio
-import queue
-import wave
-import time
 import simpleaudio as sa
-import threading
-import random
 from pydub import AudioSegment
 from pydub.playback import play
-from datetime import datetime
-import pygame
-
 import json
 from std_msgs.msg import String, Float32
 import librosa
@@ -92,7 +72,8 @@ class UserQuestion(Node):
         self.processing_subscription = self.create_subscription(String, "processing_done", self.processing_done_callback, 10)
         self.music_status_subscription = self.create_subscription(String, "music_status", self.music_status_callback, 10)
 
-
+        self.spectrum_frame_counter = 0
+        self.spectrum_skip_rate = 2  # 2프레임마다 1번만 처리
 
 
         # 상태 변수
@@ -153,7 +134,7 @@ class UserQuestion(Node):
         self.sample_rate = 16000
         
         # 주파수 계산을 위한 변수
-        self.fft_size = 512
+        self.fft_size = 1024
         self.freqs = np.fft.fftfreq(self.fft_size, 1/self.sample_rate)[:self.fft_size//2]
 
         # 🆕 현재 각도 저장 및 고정 각도 퍼블리시용
@@ -167,6 +148,11 @@ class UserQuestion(Node):
             self.direction_callback, 
             10
         )
+
+        self.waiting_spectrum_pub = self.create_publisher(String, "/waiting_spectrum", 10)
+        self.waiting_image_pub = self.create_publisher(String, "/waiting_image", 10)
+        # 기존 플래그들 다음에 추가
+        self.waiting_sequence_running = False
 
 
 
@@ -231,7 +217,6 @@ class UserQuestion(Node):
 
 
 
-
     def start_30s_timer(self):
         """음악 종료 후 30초 타이머 시작 함수 추가"""
         if self.timer_30s is not None and self.timer_30s.is_alive():
@@ -266,7 +251,7 @@ class UserQuestion(Node):
             channels=1,  # ✅ PulseAudio에서는 1 채널을 지원할 가능성이 높음
             rate=16000,
             input=True,
-            frames_per_buffer=512,
+            frames_per_buffer=1024,
             input_device_index=None,  # ✅ PulseAudio의 기본 입력 장치를 사용
             stream_callback=self.audio_callback
         )
@@ -368,6 +353,7 @@ class UserQuestion(Node):
 
 
     def publish_audio_visualizer(self, in_data):
+ 
         # 현재 단순한 FFT 구현을 음성 강조 버전으로 교체
         samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
         
@@ -384,9 +370,7 @@ class UserQuestion(Node):
         msg.data = json.dumps({"spectrum": spectrum.tolist()})
         self.visualizer_pub.publish(msg)
 
-        
-        
-
+ 
 
 
 
@@ -543,7 +527,7 @@ class UserQuestion(Node):
                             self.partial_transcript = split_text[1].strip()
                             self.get_logger().info(f"Trigger detected. Capturing transcript: {self.partial_transcript}")
 
-                            self.play_effect_sound()
+                            self.play_effect_sound_trigger()
                             self.trigger_detected = True
                             # 🆕 트리거 감지 상태 전송
                             self.publish_trigger_status()
@@ -566,6 +550,10 @@ class UserQuestion(Node):
                 if is_final and self.partial_transcript.strip():
                     # 본 질문 음성 → 화자 식별 진행 (identify_speaker로 변경)
                     try:
+                        # 🆕 중복 방지 체크
+                        if self.waiting_sequence_running:
+                            self.get_logger().info("이미 대기 시퀀스가 실행 중입니다.")
+                            return
                         
                         # 퍼블리시
                         self.publish_transcription(self.partial_transcript)
@@ -637,7 +625,7 @@ class UserQuestion(Node):
                 # 종료음 재생 전이면
                 if not self.after_prompt:
                     self.get_logger().info("무음성 3초 경과 (초기 체크): 종료음 재생 후 추가 무음 체크 시작")
-                    self.play_effect_sound_prompt()  # 종료음 재생
+                    self.play_effect_sound_requestion()  # 종료음 재생
 
                     # 종료음 후에도 무음 체크를 위해 시간 갱신
                     self.last_speech_time = time.time()
@@ -673,7 +661,7 @@ class UserQuestion(Node):
 
 
 
-    def play_effect_sound_prompt(self):
+    def play_effect_sound_requestion(self):
         """ 랜덤으로 요청 음성(MP3)을 재생하며, 재생 중 텍스트 입력을 무시 """
         # 효과음 파일이 저장된 디렉토리 경로
         effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_requestion"
@@ -725,7 +713,7 @@ class UserQuestion(Node):
 
 
 
-    def play_effect_sound(self):
+    def play_effect_sound_trigger(self):
         """효과음 파일을 재생하며, 재생 중 텍스트 입력을 무시"""
         # 효과음 파일이 저장된 디렉토리 경로
         effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_trigger"
@@ -774,27 +762,111 @@ class UserQuestion(Node):
             # 🔥 비상상황: 플래그 해제
             self.is_sound_playing = False
 
-    # ── Audio callback -------------------------------------------------------
-
-    # audio_q: queue.Queue = queue.Queue()
-
-    # def audio_callback(self, in_data, frame_count, time_info, status):
-    #     # 화자 식별 업데이트
-    #     for spk, _ in self.spkr.accept_audio(in_data):
-    #         self.current_speaker_id = spk
-    #     # STT 스트림에 푸시
-    #     self.audio_q.put(in_data)
-    #     return None, pyaudio.paContinue
-
-    # ── ROS 퍼블리시 ---------------------------------------------------------
 
 
+
+
+
+    def play_effect_sound_waiting_1(self):
+        """대기 효과음 1을 재생하며 스펙트럼 시각화 (Mp3Player.py 방식과 동일)"""
+        effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/waiting_1"
+        
+        if not os.path.exists(effects_dir):
+            self.get_logger().error(f"Directory not found: {effects_dir}")
+            return
+            
+        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+
+        if not mp3_files:
+            self.get_logger().error("No MP3 files found in waiting_1 directory.")
+            return
+
+        try:
+            # 랜덤으로 하나의 MP3 파일 선택
+            selected_file = random.choice(mp3_files)
+            selected_path = os.path.join(effects_dir, selected_file)
+
+            self.get_logger().info(f"Playing waiting sound 1: {selected_file}")
+
+            # pydub을 사용하여 MP3 로드 (Mp3Player.py와 동일)
+            sound = AudioSegment.from_file(selected_path, format="mp3")
+            
+            # 정규화 (Mp3Player.py와 동일)
+            target_dBFS = -14.0
+            change_in_dBFS = target_dBFS - sound.dBFS
+            sound = sound.apply_gain(change_in_dBFS)
+            
+            # 임시 WAV로 변환
+            temp_wav = "/tmp/waiting_audio.wav"
+            sound.export(temp_wav, format="wav")
+
+            # Mp3Player.py와 동일한 방식으로 스펙트럼과 재생 병렬 처리
+            self.waiting_publish_and_play(temp_wav)
+
+            self.get_logger().info("Waiting sound 1 playback finished")
+
+        except Exception as e:
+            self.get_logger().error(f"Failed to play waiting sound 1: {e}")
+
+
+
+
+
+    def play_effect_sound_waiting_2(self):
+        """대기 이미지를 랜덤으로 표시 (기존 이미지 출력 방식과 동일)"""
+        image_dir = "/home/nvidia/ros2_ws/emotion-face-react/public/waiting_img"
+        
+        if not os.path.exists(image_dir):
+            self.get_logger().error(f"Directory not found: {image_dir}")
+            return
+        
+        try:
+            # .jpeg 파일 목록 가져오기
+            jpeg_files = [f for f in os.listdir(image_dir) if f.lower().endswith('.jpeg')]
+            
+            if not jpeg_files:
+                self.get_logger().error("No JPEG files found in waiting_img directory.")
+                return
+
+            # 랜덤으로 하나의 이미지 선택
+            selected_file = random.choice(jpeg_files)
+            image_path = f"/waiting_img/{selected_file}"  # public 폴더 기준 경로
+            
+            self.get_logger().info(f"Displaying waiting image: {selected_file}")
+            
+            # 이미지 경로 전송 (기존 이미지 출력 방식과 동일)
+            msg = String()
+            msg.data = image_path
+            self.waiting_image_pub.publish(msg)
+            
+            # 3초간 이미지 표시
+            time.sleep(3)
+            
+            # 이미지 숨김
+            msg.data = ""
+            self.waiting_image_pub.publish(msg)
+            
+            self.get_logger().info("Waiting image display finished")
+
+        except Exception as e:
+            self.get_logger().error(f"Failed to display waiting image: {e}")
+
+
+
+
+   
 
     def direction_callback(self, msg):
         """실시간 각도 업데이트"""
         self.current_direction = msg.data
 
     def publish_transcription(self, text: str):
+
+
+        # 🆕 중복 실행 방지
+        if self.waiting_sequence_running:
+            self.get_logger().info("대기 시퀀스가 이미 실행 중입니다. 중복 실행을 방지합니다.")
+            return
 
 
         if text.strip():
@@ -826,41 +898,113 @@ class UserQuestion(Node):
 
             self.get_logger().info(f'Transcription published: "{msg.data}"')
             self.save_log(f'Transcription published: "{msg.data}"')
-            time.sleep(2)
-            self.play_effect_sound_rag()
-
             self.partial_transcript = ""  # ✅ 퍼블리시 후 즉시 초기화
             self.trigger_detected = False  # ✅ 퍼블리시 후 trigger 상태 초기화
             self.waiting_for_input_after_music = False  # ✅ 입력 대기 상태 해제
+            time.sleep(2)
+            #self.play_effect_sound_rag()
 
-            # # 🆕 trigger_detected 상태 전송
-            # self.publish_trigger_status()
+            # 🆕 플래그 설정 후 실행
+            self.waiting_sequence_running = True
+            threading.Thread(target=self.execute_waiting_sequence, daemon=True).start()    
 
-    def play_effect_sound_rag(self):
-        # 효과음 파일이 저장된 디렉토리 경로
-        effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_rag"
 
-        # 디렉토리에서 MP3 파일 목록 가져오기
-        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+  
 
-        if not mp3_files:
-            self.get_logger().info("No MP3 files found in the effects directory.")
-            return
+    
 
-        # 랜덤으로 하나의 MP3 파일 선택
-        selected_file = random.choice(mp3_files)
-        selected_path = os.path.join(effects_dir, selected_file)
+    # def play_effect_sound_rag(self):
+    #     # 효과음 파일이 저장된 디렉토리 경로
+    #     effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_rag"
 
-        self.get_logger().info(f"Playing sound: {selected_file}")
+    #     # 디렉토리에서 MP3 파일 목록 가져오기
+    #     mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
 
-        # pygame을 사용하여 MP3 파일 재생
-        pygame.mixer.init()
-        pygame.mixer.music.load(selected_path)
-        pygame.mixer.music.play()
+    #     if not mp3_files:
+    #         self.get_logger().info("No MP3 files found in the effects directory.")
+    #         return
+
+    #     # 랜덤으로 하나의 MP3 파일 선택
+    #     selected_file = random.choice(mp3_files)
+    #     selected_path = os.path.join(effects_dir, selected_file)
+
+    #     self.get_logger().info(f"Playing sound: {selected_file}")
+
+    #     # pygame을 사용하여 MP3 파일 재생
+    #     pygame.mixer.init()
+    #     pygame.mixer.music.load(selected_path)
+    #     pygame.mixer.music.play()
         
-        # 재생이 끝날 때까지 대기
-        while pygame.mixer.music.get_busy():
-            pygame.time.Clock().tick(10)
+    #     # 재생이 끝날 때까지 대기
+    #     while pygame.mixer.music.get_busy():
+    #         pygame.time.Clock().tick(10)
+
+
+
+
+    def execute_waiting_sequence(self):
+        """새로운 대기 효과들을 순차 실행 (중복 방지 포함)"""
+        try:
+            # 🆕 중복 실행 체크
+            if not self.waiting_sequence_running:
+                self.get_logger().info("대기 시퀀스가 이미 완료되었습니다.")
+                return
+                
+            self.get_logger().info("대기 시퀀스 시작")
+            
+            # 첫 번째 대기 효과 (스펙트럼 시각화)
+            self.play_effect_sound_waiting_1()
+            
+            # 두 번째 대기 효과 (이미지 표시)  
+            self.play_effect_sound_waiting_2()
+            
+            self.get_logger().info("대기 시퀀스 완료")
+            
+        except Exception as e:
+            self.get_logger().error(f"대기 효과 실행 중 오류: {e}")
+        finally:
+            # 🆕 플래그 해제
+            self.waiting_sequence_running = False
+
+
+
+
+
+
+
+
+    def waiting_publish_and_play(self, wav_path):
+        """Mp3Player.py의 publish_and_play와 동일한 방식"""
+        import wave
+        
+        wf = wave.open(wav_path, 'rb')
+        chunk_size = 2024
+
+        def publish_spectrum():
+            data = wf.readframes(chunk_size)
+            while data:
+                samples = np.frombuffer(data, dtype=np.int16)
+                if wf.getnchannels() == 2:
+                    samples = samples.reshape((-1, 2)).mean(axis=1)
+                fft = np.fft.fft(samples)
+                spectrum = np.abs(fft[:len(fft)//2])
+                spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+                msg = String()
+                msg.data = json.dumps({"spectrum": spectrum.tolist()})
+                self.waiting_spectrum_pub.publish(msg)
+                data = wf.readframes(chunk_size)
+                time.sleep(chunk_size / wf.getframerate())
+
+        spectrum_thread = threading.Thread(target=publish_spectrum)
+        spectrum_thread.start()
+
+        # 시스템 명령어로 재생 (Mp3Player.py와 동일)
+        os.system(f"aplay {wav_path}")
+        spectrum_thread.join()
+        wf.close()
+
+
+            
 
 
 
@@ -911,6 +1055,9 @@ class UserQuestion(Node):
         log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
         with open(log_file_path, "a", encoding="utf-8") as log_file:
             log_file.write(log_message)
+
+
+    
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 메인 루프
