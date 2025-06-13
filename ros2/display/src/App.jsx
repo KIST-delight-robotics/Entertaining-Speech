@@ -1,6 +1,5 @@
 
 
-
 //밈이미지(0602) - 스펙트럼 시작점 개선완료
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
@@ -304,24 +303,6 @@ useEffect(() => {
 
 
 
-  // // 2. 상황에 따라 구독 토픽 자동 변경
-  // useEffect(() => {
-  //   const topicName = musicPlaying ? '/audio_amplitude' : '/audio_visualizer';
-  //   const spectrumListener = new ROSLIB.Topic({
-  //     ros: ros,
-  //     name: topicName,
-  //     messageType: 'std_msgs/String'
-  //   });
-  //   spectrumListener.subscribe((message) => {
-  //     try {
-  //       const data = JSON.parse(message.data);
-  //       if (data.spectrum) setSpectrum(data.spectrum);
-  //     } catch (e) {
-  //       console.error('JSON parse error:', e);
-  //     }
-  //   });
-  //   return () => spectrumListener.unsubscribe();
-  // }, [musicPlaying]);
 
 
   // 🆕 음악 스펙트럼 구독
@@ -566,55 +547,7 @@ useEffect(() => {
   }, [micSpectrum, musicPlaying, recommendStatus, canvasSize, triggerDetected, imageVisible]);
 
 
-  // // 🆕 대기 스펙트럼 렌더링 (Mp3Player.py 스타일과 동일)
-  // useEffect(() => {
-  //   if (!isWaitingAudioMode || waitingSpectrum.length === 0) return;
-    
-  //   const canvas = canvasRef.current;
-  //   if (!canvas) return;
-    
-  //   const ctx = canvas.getContext('2d');
-  //   const { width, height } = canvasSize;
-    
-  //   canvas.width = width;
-  //   canvas.height = height;
-    
-  //   // 대기용 배경 (음악과 동일)
-  //   ctx.fillStyle = '#fff';
-  //   ctx.fillRect(0, 0, width, height);
-    
-  //   // 🆕 대기용 스펙트럼 처리 (음악용과 동일한 로직)
-  //   const central = getCentralSlice(waitingSpectrum, 0.6);
-  //   const numBars = 43;
-  //   let bars = downsampleArray(central, numBars);
-  //   bars = bars.map(v => Math.min(1, v * 10));
-    
-  //   const scale = Math.min(width / 1018, height / 240);
-  //   const barWidth = 10 * scale;
-  //   const gap = 14 * scale;
-  //   const maxBarHeight = 120 * scale;
-  //   const totalWidth = numBars * barWidth + (numBars - 1) * gap;
-  //   const xOffset = (width - totalWidth) / 2;
-  //   const centerY = height / 2;
-    
-  //   // 대기 모드 전용 색상 (주황색으로 구분)
-  //   ctx.strokeStyle = '#ff9500';
-  //   ctx.lineWidth = barWidth;
-  //   ctx.lineCap = 'round';
-  //   ctx.lineJoin = 'round';
-    
-  //   for (let i = 0; i < numBars; i++) {
-  //     const x = xOffset + i * (barWidth + gap) + barWidth / 2;
-  //     const barHeight = bars[i] * maxBarHeight;
-  //     ctx.beginPath();
-  //     ctx.moveTo(x, centerY - barHeight);
-  //     ctx.lineTo(x, centerY + barHeight);
-  //     ctx.stroke();
-  //   }
-  // }, [waitingSpectrum, isWaitingAudioMode, canvasSize]);
-
-
-  // 🆕 대기 스펙트럼 렌더링 (원형 버전)
+  // 🆕 대기 스펙트럼 렌더링 (개선된 부드러운 버전)
   useEffect(() => {
     if (!isWaitingAudioMode || waitingSpectrum.length === 0) return;
     
@@ -627,58 +560,121 @@ useEffect(() => {
     canvas.width = width;
     canvas.height = height;
     
-    // 대기용 흰 배경
-    ctx.fillStyle = '#fff';
+    // 🆕 잔상 효과를 위한 반투명 배경 (완전히 지우지 않음)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'; // 30% 투명도로 이전 프레임을 서서히 지움
     ctx.fillRect(0, 0, width, height);
     
-    // 🆕 원형 스펙트럼 설정
+    // 원형 스펙트럼 설정
     const centerX = width / 2;
     const centerY = height / 2;
-    
-    // 화면의 더 큰 비율 사용 (화면을 꽉 차게)
     const screenSize = Math.min(width, height);
-    const baseRadius = Math.min(width, height) * 0.2; // 기본 반지름 (화면 크기의 20%)
-    const maxBarLength = Math.min(width, height) * 0.3; // 최대 바 길이 (화면 크기의 25%)
+    const baseRadius = Math.min(width, height) * 0.2;
+    const maxBarLength = Math.min(width, height) * 0.15;
     
     // 스펙트럼 데이터 처리
     const central = getCentralSlice(waitingSpectrum, 0.6);
-    const numBars = 64; // 원형에서는 더 많은 바를 사용 (360도를 균등 분할)
+    const numBars = 64;
     let bars = downsampleArray(central, numBars);
-    bars = bars.map(v => Math.min(1, v * 8)); // 강도 조절
-    
-    // 원형 렌더링
-    ctx.strokeStyle = '#333333'; // 흰 배경에 맞는 어두운 색상
-    ctx.lineWidth = Math.max(2, Math.min(width, height) * 0.008); // 화면 크기에 비례한 선 두께
-    ctx.lineCap = 'round';
-    
-    for (let i = 0; i < numBars; i++) {
-      // 각도 계산 (360도를 균등 분할)
-      const angle = (i / numBars) * 2 * Math.PI;
-      
-      // 바의 길이 계산
-      const barLength = bars[i] * maxBarLength;
-      
-      // 시작점과 끝점 계산
-      const startX = centerX + Math.cos(angle) * baseRadius;
-      const startY = centerY + Math.sin(angle) * baseRadius;
-      const endX = centerX + Math.cos(angle) * (baseRadius + barLength);
-      const endY = centerY + Math.sin(angle) * (baseRadius + barLength);
-      
-      // 바 그리기
-      ctx.beginPath();
-      ctx.moveTo(startX, startY);
-      ctx.lineTo(endX, endY);
-      ctx.stroke();
-    }
-    
-    // 🆕 중앙 원 그리기 (선택사항 - 시각적 완성도 향상)
+    bars = bars.map(v => Math.min(1, v * 8));
+
+    // 🆕 그림자 효과 설정
+    ctx.shadowColor = 'rgba(51, 51, 51, 0.4)'; // 반투명 그림자[3][6]
+    ctx.shadowBlur = 8; // 부드러운 블러 효과[3]
+    ctx.shadowOffsetX = 2; // 약간의 수평 오프셋[3]
+    ctx.shadowOffsetY = 2; // 약간의 수직 오프셋[3]
+
+    // 🆕 매우 부드러운 베지어 곡선 스펙트럼
     ctx.beginPath();
-    ctx.arc(centerX, centerY, baseRadius * 0.1, 0, 2 * Math.PI);
-    ctx.fillStyle = '#333333';
+
+    // 외곽 곡선 (베지어 곡선으로 부드럽게 연결)
+    const points = [];
+    for (let i = 0; i <= numBars; i++) {
+      const angle = (i % numBars / numBars) * 2 * Math.PI;
+      const barLength = bars[i % numBars] * maxBarLength;
+      const radius = baseRadius + barLength;
+      
+      const x = centerX + Math.cos(angle) * radius;
+      const y = centerY + Math.sin(angle) * radius;
+      points.push({ x, y, angle });
+    }
+
+    // 첫 번째 점으로 이동
+    ctx.moveTo(points[0].x, points[0].y);
+
+    // 🆕 베지어 곡선으로 부드럽게 연결
+    for (let i = 1; i < points.length; i++) {
+      const current = points[i];
+      const previous = points[i - 1];
+      const next = points[(i + 1) % points.length];
+      
+      // 제어점 계산 (더 부드러운 곡선을 위해)
+      const smoothingFactor = 0.2;
+      const cp1x = previous.x + (current.x - previous.x) * smoothingFactor;
+      const cp1y = previous.y + (current.y - previous.y) * smoothingFactor;
+      const cp2x = current.x - (next.x - current.x) * smoothingFactor;
+      const cp2y = current.y - (next.y - current.y) * smoothingFactor;
+      
+      ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
+    }
+
+    // 내부 원으로 부드럽게 연결
+    const innerPoints = [];
+    for (let i = numBars; i >= 0; i--) {
+      const angle = (i / numBars) * 2 * Math.PI;
+      const x = centerX + Math.cos(angle) * baseRadius;
+      const y = centerY + Math.sin(angle) * baseRadius;
+      innerPoints.push({ x, y });
+    }
+
+    // 내부 원도 베지어 곡선으로 부드럽게
+    for (let i = 0; i < innerPoints.length; i++) {
+      const current = innerPoints[i];
+      const next = innerPoints[(i + 1) % innerPoints.length];
+      
+      if (i === 0) {
+        ctx.lineTo(current.x, current.y);
+      } else {
+        const smoothingFactor = 0.15;
+        const cp1x = current.x + (next.x - current.x) * smoothingFactor;
+        const cp1y = current.y + (next.y - current.y) * smoothingFactor;
+        ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
+      }
+    }
+
+    ctx.closePath();
+
+    // 🆕 그라데이션 채우기 (더 부드러운 시각 효과)
+    const gradient = ctx.createRadialGradient(
+      centerX, centerY, baseRadius,
+      centerX, centerY, baseRadius + maxBarLength
+    );
+    gradient.addColorStop(0, 'rgba(51, 51, 51, 0.8)');
+    gradient.addColorStop(0.7, 'rgba(51, 51, 51, 0.6)');
+    gradient.addColorStop(1, 'rgba(51, 51, 51, 0.3)');
+    
+    ctx.fillStyle = gradient;
     ctx.fill();
+
+    // // 🆕 매우 부드러운 테두리
+    // ctx.strokeStyle = 'rgba(51, 51, 51, 0.7)';
+    // ctx.lineWidth = Math.max(1, Math.min(width, height) * 0.002);
+    // ctx.lineJoin = 'round';
+    // ctx.lineCap = 'round';
+    // ctx.stroke();
+
+    // 그림자 효과 제거 (다음 그리기 작업에 영향 없도록)
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+
+    // 🆕 중앙 원 제거 (요청사항에 따라 삭제)
+    // ctx.beginPath();
+    // ctx.arc(centerX, centerY, baseRadius * 0.1, 0, 2 * Math.PI);
+    // ctx.fillStyle = '#333333';
+    // ctx.fill();
     
   }, [waitingSpectrum, isWaitingAudioMode, canvasSize]);
-
 
 
 
@@ -855,51 +851,6 @@ const renderImage = () => {
     );
 };
 
-
-// // renderImage 함수 다음에 이 함수를 새로 추가
-// const renderGif = () => {
-//   // 이미지가 표시 중일 때는 GIF 절대 표시하지 않음
-//   if (currentImage && imageVisible) {
-//       return null;
-//   }
-  
-//   // searching 상태이고 GIF가 선택되었을 때만 표시
-//   if (recommendStatus === 'searching' && currentGif) {
-//       return (
-//           <div style={{
-//               position: 'absolute',
-//               top: '50%',
-//               left: '50%',
-//               transform: 'translate(-50%, -50%)',
-//               zIndex: 5, // 이미지보다 낮은 우선순위로 변경
-//               backgroundColor: '#fff',
-//               width: `${canvasSize.width}px`,
-//               height: `${canvasSize.height}px`,
-//               display: 'flex',
-//               justifyContent: 'center',
-//               alignItems: 'center'
-//           }}>
-//               <img 
-//                   src={`/${currentGif}`}
-//                   alt="추천 중..." 
-//                   style={{
-//                       maxWidth: '500%',
-//                       maxHeight: '500%',
-//                       objectFit: 'contain'
-//                   }}
-//                   onLoad={() => {
-//                       console.log('🎬 GIF 로드 완료:', currentGif);
-//                   }}
-//                   onError={(e) => {
-//                       console.error('🎬 GIF 로드 실패:', currentGif);
-//                   }}
-//               />
-//           </div>
-//       );
-//   }
-  
-//   return null;
-// };
 
 // 🆕 renderGif 함수를 완전히 대체하는 대기 이미지 렌더링 함수
 const renderWaitingImage = () => {
