@@ -1,6 +1,6 @@
 
 
-//밈이미지(0602) - 스펙트럼 시작점 개선완료
+
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
@@ -52,12 +52,22 @@ function SpectrumVisualizer() {
   const [currentGif, setCurrentGif] = useState('');
 
 
-// 기존 상태 변수들 다음에 추가
-const [waitingSpectrum, setWaitingSpectrum] = useState([]);
-const [waitingImage, setWaitingImage] = useState(null);
-const [waitingImageVisible, setWaitingImageVisible] = useState(false);
-const [isWaitingAudioMode, setIsWaitingAudioMode] = useState(false);
-const [isWaitingImageMode, setIsWaitingImageMode] = useState(false);
+  // 기존 상태 변수들 다음에 추가
+  const [waitingSpectrum, setWaitingSpectrum] = useState([]);
+  const [waitingImage, setWaitingImage] = useState(null);
+  const [waitingImageVisible, setWaitingImageVisible] = useState(false);
+  const [isWaitingAudioMode, setIsWaitingAudioMode] = useState(false);
+  const [isWaitingImageMode, setIsWaitingImageMode] = useState(false);
+
+
+  // Mp3Player waiting 전용 상태 추가
+  const [mp3WaitingSpectrum, setMp3WaitingSpectrum] = useState([]);
+  const [isMp3WaitingMode, setIsMp3WaitingMode] = useState(false);
+
+
+
+
+
 
 
   
@@ -112,6 +122,42 @@ useEffect(() => {
 
 
 
+
+  // 🆕 Mp3Player waiting 스펙트럼 구독 (/mp3_waiting_spectrum)
+  useEffect(() => {
+    const mp3WaitingSpectrumListener = new ROSLIB.Topic({
+      ros: ros,
+      name: '/mp3_waiting_spectrum',
+      messageType: 'std_msgs/String'
+    });
+    
+    mp3WaitingSpectrumListener.subscribe((message) => {
+      try {
+        const data = JSON.parse(message.data);
+        if (data.spectrum) {
+          console.log('🎵 Mp3Player waiting 스펙트럼 수신 - 독립 렌더링');
+          
+          // 🆕 다른 모드들 완전히 비활성화
+          setIsMp3WaitingMode(true);
+          setIsWaitingImageMode(false);
+          setIsWaitingAudioMode(false);
+          setMusicPlaying(false);
+          
+          // 🆕 Mp3Player 전용 스무딩 적용
+          const smoothedData = applyMp3WaitingSmoothing(data.spectrum);
+          setMp3WaitingSpectrum(smoothedData);
+        }
+      } catch (e) {
+        console.error('Mp3Player waiting spectrum JSON parse error:', e);
+      }
+    });
+    
+    return () => {
+      mp3WaitingSpectrumListener.unsubscribe();
+      // 🆕 Mp3Player 전용 스무딩 상태 초기화
+      previousMp3WaitingSpectrumRef.current = [];
+    };
+  }, []);
 
 
 
@@ -209,7 +255,8 @@ useEffect(() => {
 
 
 
-  // 1. 음악 상태 구독 - 타이밍 개선된 버전
+
+  // 🆕 음악 상태 구독 (Mp3Player waiting 지원)
   useEffect(() => {
     const statusListener = new ROSLIB.Topic({
         ros: ros,
@@ -220,22 +267,29 @@ useEffect(() => {
     statusListener.subscribe((message) => {
         console.log('음악 상태 변경:', message.data);
         
-        if (message.data === 'music_playing') {
+        if (message.data === 'mp3_waiting_playing') {  // 새로운 상태 처리
+            console.log('🎵 Mp3Player waiting 재생 시작');
+            // waiting 모드는 스펙트럼 데이터가 오면 자동으로 시작됨
+        } else if (message.data === 'music_playing') {
             setMusicPlaying(true);
-            setCanShowSpectrum(false); // 스펙트럼 표시 초기화
-            
-
+            setCanShowSpectrum(false);
+            setIsMp3WaitingMode(false); // Mp3 waiting 모드 종료
             
         } else if (message.data === 'music_done') {
             setMusicPlaying(false);
             setRecommendStatus('done');
             setCanShowSpectrum(false);
             setImageVisible(false);
+            setIsMp3WaitingMode(false); // Mp3 waiting 모드 종료
         }
     });
 
-    return () => statusListener.unsubscribe();
+    return () => {
+        statusListener.unsubscribe();
+    };
   }, []);
+
+
 
 
 
@@ -300,6 +354,34 @@ useEffect(() => {
     return smoothed;
   };
 
+
+  // 🆕 Mp3Player waiting 전용 스무딩 함수
+  const previousMp3WaitingSpectrumRef = useRef([]);
+
+  const applyMp3WaitingSmoothing = (newSpectrum) => {
+    const previous = previousMp3WaitingSpectrumRef.current;
+    
+    if (previous.length === 0) {
+      previousMp3WaitingSpectrumRef.current = [...newSpectrum];
+      return newSpectrum;
+    }
+
+    // Mp3Player waiting 전용 스무딩 설정 (더 부드럽고 독특한 특성)
+    const smoothed = newSpectrum.map((current, index) => {
+      const prev = previous[index] || 0;
+      
+      if (current > prev) {
+        // 빠른 상승 반응 (60% 새값으로 더 빠르게)
+        return prev * 0.4 + current * 0.6;
+      } else {
+        // 느린 감쇠 (20% 새값으로 더 부드럽게)
+        return prev * 0.8 + current * 0.2;
+      }
+    });
+    
+    previousMp3WaitingSpectrumRef.current = [...smoothed];
+    return smoothed;
+  };
 
 
 
@@ -484,8 +566,10 @@ useEffect(() => {
 
   // 🆕 마이크 스펙트럼 렌더링
   useEffect(() => {
-    //if (musicPlaying || micSpectrum.length === 0) return;
-    if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode) return;
+    
+    // if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode) return;
+    // 🆕 Mp3Player waiting 모드도 마이크 스펙트럼 비활성화 조건에 추가
+    if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode || isMp3WaitingMode) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     
@@ -547,9 +631,13 @@ useEffect(() => {
   }, [micSpectrum, musicPlaying, recommendStatus, canvasSize, triggerDetected, imageVisible]);
 
 
-  // 🆕 대기 스펙트럼 렌더링 (개선된 부드러운 버전)
+//===============================================================================================
+
+  // 🆕 UserQuestion 대기 스펙트럼 렌더링 (개선된 부드러운 버전) - UserQuestion 노드
   useEffect(() => {
     if (!isWaitingAudioMode || waitingSpectrum.length === 0) return;
+
+    
     
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -677,6 +765,124 @@ useEffect(() => {
   }, [waitingSpectrum, isWaitingAudioMode, canvasSize]);
 
 
+//===============================================================================================
+
+  
+  // 🆕 Mp3Player waiting 스펙트럼 렌더링 (현재는 UserQuestion과 동일, 나중에 커스터마이징 가능)
+  useEffect(() => {
+    if (!isMp3WaitingMode || mp3WaitingSpectrum.length === 0) return;
+    
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const { width, height } = canvasSize;
+    
+    canvas.width = width;
+    canvas.height = height;
+    
+    // 🎨 Mp3Player waiting용 배경 (나중에 차별화 가능)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.fillRect(0, 0, width, height);
+    
+    // 원형 스펙트럼 설정 (UserQuestion waiting과 현재는 동일)
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const baseRadius = Math.min(width, height) * 0.2;
+    const maxBarLength = Math.min(width, height) * 0.15;
+    
+    // 스펙트럼 데이터 처리 (동일한 방식)
+    const central = getCentralSlice(mp3WaitingSpectrum, 0.6);
+    const numBars = 64;
+    let bars = downsampleArray(central, numBars);
+    bars = bars.map(v => Math.min(1, v * 8));
+
+    // 🎨 Mp3Player waiting용 그림자 효과 (나중에 다른 색상으로 변경 가능)
+    ctx.shadowColor = 'rgba(255, 100, 100, 0.4)'; // 빨간색 계열 그림자로 차별화
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetX = 2;
+    ctx.shadowOffsetY = 2;
+
+    // 베지어 곡선 스펙트럼 (UserQuestion waiting과 동일한 방식)
+    ctx.beginPath();
+
+    const points = [];
+    for (let i = 0; i <= numBars; i++) {
+      const angle = (i % numBars / numBars) * 2 * Math.PI;
+      const barLength = bars[i % numBars] * maxBarLength;
+      const radius = baseRadius + barLength;
+      
+      const x = centerX + Math.cos(angle) * radius;
+      const y = centerY + Math.sin(angle) * radius;
+      points.push({ x, y, angle });
+    }
+
+    ctx.moveTo(points[0].x, points[0].y);
+
+    for (let i = 1; i < points.length; i++) {
+      const current = points[i];
+      const previous = points[i - 1];
+      const next = points[(i + 1) % points.length];
+      
+      const smoothingFactor = 0.2;
+      const cp1x = previous.x + (current.x - previous.x) * smoothingFactor;
+      const cp1y = previous.y + (current.y - previous.y) * smoothingFactor;
+      const cp2x = current.x - (next.x - current.x) * smoothingFactor;
+      const cp2y = current.y - (next.y - current.y) * smoothingFactor;
+      
+      ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
+    }
+
+    // 내부 원 처리 (동일)
+    const innerPoints = [];
+    for (let i = numBars; i >= 0; i--) {
+      const angle = (i / numBars) * 2 * Math.PI;
+      const x = centerX + Math.cos(angle) * baseRadius;
+      const y = centerY + Math.sin(angle) * baseRadius;
+      innerPoints.push({ x, y });
+    }
+
+    for (let i = 0; i < innerPoints.length; i++) {
+      const current = innerPoints[i];
+      const next = innerPoints[(i + 1) % innerPoints.length];
+      
+      if (i === 0) {
+        ctx.lineTo(current.x, current.y);
+      } else {
+        const smoothingFactor = 0.15;
+        const cp1x = current.x + (next.x - current.x) * smoothingFactor;
+        const cp1y = current.y + (next.y - current.y) * smoothingFactor;
+        ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
+      }
+    }
+
+    ctx.closePath();
+
+    // 🎨 Mp3Player waiting용 그라데이션 (나중에 다른 색상으로 변경 가능)
+    const gradient = ctx.createRadialGradient(
+      centerX, centerY, baseRadius,
+      centerX, centerY, baseRadius + maxBarLength
+    );
+    gradient.addColorStop(0, 'rgba(255, 100, 100, 0.8)'); // 빨간색 계열로 차별화
+    gradient.addColorStop(0.7, 'rgba(255, 100, 100, 0.6)');
+    gradient.addColorStop(1, 'rgba(255, 100, 100, 0.3)');
+    
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    // 그림자 효과 제거
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    
+  }, [mp3WaitingSpectrum, isMp3WaitingMode, canvasSize]);
+
+
+
+
+
+
 
 
 
@@ -686,8 +892,18 @@ useEffect(() => {
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
 
-      // 🆕 대기 모드일 때는 화면 전체 사용
-      if (isWaitingAudioMode) {
+      // // 🆕 대기 모드일 때는 화면 전체 사용
+      // if (isWaitingAudioMode) {
+      //   setCanvasSize({ 
+      //     width: viewportWidth, 
+      //     height: viewportHeight 
+      //   });
+      //   return;
+      // }
+
+
+      // 🆕 두 종류의 대기 모드 모두 고려
+      if (isWaitingAudioMode || isMp3WaitingMode) {
         setCanvasSize({ 
           width: viewportWidth, 
           height: viewportHeight 
@@ -720,7 +936,7 @@ useEffect(() => {
     window.addEventListener('resize', updateCanvasSize);
     
     return () => window.removeEventListener('resize', updateCanvasSize);
-  }, [isWaitingAudioMode]);
+  }, [isWaitingAudioMode, isMp3WaitingMode]);
 
 
 
@@ -988,25 +1204,34 @@ const getScreenTransform = () => {
       <canvas 
         ref={canvasRef}
         style={{
-          // width: `${canvasSize.width}px`,
-          // height: `${canvasSize.height}px`,
-          // border: 'none',
-          // display: 'block'
+              // Mp3 waiting 모드도 화면 전체 사용
+              width: (isWaitingAudioMode || isMp3WaitingMode) ? '100vw' : `${canvasSize.width}px`,
+              height: (isWaitingAudioMode || isMp3WaitingMode) ? '100vh' : `${canvasSize.height}px`,
+              position: (isWaitingAudioMode || isMp3WaitingMode) ? 'fixed' : 'relative',
+              top: (isWaitingAudioMode || isMp3WaitingMode) ? '0' : 'auto',
+              left: (isWaitingAudioMode || isMp3WaitingMode) ? '0' : 'auto',
+              zIndex: (isWaitingAudioMode || isMp3WaitingMode) ? 10 : 'auto',
+              border: 'none',
+              outline: 'none',
+              display: 'block',
+              WebkitTapHighlightColor: 'transparent'
 
-          // 🆕 대기 모드일 때는 화면 전체, 다른 모드일 때는 기존 크기
-          width: isWaitingAudioMode ? '100vw' : `${canvasSize.width}px`,
-          height: isWaitingAudioMode ? '100vh' : `${canvasSize.height}px`,
-          // 🆕 대기 모드일 때는 절대 위치로 화면 전체 덮기
-          position: isWaitingAudioMode ? 'fixed' : 'relative',
-          top: isWaitingAudioMode ? '0' : 'auto',
-          left: isWaitingAudioMode ? '0' : 'auto',
-          zIndex: isWaitingAudioMode ? 10 : 'auto',
-          // 🆕 테두리 완전 제거
-          border: 'none',
-          outline: 'none',
-          display: 'block',
-          // 🆕 모바일 터치 하이라이트 제거
-          WebkitTapHighlightColor: 'transparent'
+          // // 🆕 대기 모드일 때는 화면 전체, 다른 모드일 때는 기존 크기
+          // width: isWaitingAudioMode ? '100vw' : `${canvasSize.width}px`,
+          // height: isWaitingAudioMode ? '100vh' : `${canvasSize.height}px`,
+          // // 🆕 대기 모드일 때는 절대 위치로 화면 전체 덮기
+          // position: isWaitingAudioMode ? 'fixed' : 'relative',
+          // top: isWaitingAudioMode ? '0' : 'auto',
+          // left: isWaitingAudioMode ? '0' : 'auto',
+          // zIndex: isWaitingAudioMode ? 10 : 'auto',
+          // // 🆕 테두리 완전 제거
+          // border: 'none',
+          // outline: 'none',
+          // display: 'block',
+          // // 🆕 모바일 터치 하이라이트 제거
+          // WebkitTapHighlightColor: 'transparent'
+
+
         }}
       />
     )}
