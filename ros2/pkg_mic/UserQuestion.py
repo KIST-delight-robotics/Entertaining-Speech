@@ -71,6 +71,9 @@ class UserQuestion(Node):
         # )
         self.processing_subscription = self.create_subscription(String, "processing_done", self.processing_done_callback, 10)
         self.music_status_subscription = self.create_subscription(String, "music_status", self.music_status_callback, 10)
+        # effect_stop 토픽 구독자 추가
+        self.effect_stop_subscription = self.create_subscription(String, "effect_stop", self.effect_stop_callback, 10)
+
 
         self.spectrum_frame_counter = 0
         self.spectrum_skip_rate = 2  # 2프레임마다 1번만 처리
@@ -153,6 +156,14 @@ class UserQuestion(Node):
         self.waiting_image_pub = self.create_publisher(String, "/waiting_image", 10)
         # 기존 플래그들 다음에 추가
         self.waiting_sequence_running = False
+
+
+        # 이미지 표시 상태 추적용 플래그 추가
+        self.waiting_image_displayed = False
+        self.current_waiting_image_path = ""
+
+            
+
 
 
 
@@ -762,14 +773,13 @@ class UserQuestion(Node):
             # 🔥 비상상황: 플래그 해제
             self.is_sound_playing = False
 
-
-
+  
 
 
 
     def play_effect_sound_waiting_1(self):
         """대기 효과음 1을 재생하며 스펙트럼 시각화 (Mp3Player.py 방식과 동일)"""
-        effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/waiting_1"
+        effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting1"
         
         if not os.path.exists(effects_dir):
             self.get_logger().error(f"Directory not found: {effects_dir}")
@@ -809,12 +819,127 @@ class UserQuestion(Node):
             self.get_logger().error(f"Failed to play waiting sound 1: {e}")
 
 
+    def effect_stop_callback(self, msg):
+        """effect_stop 토픽 수신 시 대기 이미지 숨김"""
+        if msg.data == "effect_stop" and self.waiting_image_displayed:
+            self.get_logger().info("🛑 effect_stop 토픽 수신: 대기 이미지 숨김")
+            
+            # 이미지 숨김 처리
+            hide_msg = String()
+            hide_msg.data = ""
+            self.waiting_image_pub.publish(hide_msg)
+            
+            # 상태 플래그 초기화
+            self.waiting_image_displayed = False
+            self.current_waiting_image_path = ""
+            
+            self.get_logger().info("대기 이미지 표시 완료")
+
+
+
+
+
+
+
+
+
+
+    # def play_effect_sound_waiting_2(self):
+    #     # 효과음 파일이 저장된 디렉토리 경로
+    #     effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting2"
+
+    #     # 디렉토리에서 MP3 파일 목록 가져오기
+    #     mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+
+    #     if not mp3_files:
+    #         self.get_logger().info("No MP3 files found in the effects directory.")
+    #         return
+
+    #     # 랜덤으로 하나의 MP3 파일 선택
+    #     selected_file = random.choice(mp3_files)
+    #     selected_path = os.path.join(effects_dir, selected_file)
+
+    #     self.get_logger().info(f"Playing sound: {selected_file}")
+
+    #     # pygame을 사용하여 MP3 파일 재생
+    #     pygame.mixer.init()
+    #     pygame.mixer.music.load(selected_path)
+    #     pygame.mixer.music.play()
+        
+ 
+
+
+    #     """대기 이미지를 랜덤으로 표시 (기존 이미지 출력 방식과 동일)"""
+    #     image_dir = "/home/nvidia/ros2_ws/emotion-face-react/public/waiting"
+        
+    #     if not os.path.exists(image_dir):
+    #         self.get_logger().error(f"Directory not found: {image_dir}")
+    #         return
+        
+    #     try:
+    #         # .jpeg 파일 목록 가져오기
+    #         jpeg_files = [f for f in os.listdir(image_dir) if f.lower().endswith('.jpeg')]
+            
+    #         if not jpeg_files:
+    #             self.get_logger().error("No JPEG files found in waiting_img directory.")
+    #             return
+
+    #         # 랜덤으로 하나의 이미지 선택
+    #         selected_file = random.choice(jpeg_files)
+    #         image_path = f"/waiting/{selected_file}"  # public 폴더 기준 경로
+            
+    #         self.get_logger().info(f"Displaying waiting image: {selected_file}")
+            
+    #         # 이미지 경로 전송 (기존 이미지 출력 방식과 동일)
+    #         msg = String()
+    #         msg.data = image_path
+    #         self.waiting_image_pub.publish(msg)
+            
+    #         # 3초간 이미지 표시
+    #         time.sleep(3)
+            
+    #         # 이미지 숨김
+    #         msg.data = ""
+    #         self.waiting_image_pub.publish(msg)
+            
+    #         self.get_logger().info("Waiting image display finished")
+
+    #     except Exception as e:
+    #         self.get_logger().error(f"Failed to display waiting image: {e}")
+
+
 
 
 
     def play_effect_sound_waiting_2(self):
-        """대기 이미지를 랜덤으로 표시 (기존 이미지 출력 방식과 동일)"""
-        image_dir = "/home/nvidia/ros2_ws/emotion-face-react/public/waiting_img"
+        """대기 효과음 재생 및 effect_stop 토픽까지 이미지 표시"""
+        # 효과음 파일이 저장된 디렉토리 경로
+        effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting2"
+
+        # 디렉토리에서 MP3 파일 목록 가져오기
+        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+
+        if not mp3_files:
+            self.get_logger().info("No MP3 files found in the effects directory.")
+            return
+
+        # 랜덤으로 하나의 MP3 파일 선택
+        selected_file = random.choice(mp3_files)
+        selected_path = os.path.join(effects_dir, selected_file)
+
+        self.get_logger().info(f"Playing sound: {selected_file}")
+
+        # pygame을 사용하여 MP3 파일 재생
+        pygame.mixer.init()
+        pygame.mixer.music.load(selected_path)
+        pygame.mixer.music.play()
+        
+        # 대기 이미지 표시 (effect_stop 토픽까지 유지)
+        self.display_waiting_image_until_stop()
+
+    def display_waiting_image_until_stop(self):
+        """대기 이미지를 랜덤으로 표시 (effect_stop 토픽까지 유지)"""
+        image_dir = "/home/nvidia/ros2_ws/emotion-face-react/public/waiting"
         
         if not os.path.exists(image_dir):
             self.get_logger().error(f"Directory not found: {image_dir}")
@@ -830,27 +955,24 @@ class UserQuestion(Node):
 
             # 랜덤으로 하나의 이미지 선택
             selected_file = random.choice(jpeg_files)
-            image_path = f"/waiting_img/{selected_file}"  # public 폴더 기준 경로
+            image_path = f"/waiting/{selected_file}"  # public 폴더 기준 경로
             
-            self.get_logger().info(f"Displaying waiting image: {selected_file}")
+            self.get_logger().info(f"Displaying waiting image: {selected_file} (until effect_stop)")
             
-            # 이미지 경로 전송 (기존 이미지 출력 방식과 동일)
+            # 이미지 경로 전송
             msg = String()
             msg.data = image_path
             self.waiting_image_pub.publish(msg)
             
-            # 3초간 이미지 표시
-            time.sleep(3)
+            # 상태 플래그 설정
+            self.waiting_image_displayed = True
+            self.current_waiting_image_path = image_path
             
-            # 이미지 숨김
-            msg.data = ""
-            self.waiting_image_pub.publish(msg)
-            
-            self.get_logger().info("Waiting image display finished")
+            self.get_logger().info("대기 이미지 표시 시작 (effect_stop 토픽 대기중)")
 
         except Exception as e:
             self.get_logger().error(f"Failed to display waiting image: {e}")
-
+            self.waiting_image_displayed = False
 
 
 
