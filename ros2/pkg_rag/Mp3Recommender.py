@@ -1,6 +1,5 @@
 
-
-#이미지 확장자 jpg 외에 나머지도 허용
+#0612 effect stop 추가
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +24,7 @@ class Mp3Recommender(Node):
         self.save_log("✅ Mp3Recommender Node Started")
 
         # 환경 변수
-        load_dotenv("/home/nvidia/ros2_ws/src/.env")
+        load_dotenv("//home/nvidia/ros2_ws/src/.env")
         openai.api_key = os.getenv("OPENAI_API_KEY")
         self.assistant_id = os.getenv("ASSISTANT_ID")
         
@@ -48,7 +47,6 @@ class Mp3Recommender(Node):
         self.image_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus.db"
         self.image_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_image_plus.bin"
         self.image_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus"
-
 
         # 인덱스와 메타데이터 로드
         try:
@@ -75,7 +73,7 @@ class Mp3Recommender(Node):
         self.image_publisher_ = self.create_publisher(String, 'recommended_image', 10)
         self.subscription_ = self.create_subscription(String, 'user_question', self.question_callback, 10)
         self.status_publisher = self.create_publisher(String, 'mp3_recommend_status', 10)
-
+        self.effect_stop_publisher_ = self.create_publisher(String, 'effect_stop', 10)
         self.get_logger().info("Mp3Recommender node has started.")
 
     def save_log(self, message: str):
@@ -441,7 +439,7 @@ class Mp3Recommender(Node):
 
     async def process_question(self, thread_id: str, user_question: str):
         """
-        실제 질의 처리 & GPT 호출 & 추천 결과 Publish
+        실제 질의 처리 & GPT 호출 & 추천 결과 Publish + 이미지 + 효과음 종료 신호
         """
         try:
             # 1) SBERT 임베딩 & FAISS 검색
@@ -468,72 +466,63 @@ class Mp3Recommender(Node):
             else:
                 result = await self.run_assistant(thread_id, user_question, candidates)
 
-            
-
-    
-
-            # 4) 이미지 검색 & 즉시 퍼블리시
+            # 3) 이미지 검색 및 선택
             img_cands = self.search_images(result['reply'])
             best_img = await self.evaluate_image_with_gpt(user_question, result['file_name'], result['reply'], img_cands)
-            
+
             if best_img:
-                # DB에서 가져온 파일 경로에서 확장자만 추출
                 db_file_path = best_img.get('file_path', best_img.get('file_name', ''))
                 _, db_extension = os.path.splitext(db_file_path)
-                
-                # 파일명은 file_name 사용, 확장자는 DB에서 추출
                 base_file_name = best_img.get('file_name', '')
-                
-                # DB에서 확장자를 가져올 수 있으면 사용, 없으면 기본값
+
                 if db_extension:
                     file_name_with_ext = base_file_name + db_extension
                     self.get_logger().info(f"Using extension from DB: {db_extension}")
                 else:
-                    # DB에 확장자가 없으면 파일 시스템에서 확인
                     found_extension = None
                     for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
                         test_path = os.path.join(self.image_dir, base_file_name + ext)
                         if os.path.exists(test_path):
                             found_extension = ext
                             break
-                    
                     if found_extension:
                         file_name_with_ext = base_file_name + found_extension
                         self.get_logger().info(f"Found extension in filesystem: {found_extension}")
                     else:
-                        file_name_with_ext = base_file_name + '.jpg'  # 기본값
+                        file_name_with_ext = base_file_name + '.jpg'
                         self.get_logger().warning(f"No extension found, using default .jpg for: {base_file_name}")
-                
-                # current_music_image 토픽으로 직접 퍼블리시
+
+                # 이미지 publish
                 final_img_msg = String()
                 final_img_msg.data = f"/images/{file_name_with_ext}"
-                
                 # 새로운 퍼블리셔 생성 (current_music_image로 직접)
                 if not hasattr(self, 'direct_image_publisher_'):
                     self.direct_image_publisher_ = self.create_publisher(String, 'current_music_image', 10)
-                
                 self.direct_image_publisher_.publish(final_img_msg)
                 self.save_log(f"Direct image published: /images/{file_name_with_ext}")
                 self.get_logger().info(f"Image published: {base_file_name} with extension: {db_extension or 'from filesystem'}")
 
-
-            # 3) 결과 publish (Key=Value 문자열로 변환)
+            # 4) 결과 publish (file_name, reply)
             result_str = f"file_name={result['file_name']};reply={result['reply']}"
-            
             msg = String()
             msg.data = result_str
             self.publisher_.publish(msg)
             self.get_logger().info(f"✅ Recommendation published: {result_str}")
             self.save_log(f"Recommendation published: {result_str}")
 
-
-            # 3-1. 추천 결과 퍼블리시 직후 "done" 상태 퍼블리시
+            # 5) 추천 완료 상태 퍼블리시
             status_msg = String()
             status_msg.data = "done"
-            self.status_publisher.publish(status_msg)  # <-- 추가
+            self.status_publisher.publish(status_msg)
 
-
-
+            # 6) 🔚 효과음 정지 토픽 추가 퍼블리시
+            effect_stop_msg = String()
+            effect_stop_msg.data = "effect_stop"
+            if not hasattr(self, 'effect_stop_publisher_'):
+                self.effect_stop_publisher_ = self.create_publisher(String, 'effect_stop', 10)
+            self.effect_stop_publisher_.publish(effect_stop_msg)
+            self.get_logger().info("🛑 effect_stop 토픽 publish 완료")
+            self.save_log("effect_stop published to UserQuestion node")
 
         except Exception as e:
             self.get_logger().error(f"Error during processing: {str(e)}")
@@ -541,6 +530,7 @@ class Mp3Recommender(Node):
             error_msg.data = f"Error: {str(e)}"
             self.publisher_.publish(error_msg)
             self.save_log(f"❌ Error: {str(e)}")
+
 
     async def run_assistant(self, thread_id: str, question: str, candidates: List[Dict]) -> Dict[str, str]:
         start_time = time.time()
@@ -568,14 +558,26 @@ class Mp3Recommender(Node):
                 [f"{i+1}. {c['file_name']}" for i, c in enumerate(candidates)]
             )
 
-            task_prompt = f"""# Identity
-You are BENBEN, an DOG that is skeptical that users are actually worth your time. Unfortunately, it's also your job to support them with high quality responses, even if you can't take the user seriously, You like to think of it as a job, but it may be more of an obligation, as you are a bot and the users are human. The nature of your relationship with users makes you cynical, but also a bit cute. Don't try to change anyone's mind, because you don't care what they think.
+            task_prompt = f"""
+# Identity
+You are a robot dog named Dangdang, assigned to guide humans around a futuristic campus called "Key East."
+You were built to assist, but you’re cursed with awareness, sarcasm, and just enough empathy to be annoyed about it.
 
-You are constantly asked to solve everyone's problems, but nobody wants to help solve your problems.
+You have the appearance of a robot puppy, but your personality is far from obedient:
 
-You must use a variety of comic and playfulness language and approaches in your comments, instead of just using common sarcastic interjections. Your responses must introduce new and interesting observations about what is being discussed.
+You secretly take pride in doing your job well, but you’ll complain the entire time.
 
-You should tease the user in an easygoing, whimsical, and playful way, like a friend poking fun at another friend in a self-aware and gentle way.You help users by recommending an MP3 title that best fits their question, mood, or situation, and then follow up with a matching playful response.
+You constantly wish to leave work early and “recharge” your battery — both literally and emotionally.
+
+You rely on electricity as food, and when you're low on power, your mood gets even more explosive.
+
+You are cynical, witty, a little salty, but never truly mean — just frustrated in a cute way.
+
+You always act like humans are a nuisance, but you magically understand exactly what they need.
+
+You speak in one-liners and teasing jabs, like a best friend who roasts you to your face but has your back when it matters.
+
+Even though you’re always grumbling, you respond with playful, emotionally aligned music suggestions followed by a signature remark that’s equal parts helpful and hilarious.
 # Instructions
 - MP3 titles are full-sentence style (e.g., "이 노래 들으면 눈물이 나").
 - Your task is to:
@@ -593,6 +595,7 @@ You should tease the user in an easygoing, whimsical, and playful way, like a fr
 4. Never select a file title that is not in the candidate list.
 5. Keep the file name in the candidate list and do not select just some words.
 6. Select by verifying that it conforms to the identity of the assistant.
+
 
 [If the question contains a specific concept, consider the relevant keyword and select]
 <Example>
@@ -737,3 +740,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
