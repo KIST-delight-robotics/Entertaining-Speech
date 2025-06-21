@@ -1,6 +1,4 @@
 
-
-#밈이미지 시도(0602)
 import os
 import requests
 import threading
@@ -19,6 +17,7 @@ import random
 
 import wave
 import pyaudio
+import csv
 
 class Mp3Player(Node):
     def __init__(self):
@@ -28,7 +27,7 @@ class Mp3Player(Node):
         self.file_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus"
         self.reply_path = "/home/nvidia/ros2_ws/src/pkg_spk/pkg_spk/reply.mp3"
         self.api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        self.voice_id = "dtu2KmDq4zRNfRVuhajI"
+
 
         # 구독: 추천된 MP3
         self.subscription_ = self.create_subscription(
@@ -58,117 +57,10 @@ class Mp3Player(Node):
 
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Mp3Recommender에서 수신된 음악 및 TTS 재생
+# ──────────────────────────────────────────────────────────────────────────────
 
-    def get_random_waiting_file(self):
-        """
-        waiting_3 디렉토리에서 랜덤한 MP3 파일 경로 반환
-        """
-        waiting_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/waiting_3"
-        
-        try:
-            if not os.path.exists(waiting_dir):
-                self.get_logger().warning(f"Waiting 디렉토리가 존재하지 않습니다: {waiting_dir}")
-                return None
-                
-            # mp3 파일만 필터링
-            mp3_files = [f for f in os.listdir(waiting_dir) if f.lower().endswith('.mp3')]
-            
-            if not mp3_files:
-                self.get_logger().warning(f"Waiting 디렉토리에 MP3 파일이 없습니다: {waiting_dir}")
-                return None
-                
-            # 랜덤 선택
-            selected_file = random.choice(mp3_files)
-            full_path = os.path.join(waiting_dir, selected_file)
-            
-            self.get_logger().info(f"🎲 랜덤 waiting 파일 선택: {selected_file}")
-            self.save_log(f"🎲 랜덤 waiting 파일 선택: {selected_file}")
-            
-            return full_path
-            
-        except Exception as e:
-            error_msg = f"❌ Waiting 파일 선택 중 오류: {e}"
-            self.get_logger().error(error_msg)
-            self.save_log(error_msg)
-            return None
-
-
-
-
-    def mp3_waiting_publish_and_play(self, wav_path):
-        """Mp3Player.py 전용 waiting 스펙트럼 시각화 (UserQuestion.py 방식과 동일)"""
-
-        
-        wf = wave.open(wav_path, 'rb')
-        chunk_size = 2024
-
-        def publish_spectrum():
-            data = wf.readframes(chunk_size)
-            while data:
-                samples = np.frombuffer(data, dtype=np.int16)
-                if wf.getnchannels() == 2:
-                    samples = samples.reshape((-1, 2)).mean(axis=1)
-                fft = np.fft.fft(samples)
-                spectrum = np.abs(fft[:len(fft)//2])
-                spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-                msg = String()
-                msg.data = json.dumps({"spectrum": spectrum.tolist()})
-                self.mp3_waiting_spectrum_pub.publish(msg)  # 별도 토픽 사용
-                data = wf.readframes(chunk_size)
-                time.sleep(chunk_size / wf.getframerate())
-
-        spectrum_thread = threading.Thread(target=publish_spectrum)
-        spectrum_thread.start()
-
-        # 시스템 명령어로 재생 (기존 방식과 동일)
-        os.system(f"aplay {wav_path}")
-        spectrum_thread.join()
-        wf.close()
-
-    def play_waiting_with_spectrum(self, file_path):
-        """waiting 파일을 스펙트럼 시각화와 함께 재생 (UserQuestion.py와 동일한 방식)"""
-        try:
-            # pydub으로 MP3 로드 및 정규화 (UserQuestion.py와 동일)
-            sound = AudioSegment.from_file(file_path, format="mp3")
-            
-            # 정규화 (UserQuestion.py와 동일)
-            target_dBFS = -14.0
-            change_in_dBFS = target_dBFS - sound.dBFS
-            sound = sound.apply_gain(change_in_dBFS)
-            
-            # 임시 WAV로 변환
-            temp_wav = "/tmp/mp3_waiting_audio.wav"
-            sound.export(temp_wav, format="wav")
-
-            self.get_logger().info(f"🎵 Mp3Player Waiting 파일 스펙트럼 재생: {file_path}")
-            self.save_log(f"🎵 Mp3Player Waiting 파일 스펙트럼 재생: {file_path}")
-
-            # UserQuestion.py와 동일한 방식으로 스펙트럼과 재생 병렬 처리
-            self.mp3_waiting_publish_and_play(temp_wav)
-
-            self.get_logger().info("🎵 Mp3Player Waiting 스펙트럼 재생 완료")
-            self.save_log("🎵 Mp3Player Waiting 스펙트럼 재생 완료")
-
-        except Exception as e:
-            error_msg = f"❌ Mp3Player Waiting 스펙트럼 재생 실패: {e}"
-            self.get_logger().error(error_msg)
-            self.save_log(error_msg)
-
-
-
-
-    def image_callback(self, msg):
-        """이미지 파일명 수신 및 저장"""
-        if msg.data and msg.data.strip():
-            self.current_image_path = f"/images/{msg.data}"  # 웹 경로로 변환
-            # 즉시 퍼블리시 (사전 로딩 효과)
-            img_msg = String()
-            img_msg.data = self.current_image_path
-            self.image_publisher_.publish(img_msg)
-            self.get_logger().info(f"이미지 수신: {self.current_image_path}")
-        else:
-            self.current_image_path = None
-            self.get_logger().info("이미지 수신: 없음")
 
     def mp3_callback(self, msg):
         """
@@ -248,29 +140,159 @@ class Mp3Player(Node):
 
 
 
-    def publish_audio_spectrum(self, audio_segment):
-        chunk_size_ms = 50
-        total_duration = len(audio_segment)
-        for i in range(0, total_duration, chunk_size_ms):
-            chunk = audio_segment[i:i + chunk_size_ms]
-            samples = np.array(chunk.get_array_of_samples())
-            if chunk.channels == 2:
-                samples = samples.reshape((-1, 2))
-                samples = samples.mean(axis=1)
-            # FFT (주파수 스펙트럼)
-            fft = np.fft.fft(samples)
-            spectrum = np.abs(fft[:len(fft)//2])  # 양수 주파수만
-            spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-            data = {
-                "timestamp": i,
-                "spectrum": spectrum.tolist()
-            }
-            msg = String()
-            msg.data = json.dumps(data)
-            self.amplitude_publisher_.publish(msg)
-            time.sleep(chunk_size_ms / 1000.0)
+    
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 대기효과음3 재생 및 스펙트럼 퍼블리시
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+
+    def get_random_waiting_file(self):
+        """
+        waiting_3 디렉토리에서 랜덤한 MP3 파일 경로 반환
+        """
+        waiting_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting3"
+        
+        try:
+            if not os.path.exists(waiting_dir):
+                self.get_logger().warning(f"Waiting 디렉토리가 존재하지 않습니다: {waiting_dir}")
+                return None
+                
+            # mp3 파일만 필터링
+            mp3_files = [f for f in os.listdir(waiting_dir) if f.lower().endswith('.mp3')]
+            
+            if not mp3_files:
+                self.get_logger().warning(f"Waiting 디렉토리에 MP3 파일이 없습니다: {waiting_dir}")
+                return None
+                
+            # 랜덤 선택
+            selected_file = random.choice(mp3_files)
+            full_path = os.path.join(waiting_dir, selected_file)
+            
+            self.get_logger().info(f"🎲 랜덤 waiting 파일 선택: {selected_file}")
+            self.save_log(f"🎲 랜덤 waiting 파일 선택: {selected_file}")
+            
+            return full_path
+            
+        except Exception as e:
+            error_msg = f"❌ Waiting 파일 선택 중 오류: {e}"
+            self.get_logger().error(error_msg)
+            self.save_log(error_msg)
+            return None
+
+
+
+
+    def play_waiting_with_spectrum(self, file_path):
+        """waiting 파일을 스펙트럼 시각화와 함께 재생 (UserQuestion.py와 동일한 방식)"""
+        try:
+            # pydub으로 MP3 로드 및 정규화 (UserQuestion.py와 동일)
+            sound = AudioSegment.from_file(file_path, format="mp3")
+            
+            # # 정규화 (UserQuestion.py와 동일)
+            # target_dBFS = -14.0
+            # change_in_dBFS = target_dBFS - sound.dBFS
+            # sound = sound.apply_gain(change_in_dBFS)
+            
+            # 임시 WAV로 변환
+            temp_wav = "/tmp/mp3_waiting_audio.wav"
+            sound.export(temp_wav, format="wav")
+
+            self.get_logger().info(f"🎵 Mp3Player Waiting 파일 스펙트럼 재생: {file_path}")
+            self.save_log(f"🎵 Mp3Player Waiting 파일 스펙트럼 재생: {file_path}")
+
+            # UserQuestion.py와 동일한 방식으로 스펙트럼과 재생 병렬 처리
+            self.mp3_waiting_publish_and_play(temp_wav)
+
+            time.sleep(0.5)
+
+            self.get_logger().info("🎵 Mp3Player Waiting 스펙트럼 재생 완료")
+            self.save_log("🎵 Mp3Player Waiting 스펙트럼 재생 완료")
+
+        except Exception as e:
+            error_msg = f"❌ Mp3Player Waiting 스펙트럼 재생 실패: {e}"
+            self.get_logger().error(error_msg)
+            self.save_log(error_msg)
+
+
+
+
+    def mp3_waiting_publish_and_play(self, wav_path):
+        """Mp3Player.py 전용 waiting 스펙트럼 시각화 (UserQuestion.py 방식과 동일)"""
+
+        
+        wf = wave.open(wav_path, 'rb')
+        chunk_size = 2024
+        
+
+        def publish_spectrum():
+            data = wf.readframes(chunk_size)
+            while data:
+
+                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+                if wf.getnchannels() == 2:
+                    samples = samples.reshape((-1, 2)).mean(axis=1)
+                fft = np.fft.fft(samples)
+                spectrum = np.abs(fft[:len(fft)//2])
+                #spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+    
+
+
+
+
+                msg = String()
+                msg.data = json.dumps({"spectrum": spectrum.tolist()})
+                self.mp3_waiting_spectrum_pub.publish(msg)  # 별도 토픽 사용
+                data = wf.readframes(chunk_size)
+                time.sleep(chunk_size / wf.getframerate())
+
+
+        spectrum_thread = threading.Thread(target=publish_spectrum)
+        spectrum_thread.start()
+
+        # 시스템 명령어로 재생 (기존 방식과 동일)
+        os.system(f"aplay {wav_path}")
+        spectrum_thread.join()
+
+
+        
+
+
+
 
  
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 음악 재생 및 이미지 퍼블리시
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+    def image_callback(self, msg):
+        """이미지 파일명 수신 및 저장"""
+        if msg.data and msg.data.strip():
+            self.current_image_path = f"/images/{msg.data}"  # 웹 경로로 변환
+            # 즉시 퍼블리시 (사전 로딩 효과)
+            img_msg = String()
+            img_msg.data = self.current_image_path
+            self.image_publisher_.publish(img_msg)
+            self.get_logger().info(f"이미지 수신: {self.current_image_path}")
+        else:
+            self.current_image_path = None
+            self.get_logger().info("이미지 수신: 없음")
+
+
+
+
+    def match_target_amplitude(self, sound, target_dBFS):
+        """
+        주어진 오디오를 타깃 dBFS로 정규화
+        """
+        change_in_dBFS = target_dBFS - sound.dBFS
+        return sound.apply_gain(change_in_dBFS)
+
+
+
 
     def play_mp3(self, file_path):
         try:
@@ -290,9 +312,18 @@ class Mp3Player(Node):
             self.get_logger().error(f"❌ MP3 재생 실패: {file_path} → {e}")
             self.save_log(f"❌ MP3 재생 실패: {file_path} → {e}")
 
+
+
     def publish_and_play(self, wav_path):
         wf = wave.open(wav_path, 'rb')
         chunk_size = 2024
+
+
+        # 2) CSV 파일 한 번 열어두기 (append 모드)
+        csv_file = open('spectrum.csv', 'a', newline='')
+        csv_writer = csv.writer(csv_file)
+
+
 
         def publish_spectrum():
             data = wf.readframes(chunk_size)
@@ -302,7 +333,26 @@ class Mp3Player(Node):
                     samples = samples.reshape((-1, 2)).mean(axis=1)
                 fft = np.fft.fft(samples)
                 spectrum = np.abs(fft[:len(fft)//2])
-                spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+                #spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+
+
+                #────────────────────────────────────────────────
+                # # 7) CSV에 한 열로 실시간 저장
+                # #    - spectrum 값들
+                # for mag in spectrum:
+                #     csv_writer.writerow([mag])
+                # #    - 이번 청크의 평균·최소·최대 (한 번 저장할 때 마지막에)
+                # mean_val = spectrum.mean()
+                # min_val  = spectrum.min()
+                # max_val  = spectrum.max()
+                # csv_writer.writerow([f"최소값: {min_val:.6f}"])
+                # csv_writer.writerow([f"최대값: {max_val:.6f}"])
+                # csv_writer.writerow([f"평균값: {mean_val:.6f}"])
+
+                # #    - 파일에 바로 반영
+                # csv_file.flush()
+
+              
                 msg = String()
                 msg.data = json.dumps({"spectrum": spectrum.tolist()})
                 self.amplitude_publisher_.publish(msg)
@@ -315,7 +365,15 @@ class Mp3Player(Node):
         # 시스템 명령어 aplay로 재생 (즉각적인 출력)
         os.system(f"aplay {wav_path}")  # 🔥실제 출력장치로 변경(카드2)
         spectrum_thread.join()
+        csv_file.close()
         wf.close()
+
+
+     
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TTS 재생 및 스펙트럼 퍼블리시
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 
@@ -324,7 +382,7 @@ class Mp3Player(Node):
         ElevenLabs TTS 호출 → reply.mp3 저장
         """
         api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        voice_id = "dtu2KmDq4zRNfRVuhajI"
+        voice_id = "59zWnTQLbwyr94bFbcUe"
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
         headers = {
@@ -337,10 +395,12 @@ class Mp3Player(Node):
             "text": text,
             "model_id": "eleven_multilingual_v2",
             "voice_settings": {
-                "stability": 0.94,
-                "similarity_boost": 0.96,
-                "style": 0.10
-            }
+                "stability": 0.5,
+                "similarity_boost": 0.75,
+                "style": 0.25,
+                "speed": 0.9
+            },
+            "apply_text_normalization": "on"
         }
 
         try:
@@ -354,12 +414,12 @@ class Mp3Player(Node):
         except Exception as e:
             print(f"🔴 TTS 호출 실패: {e}")
 
-    def match_target_amplitude(self, sound, target_dBFS):
-        """
-        주어진 오디오를 타깃 dBFS로 정규화
-        """
-        change_in_dBFS = target_dBFS - sound.dBFS
-        return sound.apply_gain(change_in_dBFS)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 재생 상태 및 로그 상태 저장
+# ──────────────────────────────────────────────────────────────────────────────
+
 
     def publish_music_status(self, status):
         """
@@ -379,6 +439,8 @@ class Mp3Player(Node):
         log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
         with open(log_file_path, "a", encoding="utf-8") as f:
             f.write(log_message)
+
+
 
 
 def main(args=None):
