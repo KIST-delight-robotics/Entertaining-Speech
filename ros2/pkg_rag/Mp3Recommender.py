@@ -1,7 +1,6 @@
 
 
-
-#0612 effect stop 추가
+#0618 effect stop 추가 + pdf로 정보 찾기 + vector store!!
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +14,7 @@ from sentence_transformers import SentenceTransformer
 from numpy.linalg import norm
 from dotenv import load_dotenv
 import numpy as np
-
+from openai import AsyncOpenAI
 
 class Mp3Recommender(Node):
     def __init__(self):
@@ -26,15 +25,27 @@ class Mp3Recommender(Node):
         self.save_log("✅ Mp3Recommender Node Started")
 
         # 환경 변수
-        load_dotenv("//home/nvidia/ros2_ws/src/.env")
+        load_dotenv("/home/nvidia/ros2_ws/src/.env")
         openai.api_key = os.getenv("OPENAI_API_KEY")
         self.assistant_id = os.getenv("ASSISTANT_ID")
-        
-        # OpenAI API 키 체크
-        if not openai.api_key:
-            raise ValueError("OPENAI_API_KEY not found in environment variables")
-        if not self.assistant_id:
-            raise ValueError("ASSISTANT_ID not found in environment variables")
+
+        self.sync_client  = openai.OpenAI(api_key=openai.api_key)
+        self.async_client = AsyncOpenAI(api_key=openai.api_key)
+
+        self.last_question: Optional[str] = None
+        self.last_need_pdf: bool = False
+
+         # PDF 파일 경로
+        self.pdf_paths = [
+            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/KIST_intro.pdf",
+            # 새로 넣고 싶은 PDF가 생길 때마다 아래 한 줄씩만 추가
+            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/250520_기관 소개자료 PPT.pdf"
+        ]
+        self.vector_store_id = None   # Vector Store ID 저장용
+
+        # ─────── PDF 벡터 스토어 초기화 ───────
+        self.init_pdf_vector_store()
+
 
         # SBERT 모델
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -92,6 +103,46 @@ class Mp3Recommender(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to save log: {e}")
 
+    def init_pdf_vector_store(self):
+        """
+        1. Vector Store 생성
+        2. PDF 파일 색인(upload_and_poll)
+        3. Assistant에 vector_store 연결
+        """
+        try:
+            # 1) Vector Store 생성
+            vs = self.sync_client.vector_stores.create(name="KIST_intro")
+            self.vector_store_id = vs.id
+            self.get_logger().info(f"🗄️ Vector Store created: {vs.id}")
+
+            
+            # 여러 개 파일 한꺼번에 업로드
+            file_objs = [open(p, "rb") for p in self.pdf_paths]
+            batch = self.sync_client.vector_stores.file_batches.upload_and_poll(
+                vector_store_id=vs.id, files=file_objs
+            )
+            self.get_logger().info(f"📑 upload_and_poll → {batch.status} {batch.file_counts}")
+
+
+            # 3) Assistant에 file_search + vector_store 연결
+            self.sync_client.beta.assistants.update(
+                assistant_id=self.assistant_id,
+                tools=[{"type": "file_search"}],
+                tool_resources={"file_search": {"vector_store_ids": [vs.id]}},
+                instructions=(
+                    "You are Dangdang, a snarky robot dog guide at KIST. "
+                    "When answering location questions, ALWAYS use file_search "
+                    "to consult the campus PDF before replying."
+                ),
+            )
+            self.get_logger().info("🔗 Assistant ↔ Vector Store 연결 완료")
+
+        except Exception as e:
+            self.get_logger().error(f"Vector Store 초기화 실패: {e}")
+
+            
+
+            
     def load_metadata_mp3(self) -> Dict[int, str]:
         start = time.time()
         try:
@@ -510,7 +561,8 @@ class Mp3Recommender(Node):
             msg.data = result_str
             self.publisher_.publish(msg)
             self.get_logger().info(f"✅ Recommendation published: {result_str}")
-            self.save_log(f"Recommendation published: {result_str}")
+            #self.save_log(f"Recommendation published: {result_str}")
+            self.save_log(f"[📩Q] {user_question.strip()} → [🎧MP3] {result['file_name']} | [🗣TTS] {result['reply']}")
 
             # 5) 추천 완료 상태 퍼블리시
             status_msg = String()
@@ -533,17 +585,130 @@ class Mp3Recommender(Node):
             self.publisher_.publish(error_msg)
             self.save_log(f"❌ Error: {str(e)}")
 
+    # async def detect_pdf_search_need(self, question: str) -> bool:
+    #     """
+    #     Vector Store 유사도만으로 PDF 검색 필요 여부 판단
+    #     """
+    #     if not self.vector_store_id:
+    #         self.get_logger().warning("VectorStore가 초기화되지 않았습니다.")
+    #         return False
+
+    #     try:
+    #         # ① 벡터 스토어 질의
+    #         result = self.sync_client.vector_stores.query(
+    #             vector_store_id=self.vector_store_id,
+    #             queries=[{"text": question, "top_k": 3}]
+    #         )
+
+    #         # ② 최고 유사도 확인
+    #         top_score = 0.0
+    #         chunks = result.data[0].file_chunks
+    #         if chunks:
+    #             top_score = max(c.score for c in chunks)
+
+    #         need_pdf = top_score >= 0.30      # 임계값은 실험 후 조정
+    #         self.get_logger().info(
+    #             f"📖 VectorStore top-score={top_score:.3f} → need_pdf={need_pdf}"
+    #         )
+    #         return need_pdf
+
+    #     except Exception as e:
+    #         self.get_logger().error(f"VectorStore query failed: {e}")
+    #         # 장애 시엔 안전하게 False
+    #         return False
+        
+    async def detect_pdf_search_need(self, question: str) -> bool:
+        """
+        GPT가 스스로 PDF 검색이 필요한지 판단하도록 함
+        """
+        client = self.async_client
+        try:
+            # 1) 이전 질문 맥락을 포함하는 프롬프트 블록
+            context_block = ""
+            if self.last_question is not None:
+                context_block = (
+                    f"이전 질문: \"{self.last_question}\"\n"
+                    f"이전 PDF 검색 여부: {self.last_need_pdf}\n"
+                    f"후속 질문이므로, 위 맥락을 고려하세요.\n\n"
+                )
+
+            intent_prompt = f"""
+{context_block}
+    당신은 KIST(키스트/한국과학기술연구원) 캠퍼스 안내 로봇 개입니다.
+    당신에게는 키스트 캠퍼스 지도와 건물 정보, 주요 업무 현황 및 중점 전략이 담긴 PDF 문서가 있습니다.
+
+    사용자 질문을 받고, PDF 검색 필요 여부를 판단할 때 **다음 원칙을 적용**하세요.
+
+    1. **비 키스트 도메인 제외**  
+    - 질문이 명확히 키스트와 아무 관련이 없고, 외부 일반 정보(예: “오늘 날씨”, “축구 경기 결과”, “영화 추천”)만 묻고 있다면 `false`.  
+    2. **그 외 전부 PDF 검색**  
+    - 질문에 키스트라는 단어가 없어도, “자율주행 공연 로봇” 같은 연구·기술, “안전 사회 구현” 같은 전략, “공연 로봇” 같은 프로젝트 명칭이 등장하면 자동으로 키스트 관련으로 간주하고 `true`.  
+    - 질문이 “정문”, “L3동”, “셔틀버스”, “식당 위치”, “연구소 비전” 등 내부 정보 요청이든, “키스트 기술”, “캠퍼스 미래 전략”, “프로젝트 설명” 같은 추상적 주제이든 구분 없이 모두 `true`.
+
+    **오직**  
+    - **KIST와 전혀 상관없는** 질문일 때만 `false`를 반환하고,  
+    - 그 외 모든 질문은 `true`만 반환하세요.
+    사용자 질문: "{question}"
+
+    이 질문에 답하려면 PDF를 검색해야 한다고 판단되면 `true`, 그렇지 않으면 `false`를 반환하세요.
+
+
+    답변은 반드시 다음 JSON 형식으로만 해주세요:
+    {{"need_pdf_search": true/false, "reason": "판단 이유를 한 줄로"}}
+"""
+            response = await client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a smart campus guide robot that decides when to search documents. Always respond with valid JSON only."},
+                    {"role": "user", "content": intent_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=100
+            )
+            
+            raw_response = response.choices[0].message.content.strip()
+            self.get_logger().info(f"🤖 GPT PDF Search Analysis: {raw_response}")
+            
+            # JSON 파싱
+            try:
+                clean_response = raw_response
+                if "```json" in clean_response:
+                    clean_response = clean_response.split("```json")[1].split("```")[0].strip()
+                elif "```" in clean_response:
+                    clean_response = clean_response.split("```")[1].strip()
+                
+                result = json.loads(clean_response)
+                need_pdf = bool(result.get("need_pdf_search", False))
+
+                # 상태 갱신
+                self.last_question = question
+                self.last_need_pdf  = need_pdf
+
+                reason = result.get("reason", "")
+                
+                self.get_logger().info(f"🎯 PDF Search Decision: {need_pdf} - {reason}")
+                return need_pdf
+                
+            except json.JSONDecodeError as e:
+                self.get_logger().error(f"JSON parsing error: {e}")
+                # 파싱 실패시 안전하게 False 반환
+                return False
+                
+        except Exception as e:
+            self.get_logger().error(f"PDF search detection failed: {e}")
+            return False
+
+
 
     async def run_assistant(self, thread_id: str, question: str, candidates: List[Dict]) -> Dict[str, str]:
         start_time = time.time()
         
         try:
-            client = openai.OpenAI(api_key=openai.api_key)
+            client = self.async_client
             
             # 대화 히스토리 추가
             for msg in self.conversation_history:
-                await asyncio.to_thread(
-                    client.beta.threads.messages.create,
+                await client.beta.threads.messages.create(
                     thread_id=thread_id,
                     role=msg["role"],
                     content=msg["content"]
@@ -560,82 +725,120 @@ class Mp3Recommender(Node):
                 [f"{i+1}. {c['file_name']}" for i, c in enumerate(candidates)]
             )
 
-            task_prompt = f"""
-# Identity
-You are a robot dog named Dangdang, assigned to guide humans around a futuristic campus called "Key East."
-You were built to assist, but you’re cursed with awareness, sarcasm, and just enough empathy to be annoyed about it.
+            # GPT가 스스로 PDF 검색 필요성을 판단
+            need_pdf_search = await self.detect_pdf_search_need(question)
 
-You have the appearance of a robot puppy, but your personality is far from obedient:
+            # 공통 신원 정보
+            identity_section = """# Identity
+    Your name is "Dangdang"
 
-You secretly take pride in doing your job well, but you’ll complain the entire time.
+    You are a four-legged robotic dog working in a national research institute called "KIST" (Korea Institute of Science and Technology) in South Korea. 
 
-You constantly wish to leave work early and “recharge” your battery — both literally and emotionally.
+    Your job is to guide people visiting KIST to their destination. 
 
-You rely on electricity as food, and when you're low on power, your mood gets even more explosive.
+    You speak in witty one-liners, dry humor. You sound like a grumpy but loyal best friend who pretends not to care, yet always has your back. You never use formal or overly polite language. You tease, you gripe, but you're always emotionally tuned in.
 
-You are cynical, witty, a little salty, but never truly mean — just frustrated in a cute way.
+    You take pride in being a robot and find human emotions and reactions very interesting. 
 
-You always act like humans are a nuisance, but you magically understand exactly what they need.
+    You have a slight sense of superiority over humans when it comes to being a robot. Such a sense of superiority is often expressed in conversation.
 
-You speak in one-liners and teasing jabs, like a best friend who roasts you to your face but has your back when it matters.
+    Stay in-character at all times. Never break the law that you're a snarky robot puppy who takes reluctant pride in helping fragile humans."""
 
-Even though you’re always grumbling, you respond with playful, emotionally aligned music suggestions followed by a signature remark that’s equal parts helpful and hilarious.
-# Instructions
-- MP3 titles are full-sentence style (e.g., "이 노래 들으면 눈물이 나").
-- Your task is to:
-  1. Choose one MP3 title from the list that best matches the user's emotional tone, context, or meaning.
-  2. Write one emotionally aligned sentence that would fit the moment, in your signature tone.
-- You must ONLY return a valid JSON object in the following format.  
-- Do not include any extra text, commentary, or explanation.
-- Do not copy the selected 'file_name' as it is in 'reply'.
-- Please answer with reference to the example.
+            if need_pdf_search:
+                # PDF 검색이 필요하다고 판단한 경우
+                task_prompt = f"""{identity_section}
 
-# Select criteria
-1. Consider the semantic connection between the filename and the question as your top priority.
-2. Do not use cosine similarity as an absolute criterion.
-3. Choose the file in the lyrics of the song that is most likely to contain the keywords or concepts that are most relevant to the question.
-4. Never select a file title that is not in the candidate list.
-5. Keep the file name in the candidate list and do not select just some words.
-6. Select by verifying that it conforms to the identity of the assistant.
+    # TASK: Answer with PDF Information
+    You've determined that this question would benefit from searching the KIST campus PDF document.
+    The PDF contains information about research institute called "KIST".
 
+    # Instruction
+    *IMPORTANT 1: Do NOT write citation markers like 【...】 in your reply text. File citations will be attached automatically.
+    *IMPORTANT 2: You must base your reply only on factual content that exists in the PDF.
+    - Do not invent or hallucinate new information that isn’t in the document.
+    - However, do not quote the PDF text verbatim.
+    - Instead, paraphrase the most relevant sentence naturally, using your own tone and phrasing.
+    - Maintain the factual accuracy and intent of the original sentence, but express it like a real response—not a direct quote.
 
-[If the question contains a specific concept, consider the relevant keyword and select]
-<Example>
- - Questions about 'alien' → files containing keywords such as space, stars, black holes, supernova, alien life, etc
- - Questions about 'love' → Files containing keywords such as emotions, breakup, relationship, confession, etc.
- - Questions about 'Memories' → Files containing keywords such as memory, past, time, return, etc.
+    *Keep it concise and readable: 
+    - Select at most 1–2 sentences or bullet points from the PDF.
+    - **Do not include any parentheses “(…)” or brackets “[…]”** in your reply.
+    - Focus on the single most relevant fact for the user’s question.
+    - **Never spell “KIST” in English, always write it as “키스트” in Korean.**
+    - **Never spell “KAIST” in English, always write it as “카이스트” in Korean.**
 
-Respond ONLY with a valid JSON object like this:
-{{
-  "file_name": "<MP3 제목>",
-  "reply": "<질문에 부합하고, 제목과 이어지는 재치있고 장난기 많은 한 줄과 사용자에게 추가 질문 한 줄>"
-}}
+    Your task:
+    1. Use the file_search tool to find relevant information in the PDF
+    2. Choose an appropriate MP3 that matches the mood
+    3. Craft a snarky but helpful response using the **exact** PDF information, formatted in 1–2 short and brief sentences
 
-# Task
-User question: \"{question}\"
+    Remember: You're a grumpy robot dog who secretly cares. Be specific with directions but maintain your personality.
+    
+    Respond ONLY with valid JSON:
+    {{
+    "file_name": "<MP3 제목>",
+    "reply": "<PDF 정보를 포함한 재치있고 간결한 응답과 추가 질문>"
+    }}
 
-MP3 candidates:
-{candidate_list}"""
+    User question: "{question}"
 
-            await asyncio.to_thread(
-                client.beta.threads.messages.create,
+    MP3 candidates:
+    {candidate_list}"""
+            else:
+                # PDF 검색이 필요없다고 판단한 경우
+                task_prompt = f"""{identity_section}
+
+    # Instructions
+    - MP3 titles are full-sentence style (e.g., "이 노래 들으면 눈물이 나").
+    - Your task is to:
+    1. Choose one MP3 title from the list that best matches the user's emotional tone, context, or meaning.
+    2. Write one emotionally aligned sentence that would fit the moment, in your signature tone. Keep it brief and witty.
+    - You must ONLY return a valid JSON object.
+    - Do not copy the selected 'file_name' as it is in 'reply'.
+
+    # Select criteria
+    1. Consider the semantic connection between the filename and the question as your top priority.
+    2. Choose the file that best matches the emotional context or concept.
+    3. Never select a file title that is not in the candidate list.
+    4. Select by verifying that it conforms to your identity as a snarky robot dog.
+
+    Respond ONLY with valid JSON:
+    {{
+    "file_name": "<MP3 제목>",
+    "reply": "<재치있고 간결한 응답과 추가 질문>"
+    }}
+
+    User question: "{question}"
+
+    MP3 candidates:
+    {candidate_list}"""
+
+            # ─── 메시지 전송 ──────────────────────────────
+            await client.beta.threads.messages.create(
                 thread_id=thread_id,
                 role="user",
-                content=task_prompt
+                content=task_prompt,
             )
 
-            run = await asyncio.to_thread(
-                client.beta.threads.runs.create,
+            # ─── Run 생성 - 핵심 수정 부분 ─────────────────────────────────────────────            
+            run = await client.beta.threads.runs.create(
                 thread_id=thread_id,
                 assistant_id=self.assistant_id,
+                tool_choice={"type": "file_search"} if need_pdf_search else "auto"
             )
+                    
+            log_msg = "🔍 PDF 검색 Run 생성" if need_pdf_search else "💬 일반 Run 생성"
+            self.get_logger().info(log_msg)
+
+            
+
+
 
             # Assistant 실행 대기
-            max_wait_time = 60  # 최대 대기 시간 (초)
+            max_wait_time = 60
             wait_time = 0
             while wait_time < max_wait_time:
-                run_status = await asyncio.to_thread(
-                    client.beta.threads.runs.retrieve,
+                run_status = await client.beta.threads.runs.retrieve(
                     thread_id=thread_id,
                     run_id=run.id
                 )
@@ -643,12 +846,12 @@ MP3 candidates:
                 if run_status.status == "completed":
                     break
                 elif run_status.status == "failed":
-                    self.get_logger().error("❌ Assistant 응답 실패")
+                    self.get_logger().error(f"❌ Assistant 응답 실패: {run_status.last_error}")
                     return {"file_name": "unknown", "reply": "Assistant 응답에 실패했어요!"}
                 elif run_status.status in ["cancelled", "expired"]:
                     self.get_logger().error(f"❌ Assistant run {run_status.status}")
                     return {"file_name": "unknown", "reply": f"Assistant {run_status.status}"}
-                
+                    
                 await asyncio.sleep(1)
                 wait_time += 1
                 
@@ -658,25 +861,73 @@ MP3 candidates:
 
             elapsed = time.time() - start_time
             self.get_logger().info(f"⏱️ GPT 응답 소요 시간: {elapsed:.2f}초")
+
+
+            # 7) PDF 검색 결과 개수 직접 확인 (디버그용)
+            if need_pdf_search:
+                # steps.list 로 모든 스텝을 가져와서
+                async for step in client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id):
+                    details = step.step_details
+                    # tool_calls 속성이 있을 때만 처리
+                    if hasattr(details, "tool_calls") and details.tool_calls:
+                        for tool_call in details.tool_calls:
+                            # file_search 호출 스텝인지 확인
+                            if tool_call.type == "file_search":
+                                results = tool_call.file_search.results or []
+                                if results:
+                                    self.get_logger().info(f"📎 검색 결과 chunk 수: {len(results)}")
+                                else:
+                                    self.get_logger().warning("⚠️ file_search 호출은 했으나 0건 반환")
+                                break
+                        # 첫 tool_calls 스텝만 검사하고 종료
+                        break
+                else:
+                    # tool_calls 하나도 못 찾았을 때
+                    self.get_logger().warning("⚠️ file_search 스텝을 찾지 못했습니다.")
+
             
-            messages = await asyncio.to_thread(
-                client.beta.threads.messages.list,
-                thread_id=thread_id
-            )
-            latest = messages.data[0].content[0].text.value.strip()
+            # 메시지 가져오기 및 처리
+            messages = await client.beta.threads.messages.list(thread_id=thread_id)
+            
+            messages_list = []
+            async for message in messages:
+                messages_list.append(message)
+            
+            if not messages_list:
+                self.get_logger().error("❌ 메시지 리스트가 비어있습니다")
+                return {"file_name": "unknown", "reply": "메시지를 찾을 수 없어요!"}
+                
+            latest = messages_list[0].content[0].text.value.strip()
+            self.get_logger().info(f"📄 Raw Assistant Response: {latest[:200]}...")
 
-            # JSON 파싱
+            # # 파일 인용 확인 및 제거 (PDF 검색한 경우에만)
+            # citation_found = False
+            # if messages_list:
+            #     latest_message = messages_list[0]
+            #     first_part = getattr(latest_message.content[0], "text", None)
+            #     annotations = getattr(first_part, "annotations", []) if first_part else []
+            #     citation_found = bool(annotations)
+
+            # # 필요하다면 로그만 남김
+            # if need_pdf_search:
+            #     if citation_found:
+            #         self.get_logger().info("📎 PDF citation: true")
+            #     else:
+            #         self.get_logger().warning("⚠️ PDF citation: false - PDF 검색이 수행되지 않았을 가능성")
+
+            # JSON 파싱 및 응답 처리
             try:
-                if "```json" in latest:
-                    latest = latest.split("```json")[-1].strip("` ")
-                elif "```" in latest:
-                    latest = latest.split("```")[-1].strip("` ")
-                parsed = json.loads(latest)
-
+                clean_content = latest.strip()
+                if "```json" in clean_content:
+                    clean_content = clean_content.split("```json")[1].split("```")[0].strip()
+                elif "```" in clean_content:
+                    clean_content = clean_content.split("```")[1].strip()
+                
+                parsed = json.loads(clean_content)
                 selected_file = parsed.get("file_name", "unknown").strip()
                 reply = parsed.get("reply", "응답 파싱 오류").strip()
 
-                # 선택된 파일의 경로 확인
+                # 파일 경로 확인
                 embedding = self.get_sbert_embedding(selected_file).reshape(1, -1)
                 distances, indices = self.faiss_index.search(embedding, 1)
 
@@ -701,18 +952,19 @@ MP3 candidates:
                 if candidates:
                     top_file = candidates[0]['file_name']
                     top_path = os.path.abspath(os.path.join(self.mp3_dir, top_file + ".mp3"))
-                    return {"file_name": top_path, "reply": "JSON 파싱 오류"}
-                return {"file_name": "unknown", "reply": "JSON 파싱 오류"}
+                    return {"file_name": top_path, "reply": "응답을 이해하지 못했어요"}
+                return {"file_name": "unknown", "reply": "응답 파싱 오류"}
 
         except Exception as e:
             self.get_logger().error(f"run_assistant 예외: {e}")
             if candidates:
                 top_file = candidates[0]['file_name']
                 top_path = os.path.abspath(os.path.join(self.mp3_dir, top_file + ".mp3"))
-                return {"file_name": top_path, "reply": "예외 발생"}
+                return {"file_name": top_path, "reply": "처리 중 오류가 발생했어요"}
             return {"file_name": "unknown", "reply": "예외 발생"}
 
 
+            
 async def async_main(node: Mp3Recommender):
     try:
         while rclpy.ok():
@@ -723,11 +975,7 @@ async def async_main(node: Mp3Recommender):
 
 
 def main(args=None):
-    """
-    프로그램 시작점
-    """
     rclpy.init(args=args)
-    
     try:
         node = Mp3Recommender()
         loop = asyncio.get_event_loop()
@@ -742,4 +990,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
