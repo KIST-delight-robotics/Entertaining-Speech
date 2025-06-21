@@ -1,4 +1,6 @@
 
+
+
 #0612 effect stop 추가
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
