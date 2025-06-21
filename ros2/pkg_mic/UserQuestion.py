@@ -13,7 +13,6 @@ import pyaudio
 import webrtcvad
 import soundfile as sf
 import tempfile
-import nemo.collections.asr as nemo_asr  # ★ NeMo
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -31,6 +30,13 @@ import librosa
 import librosa.display
 from scipy import ndimage 
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+from scipy import signal
+import matplotlib.pyplot as plt
+import webbrowser
+from openpyxl import Workbook
+from datetime import datetime
+import csv
+
 
 load_dotenv("/home/nvidia/ros2_ws/src/.env")
 
@@ -161,6 +167,12 @@ class UserQuestion(Node):
         # 이미지 표시 상태 추적용 플래그 추가
         self.waiting_image_displayed = False
         self.current_waiting_image_path = ""
+
+        # 스펙트럼 평균화를 위한 변수들 (기존 변수들과 함께 추가)
+        self.spectrum_buffer = []  # 5개의 스펙트럼을 저장할 버퍼
+        self.spectrum_count = 0    # 현재 누적된 스펙트럼 개수
+
+
 
             
 
@@ -363,142 +375,140 @@ class UserQuestion(Node):
 
 
 
-    def publish_audio_visualizer(self, in_data):
- 
-        # 현재 단순한 FFT 구현을 음성 강조 버전으로 교체
-        samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
-        
- 
-        # 1. 기본 FFT 계산
-        fft = np.fft.fft(samples)
-        spectrum = np.abs(fft[:len(fft)//2])
+    # def publish_audio_visualizer(self, in_data):
 
-        # Mp3Player.py와 동일한 정규화
-        spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+    #     samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
         
-        # Mp3Player.py와 동일한 JSON 구조로 발송
+ 
+    #     # 1. 기본 FFT 계산
+    #     fft = np.fft.fft(samples)
+    #     spectrum = np.abs(fft[:len(fft)//2])
+  
+
+    #     # Mp3Player.py와 동일한 정규화
+    #     spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+        
+    #     # Mp3Player.py와 동일한 JSON 구조로 발송
+    #     msg = String()
+    #     msg.data = json.dumps({"spectrum": spectrum.tolist()})
+    #     self.visualizer_pub.publish(msg)
+
+
+    # # DC 오프셋 제거
+    # def publish_audio_visualizer(self, in_data):
+    #     # 🆕 0.5초 간격 출력 제어
+    #     current_time = time.time()
+    #     if not hasattr(self, 'last_print_time'):
+    #         self.last_print_time = 0
+        
+    #     should_print = current_time - self.last_print_time >= 0.5
+
+    #     samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
+    #     # 🆕 DC 오프셋 제거 - 평균값 빼기
+    #     samples = samples - np.mean(samples)
+
+  
+    #     window = np.hanning(len(samples))
+    #     windowed_data = samples * window
+
+    #     # 1. 기본 FFT 계산
+    #     fft = np.fft.fft(windowed_data)
+
+    #     spectrum = np.abs(fft[:len(fft)//2])
+
+    #     # Mp3Player.py와 동일한 정규화
+    #     # spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+        
+
+
+
+    #     # 🆕 0.5초에 한 번씩만 스펙트럼 값 10개 출력
+    #     if should_print:
+    #         self.last_print_time = current_time
+    #         print("=== 스펙트럼 값 (처음 10개) ===")
+    #         for i in range(min(10, len(spectrum))):
+    #             print(f"[{i}] {spectrum[i]:.6f}")
+    #         print("==============================")
+            
+    #     # Mp3Player.py와 동일한 JSON 구조로 발송
+    #     msg = String()
+    #     msg.data = json.dumps({"spectrum": spectrum.tolist()})
+    #     self.visualizer_pub.publish(msg)
+
+
+
+
+    #DC 오프셋 제거 + 5회 평균화
+    def publish_audio_visualizer(self, in_data):
+        # 🆕 0.5초 간격 출력 제어
+        current_time = time.time()
+        if not hasattr(self, 'last_print_time'):
+            self.last_print_time = 0
+        
+        should_print = current_time - self.last_print_time >= 0.5
+
+        samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
+        # 🆕 DC 오프셋 제거 - 평균값 빼기
+        samples = samples - np.mean(samples)
+
+        window = np.hanning(len(samples))
+        windowed_data = samples * window
+
+        # 1. 기본 FFT 계산
+        fft = np.fft.fft(windowed_data)
+        spectrum = np.abs(fft[:len(fft)//2])
+        # spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+
+        # Mp3Player.py와 동일한 JSON 구조로 평균 스펙트럼 발송
         msg = String()
         msg.data = json.dumps({"spectrum": spectrum.tolist()})
         self.visualizer_pub.publish(msg)
-
- 
-
-
-
-    def apply_voice_emphasis(self, spectrum, freqs):
-        """음성 주파수 대역에 가중치 적용"""
-        weighted_spectrum = spectrum.copy()
+  
+   #   spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
         
-        # 음성 주파수 대역별 가중치 설정
-        voice_bands = {
-            (80, 300): 2.0,    # 기본 주파수 (남성 음성)
-            (150, 400): 2.5,   # 기본 주파수 (여성 음성)  
-            (300, 3400): 3.0,  # 음성 명료도 핵심 대역
-            (1000, 4000): 2.0, # 자음 구분 중요 대역
-            (4000, 8000): 1.5  # 고음역 명료도
-        }
-        
-        for (low_freq, high_freq), weight in voice_bands.items():
-            # 주파수 대역 인덱스 찾기
-            low_idx = np.searchsorted(freqs, low_freq)
-            high_idx = np.searchsorted(freqs, high_freq)
+
+        # log_spectrum = np.log10(spectrum + 1)
+        # log_spectrum /= np.log10(np.max(spectrum) + 1)  # 정규화
+         
+
+        # # 🆕 스펙트럼 버퍼에 추가
+        # self.spectrum_buffer.append(spectrum)
+        # self.spectrum_count += 1
+
+        # # 🆕 5개가 모이면 평균 계산 후 전송
+        # if self.spectrum_count >= 2:
+        #     # 평균 스펙트럼 계산
+        #     avg_spectrum = np.mean(self.spectrum_buffer, axis=0)
+        #     # 로그 스케일링 적용 (값이 0~수천까지 나올 수 있으므로)
+           
+        #     # # 🆕 0.5초에 한 번씩만 스펙트럼 값 10개 출력 (디버깅용)
+        #     # if should_print:
+        #     #     self.last_print_time = current_time
+        #     #     print("=== 평균 스펙트럼 값 (처음 10개) ===")
+        #     #     for i in range(min(10, len(avg_spectrum))):
+        #     #         print(f"[{i}] {avg_spectrum[i]:.6f}")
+        #     #         print(f"최소값: {np.min(avg_spectrum):.6f}")
+        #     #         print(f"최대값: {np.max(avg_spectrum):.6f}")
+        #     #     print("==============================")
             
-            # 인덱스 범위 체크
-            low_idx = max(0, min(low_idx, len(weighted_spectrum)-1))
-            high_idx = max(0, min(high_idx, len(weighted_spectrum)))
+        #     # Mp3Player.py와 동일한 JSON 구조로 평균 스펙트럼 발송
+        #     msg = String()
+        #     msg.data = json.dumps({"spectrum": avg_spectrum.tolist()})
+        #     self.visualizer_pub.publish(msg)
             
-            # 해당 대역에 가중치 적용
-            if high_idx > low_idx:
-                weighted_spectrum[low_idx:high_idx] *= weight
+        #     # 🆕 버퍼 초기화
+        #     self.spectrum_buffer = []
+        #     self.spectrum_count = 0
         
-        return weighted_spectrum
-
-    def dynamic_range_compression(self, spectrum):
-        """동적 범위 압축으로 음성 신호 강조"""
-        # 로그 스케일 변환으로 동적 범위 압축
-        log_spectrum = np.log1p(spectrum + 1e-10)  # 작은 값 추가로 log(0) 방지
-        
-        # 적응적 임계값 설정
-        threshold = np.percentile(log_spectrum, 75)
-        
-        # 임계값 이상 신호 강조
-        enhanced = np.where(log_spectrum > threshold, 
-                        log_spectrum * 1.5, 
-                        log_spectrum)
-        
-        # 원래 스케일로 복원
-        return np.expm1(enhanced)
-
-    def update_baseline(self, spectrum):
-        """실시간으로 베이스라인 업데이트"""
-        self.spectrum_history.append(spectrum.copy())
-        
-        if len(self.spectrum_history) > self.history_size:
-            self.spectrum_history.pop(0)
-        
-        # 최근 스펙트럼들의 최소값을 베이스라인으로 사용
-        if len(self.spectrum_history) >= 10:
-            stacked_spectrums = np.array(self.spectrum_history)
-            self.baseline_spectrum = np.percentile(stacked_spectrums, 20, axis=0)
-
-    def subtract_baseline(self, spectrum):
-        """베이스라인 차감으로 음성 신호 강조"""
-        if self.baseline_spectrum is not None:
-            # 베이스라인 차감
-            enhanced = spectrum - self.baseline_spectrum * 0.8
-            # 음수값 방지
-            enhanced = np.maximum(enhanced, spectrum * 0.1)
-            return enhanced
-        return spectrum
-
-    def smooth_spectrum(self, spectrum):
-        """스펙트럼 평활화"""
-        # 간단한 이동평균 필터 사용 (scipy 없이)
-        window_size = 3
-        smoothed = np.zeros_like(spectrum)
-        
-        for i in range(len(spectrum)):
-            start_idx = max(0, i - window_size // 2)
-            end_idx = min(len(spectrum), i + window_size // 2 + 1)
-            smoothed[i] = np.mean(spectrum[start_idx:end_idx])
-        
-        return smoothed
-
-    def auto_gain_control(self, spectrum):
-        """자동 게인 조정"""
-        # 현재 스펙트럼의 RMS 계산
-        current_rms = np.sqrt(np.mean(spectrum**2))
-        
-        # 목표 RMS 레벨
-        target_rms = 0.3
-        
-        if current_rms > 0:
-            gain_factor = target_rms / current_rms
-            # 과도한 증폭 방지
-            gain_factor = np.clip(gain_factor, 0.1, 3.0)
-            return spectrum * gain_factor
-        
-        return spectrum
-
-    def calculate_voice_strength(self, spectrum, freqs):
-        """음성 강도 지표 계산"""
-        # 음성 핵심 대역 (300-3400Hz) 에너지 비율
-        voice_band_mask = (freqs >= 300) & (freqs <= 3400)
-        
-        if np.any(voice_band_mask):
-            voice_energy = np.sum(spectrum[voice_band_mask])
-            total_energy = np.sum(spectrum)
-            
-            voice_ratio = voice_energy / total_energy if total_energy > 0 else 0
-            
-            # 0-1 범위로 정규화하고 비선형 강조
-            return np.power(voice_ratio, 0.7)  # 제곱근보다 약간 강한 강조
-        
-        return 0.0
+        # # 개별 스펙트럼은 더 이상 전송하지 않음
 
 
 
- 
+
+
+
+
+
 
 
 
@@ -843,74 +853,6 @@ class UserQuestion(Node):
 
 
 
-
-    # def play_effect_sound_waiting_2(self):
-    #     # 효과음 파일이 저장된 디렉토리 경로
-    #     effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting2"
-
-    #     # 디렉토리에서 MP3 파일 목록 가져오기
-    #     mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
-
-    #     if not mp3_files:
-    #         self.get_logger().info("No MP3 files found in the effects directory.")
-    #         return
-
-    #     # 랜덤으로 하나의 MP3 파일 선택
-    #     selected_file = random.choice(mp3_files)
-    #     selected_path = os.path.join(effects_dir, selected_file)
-
-    #     self.get_logger().info(f"Playing sound: {selected_file}")
-
-    #     # pygame을 사용하여 MP3 파일 재생
-    #     pygame.mixer.init()
-    #     pygame.mixer.music.load(selected_path)
-    #     pygame.mixer.music.play()
-        
- 
-
-
-    #     """대기 이미지를 랜덤으로 표시 (기존 이미지 출력 방식과 동일)"""
-    #     image_dir = "/home/nvidia/ros2_ws/emotion-face-react/public/waiting"
-        
-    #     if not os.path.exists(image_dir):
-    #         self.get_logger().error(f"Directory not found: {image_dir}")
-    #         return
-        
-    #     try:
-    #         # .jpeg 파일 목록 가져오기
-    #         jpeg_files = [f for f in os.listdir(image_dir) if f.lower().endswith('.jpeg')]
-            
-    #         if not jpeg_files:
-    #             self.get_logger().error("No JPEG files found in waiting_img directory.")
-    #             return
-
-    #         # 랜덤으로 하나의 이미지 선택
-    #         selected_file = random.choice(jpeg_files)
-    #         image_path = f"/waiting/{selected_file}"  # public 폴더 기준 경로
-            
-    #         self.get_logger().info(f"Displaying waiting image: {selected_file}")
-            
-    #         # 이미지 경로 전송 (기존 이미지 출력 방식과 동일)
-    #         msg = String()
-    #         msg.data = image_path
-    #         self.waiting_image_pub.publish(msg)
-            
-    #         # 3초간 이미지 표시
-    #         time.sleep(3)
-            
-    #         # 이미지 숨김
-    #         msg.data = ""
-    #         self.waiting_image_pub.publish(msg)
-            
-    #         self.get_logger().info("Waiting image display finished")
-
-    #     except Exception as e:
-    #         self.get_logger().error(f"Failed to display waiting image: {e}")
-
-
-
-
-
     def play_effect_sound_waiting_2(self):
         """대기 효과음 재생 및 effect_stop 토픽까지 이미지 표시"""
         # 효과음 파일이 저장된 디렉토리 경로
@@ -1105,17 +1047,26 @@ class UserQuestion(Node):
         def publish_spectrum():
             data = wf.readframes(chunk_size)
             while data:
-                samples = np.frombuffer(data, dtype=np.int16)
+                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
                 if wf.getnchannels() == 2:
                     samples = samples.reshape((-1, 2)).mean(axis=1)
+            
+                
+
                 fft = np.fft.fft(samples)
                 spectrum = np.abs(fft[:len(fft)//2])
-                spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+                #spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
                 msg = String()
                 msg.data = json.dumps({"spectrum": spectrum.tolist()})
                 self.waiting_spectrum_pub.publish(msg)
                 data = wf.readframes(chunk_size)
                 time.sleep(chunk_size / wf.getframerate())
+
+
+
+
+
+
 
         spectrum_thread = threading.Thread(target=publish_spectrum)
         spectrum_thread.start()
