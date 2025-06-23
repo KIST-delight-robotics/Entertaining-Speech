@@ -1,10 +1,12 @@
 
-
-//구름 스펙트럼
-
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
+
+
+
+
+
 
 // 중앙 일부만 사용
 function getCentralSlice(arr, ratio = 0.6) {
@@ -26,6 +28,24 @@ function downsampleArray(arr, targetLen) {
   }
   return result;
 }
+
+// function downsampleArray(arr, targetLen) {
+//   const result = [];
+//   const binSize = Math.floor(arr.length / targetLen);
+//   for (let i = 0; i < targetLen; i++) {
+//     const start = i * binSize;
+//     const end = (i + 1) * binSize;
+//     const bin = arr.slice(start, end);
+//     // 🆕 빈 배열 처리 추가
+//     result.push(bin.length > 0 ? Math.max(...bin) : 0);
+//   }
+//   return result;
+// }
+
+
+
+
+
 function SpectrumVisualizer() {
   // 🆕 분리된 스펙트럼 상태
   const [musicSpectrum, setMusicSpectrum] = useState([]);
@@ -38,6 +58,7 @@ function SpectrumVisualizer() {
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 400 });
   const [imageVisible, setImageVisible] = useState(false);
   const [canShowSpectrum, setCanShowSpectrum] = useState(false);
+
   // 🆕 방향 상태 추가
   const [soundDirection, setSoundDirection] = useState(0);
   const [screenFlipped, setScreenFlipped] = useState(false);
@@ -63,114 +84,19 @@ function SpectrumVisualizer() {
 
   // Mp3Player waiting 전용 상태 추가
   const [mp3WaitingSpectrum, setMp3WaitingSpectrum] = useState([]);
-  const [isMp3WaitingMode, setIsMp3WaitingMode] = useState(false);
+  const [isMp3WaitingMode , setIsMp3WaitingMode] = useState(false);
 
 
   // 기존 상태 변수들 다음에 추가
   const [isTransitioning, setIsTransitioning] = useState(false);
-
-
-
-
-
-
-
-
-
-
   
 
 
-  // 🆕 수정: 의존성 제거 및 안정적인 구독
-useEffect(() => {
-  const gifStatusListener = new ROSLIB.Topic({
-      ros: ros,
-      name: '/gif_status',
-      messageType: 'std_msgs/String'
-  });
-
-  gifStatusListener.subscribe((message) => {
-      console.log('🎬 GIF 상태 수신:', message.data);
-      
-      if (message.data === 'searching') {  // 🆕 UserQuestion.py와 일치
-          // 🆕 중복 실행 방지
-          setRecommendStatus(prevStatus => {
-              if (prevStatus !== 'searching') {
-                  // 🆕 availableGifs를 직접 참조 대신 상수 사용
-                  const gifs = ['1.gif', '2.gif', '3.gif', '4.gif', '5.gif', '6.gif'];
-                  const randomIndex = Math.floor(Math.random() * gifs.length);
-                  const selectedGif = gifs[randomIndex];
-                  
-                  console.log('🎬 선택된 gif:', selectedGif);
-                  setCurrentGif(selectedGif);
-                  setCurrentImage(null);
-                  setImageVisible(false);
-                  setCanShowSpectrum(false);
-                  
-                  return 'searching';
-              }
-              return prevStatus; // 이미 searching이면 변경하지 않음
-          });
-      } else if (message.data === 'done') {
-          setRecommendStatus(prevStatus => {
-              if (!musicPlaying) {
-                  setCurrentGif('');
-                  return 'done';
-              }
-              return prevStatus;
-          });
-      }
-  });
-
-  return () => {
-      console.log('🔌 gif_status 리스너 정리');
-      gifStatusListener.unsubscribe();
-  };
-}, []); // 🆕 의존성 배열을 비움 (한 번만 실행)
 
 
 
 
-  // 🆕 Mp3Player waiting 스펙트럼 구독 (/mp3_waiting_spectrum)
-  useEffect(() => {
-    const mp3WaitingSpectrumListener = new ROSLIB.Topic({
-      ros: ros,
-      name: '/mp3_waiting_spectrum',
-      messageType: 'std_msgs/String'
-    });
-    
-    mp3WaitingSpectrumListener.subscribe((message) => {
-      try {
-        const data = JSON.parse(message.data);
-        if (data.spectrum) {
-          console.log('🎵 Mp3Player waiting 스펙트럼 수신 - 독립 렌더링');
 
-          // 🆕 전환 상태 해제 (Mp3 스펙트럼이 정상적으로 도착했으므로)
-          setIsTransitioning(false);
-          
-          // 🆕 다른 모드들 완전히 비활성화
-          setIsMp3WaitingMode(true);
-          setIsWaitingImageMode(false);
-          setIsWaitingAudioMode(false);
-          setMusicPlaying(false);
-
-
-          
-          // 🆕 Mp3Player 전용 스무딩 적용
-          const smoothedData = applyMp3WaitingSmoothing(data.spectrum);
-          setMp3WaitingSpectrum(smoothedData);
-        }
-      } catch (e) {
-        console.error('Mp3Player waiting spectrum JSON parse error:', e);
-      }
-    });
-    
-    return () => {
-      mp3WaitingSpectrumListener.unsubscribe();
-      // 🆕 Mp3Player 전용 스무딩 상태 초기화
-      previousMp3WaitingSpectrumRef.current = [];
-    };
-  }, []);
 
 
 
@@ -236,6 +162,11 @@ useEffect(() => {
     return () => directionListener.unsubscribe();
   }, [isDirectionFixed, fixedDirection]);
 
+
+
+
+
+
   // 🆕 고정 각도 토픽 구독 (수정)
   useEffect(() => {
     const fixedDirectionListener = new ROSLIB.Topic({
@@ -268,33 +199,6 @@ useEffect(() => {
 
 
 
-  // // 1. 음악 상태 구독 - 타이밍 개선된 버전
-  // useEffect(() => {
-  //   const statusListener = new ROSLIB.Topic({
-  //       ros: ros,
-  //       name: '/music_status',
-  //       messageType: 'std_msgs/String'
-  //   });
-
-  //   statusListener.subscribe((message) => {
-  //       console.log('음악 상태 변경:', message.data);
-        
-  //       if (message.data === 'music_playing') {
-  //           setMusicPlaying(true);
-  //           setCanShowSpectrum(false); // 스펙트럼 표시 초기화
-            
-
-            
-  //       } else if (message.data === 'music_done') {
-  //           setMusicPlaying(false);
-  //           setRecommendStatus('done');
-  //           setCanShowSpectrum(false);
-  //           setImageVisible(false);
-  //       }
-  //   });
-
-  //   return () => statusListener.unsubscribe();
-  // }, []);
 
   // 🆕 음악 상태 구독 (Mp3Player waiting 지원)
   useEffect(() => {
@@ -364,6 +268,9 @@ useEffect(() => {
   };
 
 
+
+  //==========================================================
+
   // 🆕 마이크용 별도 스무딩 함수
   const previousMicSpectrumRef = useRef([]);
 
@@ -382,7 +289,7 @@ useEffect(() => {
       if (current > prev) {
         return prev * 0.6 + current * 0.4; // 더 빠른 반응
       } else {
-        return prev * 0.6 + current * 0.4; // 더 빠른 감쇠
+        return prev * 0.4 + current * 0.6; // 더 빠른 감쇠
       //   return prev * 0.5 + current * 0.5; // 더 빠른 반응
       // } else {
       //   return prev * 0.8 + current * 0.2; // 더 빠른 감쇠
@@ -393,7 +300,7 @@ useEffect(() => {
     previousMicSpectrumRef.current = [...smoothed];
     return smoothed;
   };
-
+  //==========================================================
 
   // 🆕 Mp3Player waiting 전용 스무딩 함수
   const previousMp3WaitingSpectrumRef = useRef([]);
@@ -423,29 +330,10 @@ useEffect(() => {
     return smoothed;
   };
 
+  //==========================================================
 
 
 
-
-
-  // // 2. 상황에 따라 구독 토픽 자동 변경
-  // useEffect(() => {
-  //   const topicName = musicPlaying ? '/audio_amplitude' : '/audio_visualizer';
-  //   const spectrumListener = new ROSLIB.Topic({
-  //     ros: ros,
-  //     name: topicName,
-  //     messageType: 'std_msgs/String'
-  //   });
-  //   spectrumListener.subscribe((message) => {
-  //     try {
-  //       const data = JSON.parse(message.data);
-  //       if (data.spectrum) setSpectrum(data.spectrum);
-  //     } catch (e) {
-  //       console.error('JSON parse error:', e);
-  //     }
-  //   });
-  //   return () => spectrumListener.unsubscribe();
-  // }, [musicPlaying]);
 
 
   // 🆕 음악 스펙트럼 구독
@@ -464,6 +352,7 @@ useEffect(() => {
         if (data.spectrum) {
           const smoothedData = applyAdvancedSmoothing(data.spectrum);
           setMusicSpectrum(smoothedData);
+          // setMusicSpectrum(data.spectrum);
         }
       } catch (e) {
         console.error('Music spectrum JSON parse error:', e);
@@ -472,9 +361,11 @@ useEffect(() => {
     
     return () => {
       musicSpectrumListener.unsubscribe();
-      previousSpectrumRef.current = [];
+    //  previousSpectrumRef.current = [];
     };
   }, [musicPlaying]);
+
+  //==========================================================
 
   // 🆕 마이크 스펙트럼 구독
   useEffect(() => {
@@ -490,8 +381,21 @@ useEffect(() => {
       try {
         const data = JSON.parse(message.data);
         if (data.spectrum) {
+          // 🆕 마이크 스펙트럼 값 웹 콘솔 출력
+        console.log('🎤 마이크 스펙트럼 수신:', {
+          length: data.spectrum.length,
+          first_10_values: data.spectrum.slice(0, 10),
+          max_value: Math.max(...data.spectrum),
+          min_value: Math.min(...data.spectrum),
+          average: data.spectrum.reduce((a, b) => a + b, 0) / data.spectrum.length,
+          timestamp: new Date().toLocaleTimeString()
+        });
+        
+
           const smoothedData = applyMicSmoothing(data.spectrum);
           setMicSpectrum(smoothedData);
+          //setMicSpectrum(data.spectrum);
+
         }
       } catch (e) {
         console.error('Mic spectrum JSON parse error:', e);
@@ -500,13 +404,14 @@ useEffect(() => {
     
     return () => {
       micSpectrumListener.unsubscribe();
-      previousMicSpectrumRef.current = [];
+      //previousMicSpectrumRef.current = [];
     };
   }, [musicPlaying]);
 
 
+    //==========================================================
 
-  // 🆕 대기 스펙트럼 구독 (/waiting_spectrum)
+  // 🆕 대기 스펙트럼 구독 - 대기 효과음1 (/waiting_spectrum)
   useEffect(() => {
     const waitingSpectrumListener = new ROSLIB.Topic({
       ros: ros,
@@ -535,6 +440,8 @@ useEffect(() => {
     };
   }, []);
 
+
+//==========================================================
 
 
   // 🆕 대기 이미지 구독 (/waiting_image)
@@ -592,7 +499,58 @@ useEffect(() => {
   }, []);
 
 
+    
+    
+  //==========================================================
 
+
+    // 🆕 Mp3Player waiting 스펙트럼 구독 (/mp3_waiting_spectrum)
+    useEffect(() => {
+      const mp3WaitingSpectrumListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/mp3_waiting_spectrum',
+        messageType: 'std_msgs/String'
+      });
+      
+      mp3WaitingSpectrumListener.subscribe((message) => {
+        try {
+          const data = JSON.parse(message.data);
+          if (data.spectrum) {
+            console.log('🎵 Mp3Player waiting 스펙트럼 수신 - 독립 렌더링');
+  
+            // 🆕 전환 상태 해제 (Mp3 스펙트럼이 정상적으로 도착했으므로)
+            setIsTransitioning(false);
+            
+            // 🆕 다른 모드들 완전히 비활성화
+            setIsMp3WaitingMode(true);
+            setIsWaitingImageMode(false);
+            setIsWaitingAudioMode(false);
+            setMusicPlaying(false);
+  
+  
+            
+            // 🆕 Mp3Player 전용 스무딩 적용
+            // const smoothedData = applyMp3WaitingSmoothing(data.spectrum);
+            const smoothedData = applyAdvancedSmoothing(data.spectrum);
+            
+            setMp3WaitingSpectrum(smoothedData);
+          }
+        } catch (e) {
+          console.error('Mp3Player waiting spectrum JSON parse error:', e);
+        }
+      });
+      
+      return () => {
+        mp3WaitingSpectrumListener.unsubscribe();
+        // 🆕 Mp3Player 전용 스무딩 상태 초기화
+        previousMp3WaitingSpectrumRef.current = [];
+      };
+    }, []);
+  
+
+    
+    
+  //==========================================================
 
 
   // 🆕 음악 스펙트럼 렌더링
@@ -609,46 +567,74 @@ useEffect(() => {
   canvas.height = height;
   
   // 음악용 배경
-  ctx.fillStyle = '#000';
+  ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, width, height);
   
   if (!canShowSpectrum) return;
   
   // 🆕 음악용 스펙트럼 처리 (기존 로직 유지)
-  const central = getCentralSlice(musicSpectrum, 0.6);
-  const numBars = 43;
-  let bars = downsampleArray(central, numBars);
-  bars = bars.map(v => Math.min(1, v * 10));
+  // const central = getCentralSlice(musicSpectrum, 0.6);
+  const numBars = 64;
+
+  const limitedSpectrum = musicSpectrum.slice(0,200); // 0~300 인덱스 추출
+  let bars = downsampleArray(limitedSpectrum, numBars);
+
+ // let bars = downsampleArray(musicSpectrum, numBars);
+  bars = bars.map(v => Math.min(1, v * 0.0000005));
   
-  const scale = Math.min(width / 1018, height / 240);
-  const barWidth = 10 * scale;
-  const gap = 14 * scale;
-  const maxBarHeight = 120 * scale;
-  const totalWidth = numBars * barWidth + (numBars - 1) * gap;
-  const xOffset = (width - totalWidth) / 2;
-  const centerY = height / 2;
-  
-  ctx.strokeStyle = '#ff00cc';
-  ctx.lineWidth = barWidth;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  
-  for (let i = 0; i < numBars; i++) {
-    const x = xOffset + i * (barWidth + gap) + barWidth / 2;
-    const barHeight = bars[i] * maxBarHeight;
-    ctx.beginPath();
-    ctx.moveTo(x, centerY - barHeight);
-    ctx.lineTo(x, centerY + barHeight);
-    ctx.stroke();
+
+
+   // 🆕 원형 스펙트럼 설정
+   const centerX = width / 2;
+   const centerY = height / 2;
+   const baseRadius = Math.min(width, height) * 0.2;    // 기본 원 반지름
+   const maxBarLength = Math.min(width, height) * 0.15; // 최대 바 길이
+ 
+   // 🆕 원형 스펙트럼 스타일 (검정색)
+   ctx.strokeStyle = '#000';
+   ctx.lineWidth = 4; // 바 두께
+   ctx.lineCap = 'round';
+   ctx.lineJoin = 'round';
+ 
+   // 🆕 원형 스펙트럼 그리기
+   for (let i = 0; i < numBars; i++) {
+     const angle = (i / numBars) * 2 * Math.PI; // 각도 계산
+     const barLength = bars[i] * maxBarLength;  // 바 길이
+     const radius = baseRadius + barLength;     // 최종 반지름
+     
+     // 바의 시작점 (기본 원 위의 점)
+     const startX = centerX + Math.cos(angle) * baseRadius;
+     const startY = centerY + Math.sin(angle) * baseRadius;
+     
+     // 바의 끝점 (확장된 반지름의 점)
+     const endX = centerX + Math.cos(angle) * radius;
+     const endY = centerY + Math.sin(angle) * radius;
+ 
+     // 바 그리기
+     ctx.beginPath();
+     ctx.moveTo(startX, startY);
+     ctx.lineTo(endX, endY);
+     ctx.stroke();
+
+
   }
 }, [musicSpectrum, musicPlaying, canvasSize, canShowSpectrum]);
+
+
+
+
+
+    
+    
+  //==========================================================
+
 
   // 🆕 마이크 스펙트럼 렌더링
   useEffect(() => {
     
     // if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode) return;
     // 🆕 Mp3Player waiting 모드도 마이크 스펙트럼 비활성화 조건에 추가
-    if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode || isMp3WaitingMode || isWaitingImageMode || isTransitioning) return;
+    if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode || isMp3WaitingMode  || isWaitingImageMode || isTransitioning) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     
@@ -677,23 +663,93 @@ useEffect(() => {
       console.log('🎵 마이크 모드 - 검색 중이므로 스펙트럼 숨김');
       return;
     }
+
+
+    // 🆕 추가 차단 조건들 - 모든 다른 모드에서 마이크 스펙트럼 완전 차단
+    if (isWaitingAudioMode) {
+      console.log('🎵 마이크 모드 - UserQuestion 대기 스펙트럼 중이므로 차단');
+      return;
+    }
+
+    if (isWaitingImageMode || waitingImageVisible) {
+      console.log('🎵 마이크 모드 - 대기 이미지 표시 중이므로 차단');
+      return;
+    }
+
+    if (isMp3WaitingMode) {
+      console.log('🎵 마이크 모드 - Mp3Player 대기 스펙트럼 중이므로 차단');
+      return;
+    }
+
+    if (musicPlaying || canShowSpectrum) {
+      console.log('🎵 마이크 모드 - 음악 재생/스펙트럼 중이므로 차단');
+      return;
+    }
+
+    if (imageVisible || currentImage) {
+      console.log('🎵 마이크 모드 - 이미지 표시 중이므로 차단');
+      return;
+    }
+
+    if (isTransitioning) {
+      console.log('🎵 마이크 모드 - 상태 전환 중이므로 차단');
+      return;
+    }
+
+
+
+
+
+
     
     // 🆕 마이크용 스펙트럼 처리 (나중에 다르게 커스터마이징 가능)
-    const central = getCentralSlice(micSpectrum, 0.6);
-    const numBars = 43;
-    let bars = downsampleArray(central, numBars);
-    bars = bars.map(v => Math.min(1, v * 10));
+    // const central = getCentralSlice(micSpectrum, 0.6);
+    const numBars = 20;
+    const limitedSpectrum = micSpectrum.slice(30, 180); // 0~300 인덱스 추출
+let bars = downsampleArray(limitedSpectrum, numBars);
+  // let bars = downsampleArray(micSpectrum, numBars);
+
+
+// bars = bars.map(v => v * 0.0000035);
+bars = bars.map(v => v * 0.000025);
+
+
+// // 최대값 2로 제한
+// bars = bars.map(v => Math.min(1, v * 0.00005));
+    
+
+
+
+
+
+const availableWidth = width * 0.9; // 화면 너비의 90% 사용
+const totalGaps = (numBars - 1);
     
     const scale = Math.min(width / 1018, height / 240);
-    const barWidth = 10 * scale;
-    const gap = 14 * scale;
-    const maxBarHeight = 120 * scale;
-    const totalWidth = numBars * barWidth + (numBars - 1) * gap;
+    // const barWidth = 10 * scale;
+    const barWidth = Math.max(2, availableWidth / (numBars + totalGaps * 0.5));
+    // const gap = 14 * scale;
+    const gap = Math.max(1, barWidth * 0.5); // 바 너비의 30%를 간격으로
+  // 🆕 바 두께 별도 설정 (가로길이는 기존 barWidth 유지)
+  const barThickness = barWidth * 0.8; // 바 두께를 기존의 60%로 설정
+
+      
+     const maxBarHeight = 150 * scale;
+
+     
+    // const maxBarHeight = height * 0.3;
+    // const totalWidth = numBars * barWidth + (numBars - 1) * gap;
+    const totalWidth = numBars * barWidth + totalGaps * gap;
     const xOffset = (width - totalWidth) / 2;
     const centerY = height / 2;
+
+
+
+
+
     
     ctx.strokeStyle = '#fff';
-    ctx.lineWidth = barWidth;
+    ctx.lineWidth = barThickness;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
@@ -706,168 +762,22 @@ useEffect(() => {
       ctx.lineTo(x, centerY + barHeight);
       ctx.stroke();
     }
+
+
+
+
+
+    
   }, [micSpectrum, musicPlaying, recommendStatus, canvasSize, triggerDetected, imageVisible, isWaitingImageMode, isTransitioning]);
 
-  // // 🆕 대기 스펙트럼 렌더링 (Mp3Player.py 스타일과 동일)
-  // useEffect(() => {
-  //   if (!isWaitingAudioMode || waitingSpectrum.length === 0) return;
-    
-  //   const canvas = canvasRef.current;
-  //   if (!canvas) return;
-    
-  //   const ctx = canvas.getContext('2d');
-  //   const { width, height } = canvasSize;
-    
-  //   canvas.width = width;
-  //   canvas.height = height;
-    
-  //   // 대기용 배경 (음악과 동일)
-  //   ctx.fillStyle = '#fff';
-  //   ctx.fillRect(0, 0, width, height);
-    
-  //   // 🆕 대기용 스펙트럼 처리 (음악용과 동일한 로직)
-  //   const central = getCentralSlice(waitingSpectrum, 0.6);
-  //   const numBars = 43;
-  //   let bars = downsampleArray(central, numBars);
-  //   bars = bars.map(v => Math.min(1, v * 10));
-    
-  //   const scale = Math.min(width / 1018, height / 240);
-  //   const barWidth = 10 * scale;
-  //   const gap = 14 * scale;
-  //   const maxBarHeight = 120 * scale;
-  //   const totalWidth = numBars * barWidth + (numBars - 1) * gap;
-  //   const xOffset = (width - totalWidth) / 2;
-  //   const centerY = height / 2;
-    
-  //   // 대기 모드 전용 색상 (주황색으로 구분)
-  //   ctx.strokeStyle = '#ff9500';
-  //   ctx.lineWidth = barWidth;
-  //   ctx.lineCap = 'round';
-  //   ctx.lineJoin = 'round';
-    
-  //   for (let i = 0; i < numBars; i++) {
-  //     const x = xOffset + i * (barWidth + gap) + barWidth / 2;
-  //     const barHeight = bars[i] * maxBarHeight;
-  //     ctx.beginPath();
-  //     ctx.moveTo(x, centerY - barHeight);
-  //     ctx.lineTo(x, centerY + barHeight);
-  //     ctx.stroke();
-  //   }
-  // }, [waitingSpectrum, isWaitingAudioMode, canvasSize]);
+ 
 
 
-  // // 🆕 대기 스펙트럼 렌더링 (원형 버전)
-  // useEffect(() => {
-  //   if (!isWaitingAudioMode || waitingSpectrum.length === 0) return;
-    
-  //   const canvas = canvasRef.current;
-  //   if (!canvas) return;
-    
-  //   const ctx = canvas.getContext('2d');
-  //   const { width, height } = canvasSize;
-    
-  //   canvas.width = width;
-  //   canvas.height = height;
-    
-  //   // 대기용 흰 배경
-  //   ctx.fillStyle = '#fff';
-  //   ctx.fillRect(0, 0, width, height);
-    
-  //   // 🆕 원형 스펙트럼 설정
-  //   const centerX = width / 2;
-  //   const centerY = height / 2;
-    
-  //   // 화면의 더 큰 비율 사용 (화면을 꽉 차게)
-  //   const screenSize = Math.min(width, height);
-  //   const baseRadius = Math.min(width, height) * 0.2; // 기본 반지름 (화면 크기의 20%)
-  //   const maxBarLength = Math.min(width, height) * 0.3; // 최대 바 길이 (화면 크기의 25%)
-    
-  //   // 스펙트럼 데이터 처리
-  //   const central = getCentralSlice(waitingSpectrum, 0.6);
-  //   const numBars = 64; // 원형에서는 더 많은 바를 사용 (360도를 균등 분할)
-  //   let bars = downsampleArray(central, numBars);
-  //   bars = bars.map(v => Math.min(1, v * 8)); // 강도 조절
-    
-  //   // 원형 렌더링
-  //   ctx.strokeStyle = '#333333'; // 흰 배경에 맞는 어두운 색상
-  //   ctx.lineWidth = Math.max(2, Math.min(width, height) * 0.008); // 화면 크기에 비례한 선 두께
-  //   ctx.lineCap = 'round';
-    
-  //   // for (let i = 0; i < numBars; i++) {
-  //   //   // 각도 계산 (360도를 균등 분할)
-  //   //   const angle = (i / numBars) * 2 * Math.PI;
-      
-  //   //   // 바의 길이 계산
-  //   //   const barLength = bars[i] * maxBarLength;
-      
-  //   //   // 시작점과 끝점 계산
-  //   //   const startX = centerX + Math.cos(angle) * baseRadius;
-  //   //   const startY = centerY + Math.sin(angle) * baseRadius;
-  //   //   const endX = centerX + Math.cos(angle) * (baseRadius + barLength);
-  //   //   const endY = centerY + Math.sin(angle) * (baseRadius + barLength);
-      
-  //   //   // 바 그리기
-  //   //   ctx.beginPath();
-  //   //   ctx.moveTo(startX, startY);
-  //   //   ctx.lineTo(endX, endY);
-  //   //   ctx.stroke();
-  //   // }
-    
-
-  //   // 🆕 간단한 부드러운 원형 스펙트럼
-  //   ctx.beginPath();
-
-  //   // 외곽 곡선
-  //   for (let i = 0; i <= numBars; i++) {
-  //     const angle = (i % numBars / numBars) * 2 * Math.PI;
-  //     const barLength = bars[i % numBars] * maxBarLength;
-  //     const radius = baseRadius + barLength;
-      
-  //     const x = centerX + Math.cos(angle) * radius;
-  //     const y = centerY + Math.sin(angle) * radius;
-      
-  //     if (i === 0) {
-  //       ctx.moveTo(x, y);
-  //     } else {
-  //       ctx.lineTo(x, y);
-  //     }
-  //   }
-
-  //   // 내부 원 그리기 (역방향)
-  //   for (let i = numBars; i >= 0; i--) {
-  //     const angle = (i / numBars) * 2 * Math.PI;
-  //     const x = centerX + Math.cos(angle) * baseRadius;
-  //     const y = centerY + Math.sin(angle) * baseRadius;
-  //     ctx.lineTo(x, y);
-  //   }
-
-  //   ctx.closePath();
-
-  //   // 🆕 영역 채우기
-  //   ctx.fillStyle = '#333333';
-  //   ctx.fill();
-
-  //   // 🆕 부드러운 테두리
-  //   ctx.strokeStyle = '#333333';
-  //   ctx.lineWidth = Math.max(2, Math.min(width, height) * 0.004);
-  //   ctx.lineJoin = 'round';
-  //   ctx.lineCap = 'round';
-  //   ctx.stroke();
-
-
-
-
-    
-  //   // 🆕 중앙 원 그리기 (선택사항 - 시각적 완성도 향상)
-  //   ctx.beginPath();
-  //   ctx.arc(centerX, centerY, baseRadius * 0.1, 0, 2 * Math.PI);
-  //   ctx.fillStyle = '#333333';
-  //   ctx.fill();
-    
-  // }, [waitingSpectrum, isWaitingAudioMode, canvasSize]);
 
 
 //===============================================================================================
+
+
 
   // 🆕 UserQuestion 대기 스펙트럼 렌더링 (개선된 부드러운 버전) - UserQuestion 노드
   useEffect(() => {
@@ -884,129 +794,65 @@ useEffect(() => {
     canvas.width = width;
     canvas.height = height;
     
-    // 🆕 잔상 효과를 위한 반투명 배경 (완전히 지우지 않음)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'; // 30% 투명도로 이전 프레임을 서서히 지움
-    ctx.fillRect(0, 0, width, height);
+      // 🆕 배경색 흰색으로 변경
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, width, height);
+
     
-    // 원형 스펙트럼 설정
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const screenSize = Math.min(width, height);
-    const baseRadius = Math.min(width, height) * 0.2;
-    const maxBarLength = Math.min(width, height) * 0.15;
-    
-    // 스펙트럼 데이터 처리
-    const central = getCentralSlice(waitingSpectrum, 0.6);
     const numBars = 64;
-    let bars = downsampleArray(central, numBars);
-    bars = bars.map(v => Math.min(1, v * 8));
-
-    // 🆕 그림자 효과 설정
-    ctx.shadowColor = 'rgba(51, 51, 51, 0.4)'; // 반투명 그림자[3][6]
-    ctx.shadowBlur = 8; // 부드러운 블러 효과[3]
-    ctx.shadowOffsetX = 2; // 약간의 수평 오프셋[3]
-    ctx.shadowOffsetY = 2; // 약간의 수직 오프셋[3]
-
-    // 🆕 매우 부드러운 베지어 곡선 스펙트럼
-    ctx.beginPath();
-
-    // 외곽 곡선 (베지어 곡선으로 부드럽게 연결)
-    const points = [];
-    for (let i = 0; i <= numBars; i++) {
-      const angle = (i % numBars / numBars) * 2 * Math.PI;
-      const barLength = bars[i % numBars] * maxBarLength;
-      const radius = baseRadius + barLength;
-      
-      const x = centerX + Math.cos(angle) * radius;
-      const y = centerY + Math.sin(angle) * radius;
-      points.push({ x, y, angle });
-    }
-
-    // 첫 번째 점으로 이동
-    ctx.moveTo(points[0].x, points[0].y);
-
-    // 🆕 베지어 곡선으로 부드럽게 연결
-    for (let i = 1; i < points.length; i++) {
-      const current = points[i];
-      const previous = points[i - 1];
-      const next = points[(i + 1) % points.length];
-      
-      // 제어점 계산 (더 부드러운 곡선을 위해)
-      const smoothingFactor = 0.2;
-      const cp1x = previous.x + (current.x - previous.x) * smoothingFactor;
-      const cp1y = previous.y + (current.y - previous.y) * smoothingFactor;
-      const cp2x = current.x - (next.x - current.x) * smoothingFactor;
-      const cp2y = current.y - (next.y - current.y) * smoothingFactor;
-      
-      ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
-    }
-
-    // 내부 원으로 부드럽게 연결
-    const innerPoints = [];
-    for (let i = numBars; i >= 0; i--) {
-      const angle = (i / numBars) * 2 * Math.PI;
-      const x = centerX + Math.cos(angle) * baseRadius;
-      const y = centerY + Math.sin(angle) * baseRadius;
-      innerPoints.push({ x, y });
-    }
-
-    // 내부 원도 베지어 곡선으로 부드럽게
-    for (let i = 0; i < innerPoints.length; i++) {
-      const current = innerPoints[i];
-      const next = innerPoints[(i + 1) % innerPoints.length];
-      
-      if (i === 0) {
-        ctx.lineTo(current.x, current.y);
-      } else {
-        const smoothingFactor = 0.15;
-        const cp1x = current.x + (next.x - current.x) * smoothingFactor;
-        const cp1y = current.y + (next.y - current.y) * smoothingFactor;
-        ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
-      }
-    }
-
-    ctx.closePath();
-
-    // 🆕 그라데이션 채우기 (더 부드러운 시각 효과)
-    const gradient = ctx.createRadialGradient(
-      centerX, centerY, baseRadius,
-      centerX, centerY, baseRadius + maxBarLength
-    );
-    gradient.addColorStop(0, 'rgba(82, 82, 82, 0.8)');
-    gradient.addColorStop(0.7, 'rgba(82, 82, 82, 0.6)');
-    gradient.addColorStop(1, 'rgba(82, 82, 82, 0.3)');
+    const limitedSpectrum = waitingSpectrum.slice(10, 200); // 0~300 인덱스 추출
+    let bars = downsampleArray(limitedSpectrum, numBars);
+    bars = bars.map(v => Math.min(1, v * 0.0000005));
     
-    ctx.fillStyle = gradient;
-    ctx.fill();
 
-    // // 🆕 매우 부드러운 테두리
-    // ctx.strokeStyle = 'rgba(51, 51, 51, 0.7)';
-    // ctx.lineWidth = Math.max(1, Math.min(width, height) * 0.002);
-    // ctx.lineJoin = 'round';
-    // ctx.lineCap = 'round';
-    // ctx.stroke();
-
-    // 그림자 효과 제거 (다음 그리기 작업에 영향 없도록)
-    ctx.shadowColor = 'transparent';
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
-
-    // 🆕 중앙 원 제거 (요청사항에 따라 삭제)
-    // ctx.beginPath();
-    // ctx.arc(centerX, centerY, baseRadius * 0.1, 0, 2 * Math.PI);
-    // ctx.fillStyle = '#333333';
-    // ctx.fill();
     
+
+
+// 🆕 원형 스펙트럼 설정
+const centerX = width / 2;
+const centerY = height / 2;
+const baseRadius = Math.min(width, height) * 0.2;    // 기본 원 반지름
+const maxBarLength = Math.min(width, height) * 0.15; // 최대 바 길이
+
+// 🆕 원형 스펙트럼 스타일 (검정색)
+ctx.strokeStyle = '#000';
+ctx.lineWidth = 4; // 바 두께
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
+
+// 🆕 원형 스펙트럼 그리기
+for (let i = 0; i < numBars; i++) {
+  const angle = (i / numBars) * 2 * Math.PI; // 각도 계산
+  const barLength = bars[i] * maxBarLength;  // 바 길이
+  const radius = baseRadius + barLength;     // 최종 반지름
+  
+  // 바의 시작점 (기본 원 위의 점)
+  const startX = centerX + Math.cos(angle) * baseRadius;
+  const startY = centerY + Math.sin(angle) * baseRadius;
+  
+  // 바의 끝점 (확장된 반지름의 점)
+  const endX = centerX + Math.cos(angle) * radius;
+  const endY = centerY + Math.sin(angle) * radius;
+
+  // 바 그리기
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.lineTo(endX, endY);
+  ctx.stroke();
+    
+}
   }, [waitingSpectrum, isWaitingAudioMode, canvasSize]);
 
 
-//===============================================================================================
 
-  
-  // 🆕 Mp3Player waiting 스펙트럼 렌더링 (현재는 UserQuestion과 동일, 나중에 커스터마이징 가능)
+
+
+
+ //--------------------------------------------------------------------------------------------------------- 
+ // 🆕 Mp3Player waiting 스펙트럼 렌더링 (현재는 UserQuestion과 동일, 나중에 커스터마이징 가능)
+ //--------------------------------------------------------------------------------------------------------- 
   useEffect(() => {
-    if (!isMp3WaitingMode || mp3WaitingSpectrum.length === 0) return;
+    if (!isMp3WaitingMode  || mp3WaitingSpectrum.length === 0) return;
     
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1017,155 +863,81 @@ useEffect(() => {
     canvas.width = width;
     canvas.height = height;
     
-    // 🎨 Mp3Player waiting용 배경 (나중에 차별화 가능)
-    ctx.fillStyle = 'rgb(255, 255, 255)';
+    // 🆕 배경색 흰색으로 변경
+    ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, width, height);
+
+
+
+    // // 🎨 Mp3Player waiting용 배경 (나중에 차별화 가능)
+    // ctx.fillStyle = 'rgb(255, 255, 255)';
+    // ctx.fillRect(0, 0, width, height);
     
-    // 원형 스펙트럼 설정 (UserQuestion waiting과 현재는 동일)
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const baseRadius = Math.min(width, height) * 0.2;
-    const maxBarLength = Math.min(width, height) * 0.15;
+    // // 원형 스펙트럼 설정 (UserQuestion waiting과 현재는 동일)
+    // const centerX = width / 2;
+    // const centerY = height / 2;
+    // const baseRadius = Math.min(width, height) * 0.2;
+    // const maxBarLength = Math.min(width, height) * 0.15;
     
-    // 스펙트럼 데이터 처리 (동일한 방식)
-    const central = getCentralSlice(mp3WaitingSpectrum, 0.6);
+    // // 스펙트럼 데이터 처리 (동일한 방식)
+    // const central = getCentralSlice(mp3WaitingSpectrum, 0.6);
     const numBars = 64;
-    let bars = downsampleArray(central, numBars);
-    bars = bars.map(v => Math.min(1, v * 8));
+    const limitedSpectrum = mp3WaitingSpectrum.slice(10, 200); // 0~300 인덱스 추출
+    let bars = downsampleArray(limitedSpectrum, numBars);
+    bars = bars.map(v => Math.min(1, v * 0.0000005));
 
-    // 🎨 Mp3Player waiting용 그림자 효과 (나중에 다른 색상으로 변경 가능)
-    ctx.shadowColor = 'rgba(255, 100, 100, 0.4)'; // 빨간색 계열 그림자로 차별화
-    ctx.shadowBlur = 8;
-    ctx.shadowOffsetX = 2;
-    ctx.shadowOffsetY = 2;
 
-    // 베지어 곡선 스펙트럼 (UserQuestion waiting과 동일한 방식)
-    ctx.beginPath();
 
-    const points = [];
-    for (let i = 0; i <= numBars; i++) {
-      const angle = (i % numBars / numBars) * 2 * Math.PI;
-      const barLength = bars[i % numBars] * maxBarLength;
-      const radius = baseRadius + barLength;
-      
-      const x = centerX + Math.cos(angle) * radius;
-      const y = centerY + Math.sin(angle) * radius;
-      points.push({ x, y, angle });
-    }
+// 🆕 원형 스펙트럼 설정
+const centerX = width / 2;
+const centerY = height / 2;
+const baseRadius = Math.min(width, height) * 0.2;    // 기본 원 반지름
+const maxBarLength = Math.min(width, height) * 0.15; // 최대 바 길이
 
-    ctx.moveTo(points[0].x, points[0].y);
+// 🆕 원형 스펙트럼 스타일 (검정색)
+ctx.strokeStyle = '#000';
+ctx.lineWidth = 4; // 바 두께
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
 
-    for (let i = 1; i < points.length; i++) {
-      const current = points[i];
-      const previous = points[i - 1];
-      const next = points[(i + 1) % points.length];
-      
-      const smoothingFactor = 0.2;
-      const cp1x = previous.x + (current.x - previous.x) * smoothingFactor;
-      const cp1y = previous.y + (current.y - previous.y) * smoothingFactor;
-      const cp2x = current.x - (next.x - current.x) * smoothingFactor;
-      const cp2y = current.y - (next.y - current.y) * smoothingFactor;
-      
-      ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
-    }
+// 🆕 원형 스펙트럼 그리기
+for (let i = 0; i < numBars; i++) {
+  const angle = (i / numBars) * 2 * Math.PI; // 각도 계산
+  const barLength = bars[i] * maxBarLength;  // 바 길이
+  const radius = baseRadius + barLength;     // 최종 반지름
+  
+  // 바의 시작점 (기본 원 위의 점)
+  const startX = centerX + Math.cos(angle) * baseRadius;
+  const startY = centerY + Math.sin(angle) * baseRadius;
+  
+  // 바의 끝점 (확장된 반지름의 점)
+  const endX = centerX + Math.cos(angle) * radius;
+  const endY = centerY + Math.sin(angle) * radius;
 
-    // 내부 원 처리 (동일)
-    const innerPoints = [];
-    for (let i = numBars; i >= 0; i--) {
-      const angle = (i / numBars) * 2 * Math.PI;
-      const x = centerX + Math.cos(angle) * baseRadius;
-      const y = centerY + Math.sin(angle) * baseRadius;
-      innerPoints.push({ x, y });
-    }
-
-    for (let i = 0; i < innerPoints.length; i++) {
-      const current = innerPoints[i];
-      const next = innerPoints[(i + 1) % innerPoints.length];
-      
-      if (i === 0) {
-        ctx.lineTo(current.x, current.y);
-      } else {
-        const smoothingFactor = 0.15;
-        const cp1x = current.x + (next.x - current.x) * smoothingFactor;
-        const cp1y = current.y + (next.y - current.y) * smoothingFactor;
-        ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
-      }
-    }
-
-    ctx.closePath();
-
-    // 🎨 Mp3Player waiting용 그라데이션 (나중에 다른 색상으로 변경 가능)
-    const gradient = ctx.createRadialGradient(
-      centerX, centerY, baseRadius,
-      centerX, centerY, baseRadius + maxBarLength
-    );
-    gradient.addColorStop(0, 'rgba(82, 82, 82, 0.8)'); // 빨간색 계열로 차별화
-    gradient.addColorStop(0.7, 'rgba(82, 82, 82,0.6)');
-    gradient.addColorStop(1, 'rgba(82, 82, 82, 0.3)');
+  // 바 그리기
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.lineTo(endX, endY);
+  ctx.stroke();
     
-    ctx.fillStyle = gradient;
-    ctx.fill();
-
-    // 그림자 효과 제거
-    ctx.shadowColor = 'transparent';
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
-    
-  }, [mp3WaitingSpectrum, isMp3WaitingMode, canvasSize]);
+}
 
 
 
 
-
-
-
-
+  
 
 
   useEffect(() => {
     const updateCanvasSize = () => {
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
-
-      // // 🆕 대기 모드일 때는 화면 전체 사용
-      // if (isWaitingAudioMode) {
-      //   setCanvasSize({ 
-      //     width: viewportWidth, 
-      //     height: viewportHeight 
-      //   });
-      //   return;
-      // }
-
-
-      // 🆕 두 종류의 대기 모드 모두 고려
-      if (isWaitingAudioMode || isMp3WaitingMode) {
-        setCanvasSize({ 
-          width: viewportWidth, 
-          height: viewportHeight 
-        });
-        return;
-      }
-
-    
-        
-      // 오디오 스펙트럼의 원본 비율 (4.24:1)
-      const spectrumAspectRatio = 1018 / 240; // 4.24
-      
-      // 가상 해상도 설정 (스펙트럼이 적당한 크기가 되도록)
-      const virtualWidth = 1200;
-      const virtualHeight = virtualWidth / spectrumAspectRatio; // 283px
-      
-      // viewport에 맞춰 스케일 계산 (비율 유지)
-      const scaleX = viewportWidth / virtualWidth;
-      const scaleY = viewportHeight / virtualHeight;
-      const scale = Math.min(scaleX, scaleY) * 0.9; // 80%에서 60%로 변경 (더 많은 여백)
-      
-      // 실제 캔버스 크기 계산
-      const canvasWidth = virtualWidth * scale;
-      const canvasHeight = virtualHeight * scale;
-      
-      setCanvasSize({ width: canvasWidth, height: canvasHeight });
+  
+      // 🔧 모든 모드에서 전체화면 사용 (musicPlaying 조건 제거)
+      setCanvasSize({ 
+        width: viewportWidth, 
+        height: viewportHeight 
+      });
     };
   
     updateCanvasSize();
@@ -1173,6 +945,9 @@ useEffect(() => {
     
     return () => window.removeEventListener('resize', updateCanvasSize);
   }, [isWaitingAudioMode, isMp3WaitingMode]);
+  
+
+
 
 
 
@@ -1240,6 +1015,9 @@ useEffect(() => {
     };
 }, [musicPlaying]);
 
+
+
+
 // 5. 이미지 표시 컴포넌트
 const renderImage = () => {
     if (!currentImage || !imageVisible){
@@ -1304,52 +1082,8 @@ const renderImage = () => {
 };
 
 
-// // renderImage 함수 다음에 이 함수를 새로 추가
-// const renderGif = () => {
-//   // 이미지가 표시 중일 때는 GIF 절대 표시하지 않음
-//   if (currentImage && imageVisible) {
-//       return null;
-//   }
-  
-//   // searching 상태이고 GIF가 선택되었을 때만 표시
-//   if (recommendStatus === 'searching' && currentGif) {
-//       return (
-//           <div style={{
-//               position: 'absolute',
-//               top: '50%',
-//               left: '50%',
-//               transform: 'translate(-50%, -50%)',
-//               zIndex: 5, // 이미지보다 낮은 우선순위로 변경
-//               backgroundColor: '#fff',
-//               width: `${canvasSize.width}px`,
-//               height: `${canvasSize.height}px`,
-//               display: 'flex',
-//               justifyContent: 'center',
-//               alignItems: 'center'
-//           }}>
-//               <img 
-//                   src={`/${currentGif}`}
-//                   alt="추천 중..." 
-//                   style={{
-//                       maxWidth: '500%',
-//                       maxHeight: '500%',
-//                       objectFit: 'contain'
-//                   }}
-//                   onLoad={() => {
-//                       console.log('🎬 GIF 로드 완료:', currentGif);
-//                   }}
-//                   onError={(e) => {
-//                       console.error('🎬 GIF 로드 실패:', currentGif);
-//                   }}
-//               />
-//           </div>
-//       );
-//   }
-  
-//   return null;
-// };
 
-// 🆕 renderGif 함수를 완전히 대체하는 대기 이미지 렌더링 함수
+// 🆕 renderImage 함수
 const renderWaitingImage = () => {
   if (!waitingImage || !waitingImageVisible) {
     return null;
@@ -1485,43 +1219,27 @@ const getScreenTransform = () => {
       <canvas 
         ref={canvasRef}
         style={{
-     // Mp3 waiting 모드도 화면 전체 사용
-    width: (isWaitingAudioMode || isMp3WaitingMode) ? '100vw' : `${canvasSize.width}px`,
-    height: (isWaitingAudioMode || isMp3WaitingMode) ? '100vh' : `${canvasSize.height}px`,
-    position: (isWaitingAudioMode || isMp3WaitingMode) ? 'fixed' : 'relative',
-    top: (isWaitingAudioMode || isMp3WaitingMode) ? '0' : 'auto',
-    left: (isWaitingAudioMode || isMp3WaitingMode) ? '0' : 'auto',
-    zIndex: (isWaitingAudioMode || isMp3WaitingMode) ? 10 : 'auto',
-              border: 'none',
-              outline: 'none',
-              display: 'block',
-              WebkitTapHighlightColor: 'transparent'
-
-          // // 🆕 대기 모드일 때는 화면 전체, 다른 모드일 때는 기존 크기
-          // width: isWaitingAudioMode ? '100vw' : `${canvasSize.width}px`,
-          // height: isWaitingAudioMode ? '100vh' : `${canvasSize.height}px`,
-          // // 🆕 대기 모드일 때는 절대 위치로 화면 전체 덮기
-          // position: isWaitingAudioMode ? 'fixed' : 'relative',
-          // top: isWaitingAudioMode ? '0' : 'auto',
-          // left: isWaitingAudioMode ? '0' : 'auto',
-          // zIndex: isWaitingAudioMode ? 10 : 'auto',
-          // // 🆕 테두리 완전 제거
-          // border: 'none',
-          // outline: 'none',
-          // display: 'block',
-          // // 🆕 모바일 터치 하이라이트 제거
-          // WebkitTapHighlightColor: 'transparent'
-
-
-        }}
+      // 🔧 모든 모드에서 화면 전체 사용
+      width: '100vw',
+      height: '100vh',
+      position: 'fixed',
+      top: '0',
+      left: '0',
+      zIndex: 10,
+      border: 'none',
+      outline: 'none',
+      display: 'block',
+      WebkitTapHighlightColor: 'transparent'
+    }}
       />
     )}
+
+
 
       {/* 이미지 표시 - 음악 재생 중에만 */}
       {musicPlaying && renderImage()}
       
-      {/* 추천 중일 때 gif 오버레이 */}
-      {/* {renderGif()} */}
+      {/* 대기중 이미지 표시 */}
       {renderWaitingImage()}
  
 
@@ -1545,28 +1263,5 @@ const getScreenTransform = () => {
 }
 
 export default SpectrumVisualizer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
