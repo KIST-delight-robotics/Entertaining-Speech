@@ -1,5 +1,6 @@
 
 
+
 #0618 effect stop 추가 + pdf로 정보 찾기 + vector store!!
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
@@ -52,9 +53,9 @@ class Mp3Recommender(Node):
         self.sbert_model = SentenceTransformer("BAAI/bge-m3", device=device)
 
         # MP3 인덱스/메타
-        self.mp3_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus.db"
-        self.mp3_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_plus.bin"
-        self.mp3_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus"
+        self.mp3_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus.db"
+        self.mp3_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp3_new_plus.bin"
+        self.mp3_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus"
         
         # 이미지 인덱스/메타
         self.image_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus.db"
