@@ -705,13 +705,19 @@ useEffect(() => {
     // 🆕 마이크용 스펙트럼 처리 (나중에 다르게 커스터마이징 가능)
     // const central = getCentralSlice(micSpectrum, 0.6);
     const numBars = 20;
-    const limitedSpectrum = micSpectrum.slice(30, 180); // 0~300 인덱스 추출
+    const limitedSpectrum = micSpectrum.slice(80, 180); // 0~300 인덱스 추출
 let bars = downsampleArray(limitedSpectrum, numBars);
   // let bars = downsampleArray(micSpectrum, numBars);
 
 
 // bars = bars.map(v => v * 0.0000035);
-bars = bars.map(v => v * 0.000025);
+
+// bars = bars.map(v => v * 0.0005);
+// 🆕 바 값 정규화로 더 안정적인 높이 제어
+bars = bars.map(v => {
+  const normalizedValue = v * 0.00035;
+  return Math.min(7, normalizedValue); // 최대값 1로 제한
+});
 
 
 // // 최대값 2로 제한
@@ -725,7 +731,7 @@ bars = bars.map(v => v * 0.000025);
 const availableWidth = width * 0.9; // 화면 너비의 90% 사용
 const totalGaps = (numBars - 1);
     
-    const scale = Math.min(width / 1018, height / 240);
+    const scale = Math.min(width / 2560, height / 1600);
     // const barWidth = 10 * scale;
     const barWidth = Math.max(2, availableWidth / (numBars + totalGaps * 0.5));
     // const gap = 14 * scale;
@@ -734,7 +740,7 @@ const totalGaps = (numBars - 1);
   const barThickness = barWidth * 0.8; // 바 두께를 기존의 60%로 설정
 
       
-     const maxBarHeight = 150 * scale;
+     const maxBarHeight = 100 * scale;
 
      
     // const maxBarHeight = height * 0.3;
@@ -797,7 +803,20 @@ const totalGaps = (numBars - 1);
       // 🆕 배경색 흰색으로 변경
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, width, height);
-
+    // // 🆕 잔상 효과를 위한 반투명 배경 (완전히 지우지 않음)
+    // ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'; // 30% 투명도로 이전 프레임을 서서히 지움
+    // ctx.fillRect(0, 0, width, height);
+    
+    // // 원형 스펙트럼 설정
+    // const centerX = width / 2;
+    // const centerY = height / 2;
+    // const screenSize = Math.min(width, height);
+    // const baseRadius = Math.min(width, height) * 0.2;
+    // const maxBarLength = Math.min(width, height) * 0.15;
+    
+    // 스펙트럼 데이터 처리
+    // const central = getCentralSlice(waitingSpectrum, 0.6);
+    
     
     const numBars = 64;
     const limitedSpectrum = waitingSpectrum.slice(10, 200); // 0~300 인덱스 추출
@@ -921,6 +940,107 @@ for (let i = 0; i < numBars; i++) {
   ctx.stroke();
     
 }
+
+
+  //   // 🎨 Mp3Player waiting용 그림자 효과 (나중에 다른 색상으로 변경 가능)
+  //   ctx.shadowColor = 'rgba(51, 51, 51, 0.4)'; // 반투명 그림자[3][6]
+  //   ctx.shadowBlur = 8;
+  //   ctx.shadowOffsetX = 2;
+  //   ctx.shadowOffsetY = 2;
+
+
+
+
+  //   // 베지어 곡선 스펙트럼 (UserQuestion waiting과 동일한 방식)
+  //   ctx.beginPath();
+
+  //   const points = [];
+  //   for (let i = 0; i <= numBars; i++) {
+  //     const angle = (i % numBars / numBars) * 2 * Math.PI;
+  //     const barLength = bars[i % numBars] * maxBarLength;
+  //     const radius = baseRadius + barLength;
+      
+  //     const x = centerX + Math.cos(angle) * radius;
+  //     const y = centerY + Math.sin(angle) * radius;
+  //     points.push({ x, y, angle });
+  //   }
+
+  //   ctx.moveTo(points[0].x, points[0].y);
+
+  //   for (let i = 1; i < points.length; i++) {
+  //     const current = points[i];
+  //     const previous = points[i - 1];
+  //     const next = points[(i + 1) % points.length];
+      
+  //     const smoothingFactor = 0.2;
+  //     const cp1x = previous.x + (current.x - previous.x) * smoothingFactor;
+  //     const cp1y = previous.y + (current.y - previous.y) * smoothingFactor;
+  //     const cp2x = current.x - (next.x - current.x) * smoothingFactor;
+  //     const cp2y = current.y - (next.y - current.y) * smoothingFactor;
+      
+  //     ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
+  //   }
+
+
+
+
+  //   // 내부 원 처리 (동일)
+  //   const innerPoints = [];
+  //   for (let i = numBars; i >= 0; i--) {
+  //     const angle = (i / numBars) * 2 * Math.PI;
+  //     const x = centerX + Math.cos(angle) * baseRadius;
+  //     const y = centerY + Math.sin(angle) * baseRadius;
+  //     innerPoints.push({ x, y });
+  //   }
+
+  //   for (let i = 0; i < innerPoints.length; i++) {
+  //     const current = innerPoints[i];
+  //     const next = innerPoints[(i + 1) % innerPoints.length];
+      
+  //     if (i === 0) {
+  //       ctx.lineTo(current.x, current.y);
+  //     } else {
+  //       const smoothingFactor = 0.15;
+  //       const cp1x = current.x + (next.x - current.x) * smoothingFactor;
+  //       const cp1y = current.y + (next.y - current.y) * smoothingFactor;
+  //       ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
+  //     }
+  //   }
+
+  //   ctx.closePath();
+
+  //   // 🎨 Mp3Player waiting용 그라데이션 (나중에 다른 색상으로 변경 가능)
+  //   const gradient = ctx.createRadialGradient(
+  //     centerX, centerY, baseRadius,
+  //     centerX, centerY, baseRadius + maxBarLength
+  //   );
+  //   gradient.addColorStop(0, 'rgba(82, 82, 82, 0.8)'); // 빨간색 계열로 차별화
+  //   gradient.addColorStop(0.7, 'rgba(82, 82, 82,0.6)');
+  //   gradient.addColorStop(1, 'rgba(82, 82, 82, 0.3)');
+    
+  //   ctx.fillStyle = gradient;
+  //   ctx.fill();
+
+
+
+
+  //   // 그림자 효과 제거
+  //   ctx.shadowColor = 'transparent';
+  //   ctx.shadowBlur = 0;
+  //   ctx.shadowOffsetX = 0;
+  //   ctx.shadowOffsetY = 0;
+
+
+  //          // 🆕 중앙 원 색 채우기
+  //  ctx.lineWidth = 0;
+  //  ctx.beginPath();
+  //  ctx.arc(centerX, centerY, baseRadius , 0, 2 * Math.PI); // 크기를 0.1에서 0.8로 증가
+  //  ctx.fillStyle = 'rgba(82, 82, 82, 0.8)'; 
+  //  ctx.fill();
+    
+  }, [mp3WaitingSpectrum, isMp3WaitingMode , canvasSize]);
+
+
 
 
 
@@ -1200,10 +1320,10 @@ const getScreenTransform = () => {
         padding: '5px 10px',
         borderRadius: '5px'
       }}>
-        {isDirectionFixed 
+        {/* {isDirectionFixed 
           ? `🔒 고정: ${Math.round(fixedDirection)}° ${screenFlipped ? '(반전)' : '(정상)'}`
           : `📍 실시간: ${Math.round(soundDirection)}° ${screenFlipped ? '(반전)' : '(정상)'}`
-        }
+        } */}
       </div>
 
       
@@ -1263,5 +1383,7 @@ const getScreenTransform = () => {
 }
 
 export default SpectrumVisualizer;
+
+
 
 
