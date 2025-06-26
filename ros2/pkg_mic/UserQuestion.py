@@ -822,6 +822,8 @@ class UserQuestion(Node):
 
             # Mp3Player.py와 동일한 방식으로 스펙트럼과 재생 병렬 처리
             self.waiting_publish_and_play(temp_wav)
+            time.sleep(1)
+        
 
             self.get_logger().info("Waiting sound 1 playback finished")
 
