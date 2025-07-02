@@ -1,4 +1,6 @@
 
+
+#밈이미지 시도(0602)
 import os
 import requests
 import threading
