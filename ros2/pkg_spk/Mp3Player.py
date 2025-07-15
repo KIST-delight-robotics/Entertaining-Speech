@@ -1,5 +1,4 @@
 
-
 #밈이미지 시도(0602)
 import os
 import requests
@@ -47,7 +46,6 @@ class Mp3Player(Node):
 
 
 
-
         self.current_image_path = None
         self.image_subscription_ = self.create_subscription(
             String, "recommended_image", self.image_callback, 10
@@ -56,6 +54,7 @@ class Mp3Player(Node):
         # 기존 publisher들 다음에 추가
         self.mp3_waiting_spectrum_pub = self.create_publisher(String, "/mp3_waiting_spectrum", 10)
 
+        
 
 
 
@@ -384,7 +383,10 @@ class Mp3Player(Node):
         ElevenLabs TTS 호출 → reply.mp3 저장
         """
         api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        voice_id = "59zWnTQLbwyr94bFbcUe"
+        #스폰지밥
+        # voice_id = "59zWnTQLbwyr94bFbcUe"
+        #중성마녀
+        voice_id = "2oCsvoTtWZkaDZUSExSz"
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
         headers = {
@@ -393,14 +395,28 @@ class Mp3Player(Node):
             "Accept": "audio/mpeg"
         }
 
+        #스폰지밥
+        # data = {
+        #     "text": text,
+        #     "model_id": "eleven_multilingual_v2",
+        #     "voice_settings": {
+        #         "stability": 0.5,
+        #         "similarity_boost": 0.75,
+        #         "style": 0.25,
+        #         "speed": 0.9
+        #     },
+        #     "apply_text_normalization": "on"
+        # }
+
+        #중성마녀
         data = {
             "text": text,
             "model_id": "eleven_multilingual_v2",
             "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
-                "style": 0.25,
-                "speed": 0.9
+                "stability": 0.95,
+                "similarity_boost": 0.6,
+                "style": 0.4,
+                "speed": 0.8
             },
             "apply_text_normalization": "on"
         }
