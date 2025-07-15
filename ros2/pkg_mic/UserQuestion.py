@@ -1,4 +1,5 @@
 
+
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -37,8 +38,82 @@ from openpyxl import Workbook
 from datetime import datetime
 import csv
 
+# 기존 imports에 추가
+import requests  # TTS API 호출용
+
+
+
+
 
 load_dotenv("/home/nvidia/ros2_ws/src/.env")
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 실시간 단어 전송
+# ──────────────────────────────────────────────────────────────────────────────
+class RealtimeWordProcessor:
+    def __init__(self):
+        self.master_transcript = ""  # 전체 문장 누적
+        self.sent_phrases = []  # 이미 전송된 구문들
+        self.last_sent_word_count = 0  # 마지막으로 전송한 단어 개수
+        self.debounce_time = 0.05  # 300ms 디바운싱
+        self.last_process_time = 0
+        
+    def process_transcript(self, transcript, is_final=False):
+        """새로운 방식: 전체 문장 기준으로 증분 처리"""
+        current_time = time.time()
+        
+        # 디바운싱
+        if current_time - self.last_process_time < self.debounce_time and not is_final:
+            return []
+        
+        self.last_process_time = current_time
+        
+        # 전체 문장 업데이트 (더 긴 문장으로 대체)
+        if len(transcript) > len(self.master_transcript):
+            self.master_transcript = transcript
+        
+        # 단어 분할
+        words = self.master_transcript.strip().split()
+        new_phrases = []
+        
+        # 새로운 단어들만 처리
+        if len(words) > self.last_sent_word_count:
+            start_idx = self.last_sent_word_count
+            new_words = words[start_idx:]
+            
+            # 두 단어씩 묶어서 구문 생성
+            for i in range(0, len(new_words), 2):
+                if i + 1 < len(new_words):
+                    phrase = f"{new_words[i]} {new_words[i+1]}"
+                else:
+                    phrase = new_words[i]  # 마지막 단어
+                
+                new_phrases.append(phrase)
+                self.last_sent_word_count += 2 if i + 1 < len(new_words) else 1
+        
+        # Final 결과일 때 남은 단어 처리
+        if is_final and len(words) > self.last_sent_word_count:
+            remaining_words = words[self.last_sent_word_count:]
+            if remaining_words:
+                new_phrases.append(' '.join(remaining_words))
+        
+        return new_phrases
+    
+    def reset(self):
+        """새 문장 시작시 초기화"""
+        self.master_transcript = ""
+        self.sent_phrases = []
+        self.last_sent_word_count = 0
+
+
+
+
+
+
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # UserQuestion 노드
@@ -178,7 +253,14 @@ class UserQuestion(Node):
 
 
 
+        # 🆕 실시간 단어 처리 추가
+        self.word_processor = RealtimeWordProcessor()
+        self.realtime_words_pub = self.create_publisher(String, "/realtime_words", 10)
 
+
+        # 🆕 질문 확인 TTS 파일 저장 경로 추가
+        self.question_confirm_path = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/question_confirm.mp3"
+            
 
 
         self.start_audio_stream()
@@ -186,7 +268,91 @@ class UserQuestion(Node):
 
 
         
-        
+
+    def text2speech_question_confirm(self, text):
+        """
+        ElevenLabs TTS 호출하여 질문 확인 음성 생성
+        """
+        api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
+        # voice_id = "59zWnTQLbwyr94bFbcUe"
+        voice_id = "2oCsvoTtWZkaDZUSExSz"
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+
+        headers = {
+            "xi-api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg"
+        }
+
+        data = {
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.75,
+                "style": 0.25,
+                "speed": 0.9
+            },
+            "apply_text_normalization": "on"
+        }
+
+        try:
+            # 🕐 TTS 생성 시간 측정 시작
+            start_time = time.time()
+
+
+            response = requests.post(url, headers=headers, json=data)
+            if response.status_code == 200:
+                with open(self.question_confirm_path, "wb") as f:
+                    f.write(response.content)
+                # 🕐 TTS 생성 완료 시간 계산
+                generation_time = time.time() - start_time    
+                self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 → {self.question_confirm_path}")
+                self.get_logger().info(f"⏱️ TTS 생성 시간: {generation_time:.3f}초")
+                self.save_log(f"🟢 질문 확인 TTS 생성 성공")
+                return True
+            else:
+                self.get_logger().error(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
+                self.save_log(f"🔴 TTS 오류 발생: {response.status_code}")
+                self.get_logger().info(f"⏱️ TTS 시도 시간: {generation_time:.3f}초")
+                return False
+        except Exception as e:
+            self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
+            self.save_log(f"🔴 TTS 호출 실패: {e}")
+            self.get_logger().info(f"⏱️ TTS 시도 시간: {generation_time:.3f}초")
+            return False
+
+    def extract_question_from_published_text(self, published_text):
+        """
+        published_text에서 순수 질문만 추출
+        형태: "speaker001|질문내용" → "질문내용"
+        """
+        try:
+            if "|" in published_text:
+                _, question = published_text.split("|", 1)
+                return question.strip()
+            else:
+                return published_text.strip()
+        except Exception as e:
+            self.get_logger().error(f"질문 추출 실패: {e}")
+            return published_text
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     # ── Google STT -----------------------------------------------------------
 
@@ -222,6 +388,8 @@ class UserQuestion(Node):
         elif msg.data == "music_done":
             self.get_logger().info("Music playback finished. Resuming STT output.")
             self.music_playing = False
+            self.word_processor.reset() 
+            self.publish_realtime_phrase("")   # ← True 플래그
 
             # 음악 종료 후 입력 대기 플래그 활성화
             self.trigger_detected = True
@@ -530,6 +698,18 @@ class UserQuestion(Node):
                     self.last_speech_time = time.time()
                     self.silence_seconds = 0
 
+
+                    # 🆕 실시간 단어 처리 (is_final 플래그 추가)
+                    if self.trigger_detected:
+                        new_phrases = self.word_processor.process_transcript(txt, is_final)
+                        for phrase in new_phrases:
+                            self.publish_realtime_phrase(phrase)
+                    
+                        
+
+
+
+
                     # 음악 종료 후 최초 음성 입력이 들어왔을 때만 무음 감지 시작
                     if self.waiting_for_input_after_music:
                         self.waiting_for_input_after_music = False  # 최초 입력 감지 완료
@@ -548,8 +728,15 @@ class UserQuestion(Node):
                             self.partial_transcript = split_text[1].strip()
                             self.get_logger().info(f"Trigger detected. Capturing transcript: {self.partial_transcript}")
 
+
+                            # 🆕 단어 처리기 초기화
+                            self.word_processor.reset()
+
+
+
                             self.play_effect_sound_trigger()
                             self.trigger_detected = True
+                            self.publish_realtime_phrase("")   # ← True 플래그
                             # 🆕 트리거 감지 상태 전송
                             self.publish_trigger_status()
                             self.audio_buffer = []  # 본 질문 음성 버퍼링 시작
@@ -569,29 +756,40 @@ class UserQuestion(Node):
 
                 # ── 3) 무음 3초 후 퍼블리시 시점 ──
                 if is_final and self.partial_transcript.strip():
-                    # 본 질문 음성 → 화자 식별 진행 (identify_speaker로 변경)
                     try:
-                        # 🆕 중복 방지 체크
                         if self.waiting_sequence_running:
                             self.get_logger().info("이미 대기 시퀀스가 실행 중입니다.")
                             return
                         
-                        # 퍼블리시
                         self.publish_transcription(self.partial_transcript)
                         self.save_audio_clip()
-
-                   
-                      
                         return
                     except Exception as e:
                         self.get_logger().error(f"Speaker identification error: {e}")
-                        # 퍼블리시는 진행
                         self.publish_transcription(self.partial_transcript)
                         self.save_audio_clip()
                         return
 
             if not self.waiting_for_input_after_music:
                 self.start_silence_monitoring()
+
+
+    def publish_realtime_phrase(self, phrase, is_final=False):
+        """실시간 단어 구문을 프론트엔드로 전송"""
+        phrase_data = {
+            "type": "word_phrase",
+            "phrase": phrase,
+            "timestamp": time.time(),
+            "speaker_id": self.current_speaker_id,
+            "is_final": is_final          # ★ 추가
+        }
+        
+        msg = String()
+        msg.data = json.dumps(phrase_data)
+        self.realtime_words_pub.publish(msg)
+        
+        self.get_logger().info(f"📝 실시간 구문 전송: '{phrase}'")
+
 
 
 
@@ -786,49 +984,150 @@ class UserQuestion(Node):
   
 
 
+    # #원본 play effect
+    # def play_effect_sound_waiting_1(self):
+    #     """대기 효과음 1을 재생하며 스펙트럼 시각화 (Mp3Player.py 방식과 동일)"""
+    #     effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting1"
+        
+    #     if not os.path.exists(effects_dir):
+    #         self.get_logger().error(f"Directory not found: {effects_dir}")
+    #         return
+            
+    #     mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+
+    #     if not mp3_files:
+    #         self.get_logger().error("No MP3 files found in waiting_1 directory.")
+    #         return
+
+    #     try:
+    #         # 랜덤으로 하나의 MP3 파일 선택
+    #         selected_file = random.choice(mp3_files)
+    #         selected_path = os.path.join(effects_dir, selected_file)
+
+    #         self.get_logger().info(f"Playing waiting sound 1: {selected_file}")
+
+    #         # pydub을 사용하여 MP3 로드 (Mp3Player.py와 동일)
+    #         sound = AudioSegment.from_file(selected_path, format="mp3")
+            
+    #         # 정규화 (Mp3Player.py와 동일)
+    #         target_dBFS = -14.0
+    #         change_in_dBFS = target_dBFS - sound.dBFS
+    #         sound = sound.apply_gain(change_in_dBFS)
+            
+    #         # 임시 WAV로 변환
+    #         temp_wav = "/tmp/waiting_audio.wav"
+    #         sound.export(temp_wav, format="wav")
+
+    #         # Mp3Player.py와 동일한 방식으로 스펙트럼과 재생 병렬 처리
+    #         self.waiting_publish_and_play(temp_wav)
+    #         time.sleep(1)
+        
+
+    #         self.get_logger().info("Waiting sound 1 playback finished")
+
+    #     except Exception as e:
+    #         self.get_logger().error(f"Failed to play waiting sound 1: {e}")
+
+
+
+
 
     def play_effect_sound_waiting_1(self):
-        """대기 효과음 1을 재생하며 스펙트럼 시각화 (Mp3Player.py 방식과 동일)"""
-        effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting1"
-        
-        if not os.path.exists(effects_dir):
-            self.get_logger().error(f"Directory not found: {effects_dir}")
-            return
-            
-        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
-
-        if not mp3_files:
-            self.get_logger().error("No MP3 files found in waiting_1 directory.")
-            return
-
+        """
+        질문 확인 TTS 생성 및 재생 (기존 대기음 대신)
+        """
         try:
+            # 1. 발행된 질문 텍스트 확인
+            if not hasattr(self, 'last_published_text') or not self.last_published_text:
+                self.get_logger().warning("발행된 질문이 없어 기본 대기음을 재생합니다.")
+                self.play_default_waiting_sound()
+                return
+
+            # 2. 순수 질문 텍스트 추출 (speaker### 부분 제거)
+            question_text = self.extract_question_from_published_text(self.last_published_text)
+            
+            # 3. 질문 확인 문구 생성
+            confirm_text = f"{question_text} 라고 물어본거지?"
+            self.get_logger().info(f"🎤 질문 확인 TTS 생성: {confirm_text}")
+            self.save_log(f"🎤 질문 확인 TTS 생성: {confirm_text}")
+
+            # 4. TTS 생성
+            if not self.text2speech_question_confirm(confirm_text):
+                self.get_logger().warning("TTS 생성 실패로 기본 대기음을 재생합니다.")
+                self.play_default_waiting_sound()
+                return
+
+            # 5. 생성된 TTS 파일 재생 (기존 스펙트럼 방식 유지)
+            if os.path.exists(self.question_confirm_path):
+                # pydub을 사용하여 MP3 로드
+                sound = AudioSegment.from_file(self.question_confirm_path, format="mp3")
+                
+                # 정규화 (기존 방식과 동일)
+                target_dBFS = -14.0
+                change_in_dBFS = target_dBFS - sound.dBFS
+                sound = sound.apply_gain(change_in_dBFS)
+                
+                # 임시 WAV로 변환
+                temp_wav = "/tmp/question_confirm_audio.wav"
+                sound.export(temp_wav, format="wav")
+
+                # 기존과 동일한 방식으로 스펙트럼과 재생 병렬 처리
+                self.waiting_publish_and_play(temp_wav)
+                # time.sleep(1)
+
+                self.get_logger().info("질문 확인 TTS 재생 완료")
+                self.save_log("질문 확인 TTS 재생 완료")
+            else:
+                self.get_logger().error(f"TTS 파일이 생성되지 않음: {self.question_confirm_path}")
+                self.play_default_waiting_sound()
+
+        except Exception as e:
+            self.get_logger().error(f"질문 확인 TTS 처리 실패: {e}")
+            self.save_log(f"질문 확인 TTS 처리 실패: {e}")
+            self.play_default_waiting_sound()
+
+    def play_default_waiting_sound(self):
+        """
+        TTS 생성 실패 시 기본 대기음 재생 (백업용)
+        """
+        try:
+            effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting1"
+            
+            if not os.path.exists(effects_dir):
+                self.get_logger().error(f"기본 대기음 디렉토리 없음: {effects_dir}")
+                return
+                
+            mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+
+            if not mp3_files:
+                self.get_logger().error("기본 대기음 파일이 없습니다.")
+                return
+
             # 랜덤으로 하나의 MP3 파일 선택
             selected_file = random.choice(mp3_files)
             selected_path = os.path.join(effects_dir, selected_file)
 
-            self.get_logger().info(f"Playing waiting sound 1: {selected_file}")
+            self.get_logger().info(f"기본 대기음 재생: {selected_file}")
 
-            # pydub을 사용하여 MP3 로드 (Mp3Player.py와 동일)
+            # 기존 방식과 동일하게 재생
             sound = AudioSegment.from_file(selected_path, format="mp3")
-            
-            # 정규화 (Mp3Player.py와 동일)
             target_dBFS = -14.0
             change_in_dBFS = target_dBFS - sound.dBFS
             sound = sound.apply_gain(change_in_dBFS)
             
-            # 임시 WAV로 변환
-            temp_wav = "/tmp/waiting_audio.wav"
+            temp_wav = "/tmp/default_waiting_audio.wav"
             sound.export(temp_wav, format="wav")
 
-            # Mp3Player.py와 동일한 방식으로 스펙트럼과 재생 병렬 처리
             self.waiting_publish_and_play(temp_wav)
-            time.sleep(1)
-        
-
-            self.get_logger().info("Waiting sound 1 playback finished")
+            # time.sleep(1)
 
         except Exception as e:
-            self.get_logger().error(f"Failed to play waiting sound 1: {e}")
+            self.get_logger().error(f"기본 대기음 재생 실패: {e}")
+
+
+
+
+
 
 
     def effect_stop_callback(self, msg):
@@ -840,7 +1139,7 @@ class UserQuestion(Node):
             hide_msg = String()
             hide_msg.data = ""
             self.waiting_image_pub.publish(hide_msg)
-            
+                        
             # 상태 플래그 초기화
             self.waiting_image_displayed = False
             self.current_waiting_image_path = ""
@@ -880,6 +1179,11 @@ class UserQuestion(Node):
         
         # 대기 이미지 표시 (effect_stop 토픽까지 유지)
         self.display_waiting_image_until_stop()
+
+
+
+
+
 
     def display_waiting_image_until_stop(self):
         """대기 이미지를 랜덤으로 표시 (effect_stop 토픽까지 유지)"""
@@ -947,7 +1251,7 @@ class UserQuestion(Node):
             status_msg.data = "searching"  # gif_status 대신 searching으로 통일
             self.gif_status_pub.publish(status_msg)
             self.get_logger().info("📊 UserQuestion에서 searching 상태 전송")
-            time.sleep(0.5)
+            # time.sleep(0.5)
 
 
             # 🆕 질문 퍼블리시와 동시에 현재 각도를 고정 각도로 전송
@@ -967,12 +1271,16 @@ class UserQuestion(Node):
             self.partial_transcript = ""  # ✅ 퍼블리시 후 즉시 초기화
             self.trigger_detected = False  # ✅ 퍼블리시 후 trigger 상태 초기화
             self.waiting_for_input_after_music = False  # ✅ 입력 대기 상태 해제
-            time.sleep(2)
+            self.publish_realtime_phrase(text, is_final=True)
+            # time.sleep(2)
             #self.play_effect_sound_rag()
+
+
+
 
             # 🆕 플래그 설정 후 실행
             self.waiting_sequence_running = True
-            threading.Thread(target=self.execute_waiting_sequence, daemon=True).start()    
+            threading.Thread(target=self.execute_waiting_sequence, daemon=False).start()    
 
 
   
@@ -1115,7 +1423,7 @@ class UserQuestion(Node):
         self.stop_audio_stream()
 
         # ✅ 대기 시간 조금 여유롭게
-        time.sleep(2.5)
+        # time.sleep(2.5)
 
         # ✅ 입력 스트림 재시작
         self.start_audio_stream()
