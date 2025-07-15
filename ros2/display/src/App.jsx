@@ -89,8 +89,499 @@ function SpectrumVisualizer() {
 
   // 기존 상태 변수들 다음에 추가
   const [isTransitioning, setIsTransitioning] = useState(false);
+
+
+
+
+
+
+  // SpectrumVisualizer 컴포넌트에 상태 추가
+  const [realtimeWords, setRealtimeWords] = useState([]);
+  const [currentPhrase, setCurrentPhrase] = useState('');
+  const [isShowingWords, setIsShowingWords] = useState(false);
+
+  
+  const [isFinalPhrase, setIsFinalPhrase]   = useState(false);
   
 
+
+
+  
+
+
+
+// //한글자별
+// // 1. 글자별 애니메이션 컴포넌트
+// const AnimatedCharacter = ({ char, index, totalChars }) => {
+//   // 각 글자마다 고유한 애니메이션 패턴 생성
+//   const animationName = `float-${index % 5}`; // 5가지 패턴 순환
+//   const animationDelay = `${index * 0.1}s`; // 순차적 시작
+//   const animationDuration = `${6 + Math.random() * 4}s`; // 3-5초 랜덤
+
+//   return (
+//     <span
+//       style={{
+//         position: 'absolute',
+//         fontSize: '4rem',
+//         fontWeight: 'bold',
+//         color: '#FFD700',
+//         textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
+//         animation: `${animationName} ${animationDuration} ${animationDelay} infinite ease-in-out`,
+//         zIndex: 30
+//       }}
+//     >
+//       {char}
+//     </span>
+//   );
+// };
+
+
+
+// // 띄어쓰기 기준 단어별
+// const AnimatedWord = ({ word, index, totalWords }) => {
+//   // 각 단어마다 고유한 애니메이션 패턴 생성
+//   const animationName = `float-${index % 5}`; // 5가지 패턴 순환
+//   const animationDelay = `${index * 0.3}s`; // 단어별 시작 간격 (0.3초)
+//   const animationDuration = `${3 + Math.random() * 2}s`; // 3-5초 랜덤
+  
+
+//   return (
+//     <span
+//       style={{
+//         position: 'absolute',
+//         fontSize: '4rem',
+//         fontWeight: 'bold',
+//         color: '#FFD700',
+//         textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
+//         animation: `${animationName} ${animationDuration} ${animationDelay} infinite ease-in-out`,
+//         zIndex: 30,
+//         whiteSpace: 'nowrap', // 🆕 단어 내 줄바꿈 방지
+//         letterSpacing: '0.05em' // 🆕 글자 간격 조정
+//       }}
+//     >
+//       {word}
+//     </span>
+//   );
+// };
+
+//글자 길이별 속도 조절
+const AnimatedWord = ({ word, index, totalWords }) => {
+  const animationName = `float-${index % 5}`;
+  
+  // 🆕 단어별 지연 시간 증가 (0.3초 → 0.5초)
+  const animationDelay = `0s`;
+  
+  // 🆕 단어 길이에 따른 애니메이션 속도 조정
+  const wordLength = word.length;
+  const baseDuration = 5 + Math.random() * 2;
+  const animationDuration = `${baseDuration + (wordLength * 0.1)}s`;
+
+  return (
+    <span
+      style={{
+        position: 'absolute',
+        fontSize: '4rem',
+        fontWeight: 'bold',
+        color: '#FFD700',
+        textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
+        animation: `${animationName} ${animationDuration} ${animationDelay} infinite ease-in-out`,
+        zIndex: 30,
+        whiteSpace: 'nowrap',
+        letterSpacing: '0.05em'
+      }}
+    >
+      {word}
+    </span>
+  );
+};
+
+
+
+
+
+
+
+// 2. CSS 애니메이션 정의
+const createAnimationStyles = () => {
+  return `
+    @keyframes float-0 {
+      0%, 100% { 
+        transform: translate(10vw, 20vh) rotate(0deg);
+      }
+      25% { 
+        transform: translate(80vw, 10vh) rotate(90deg);
+      }
+      50% { 
+        transform: translate(70vw, 80vh) rotate(180deg);
+      }
+      75% { 
+        transform: translate(20vw, 70vh) rotate(270deg);
+      }
+    }
+
+    @keyframes float-1 {
+      0%, 100% { 
+        transform: translate(90vw, 30vh) scale(1);
+      }
+      33% { 
+        transform: translate(10vw, 60vh) scale(1.2);
+      }
+      66% { 
+        transform: translate(50vw, 10vh) scale(0.8);
+      }
+    }
+
+    @keyframes float-2 {
+      0%, 100% { 
+        transform: translate(50vw, 90vh);
+        opacity: 1;
+      }
+      25% { 
+        transform: translate(10vw, 30vh);
+        opacity: 0.7;
+      }
+      50% { 
+        transform: translate(90vw, 50vh);
+        opacity: 1;
+      }
+      75% { 
+        transform: translate(30vw, 10vh);
+        opacity: 0.9;
+      }
+    }
+
+    @keyframes float-3 {
+      0% { transform: translate(20vw, 50vh) rotate(0deg); }
+      20% { transform: translate(60vw, 20vh) rotate(72deg); }
+      40% { transform: translate(80vw, 70vh) rotate(144deg); }
+      60% { transform: translate(40vw, 85vh) rotate(216deg); }
+      80% { transform: translate(15vw, 65vh) rotate(288deg); }
+      100% { transform: translate(20vw, 50vh) rotate(360deg); }
+    }
+
+    @keyframes float-4 {
+      0%, 100% { 
+        transform: translate(50vw, 50vh);
+        filter: blur(0px);
+      }
+      25% { 
+        transform: translate(85vw, 15vh);
+        filter: blur(1px);
+      }
+      50% { 
+        transform: translate(15vw, 85vh);
+        filter: blur(0px);
+      }
+      75% { 
+        transform: translate(75vw, 75vh);
+        filter: blur(0.5px);
+      }
+    }
+  `;
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  // 실시간 단어 구독 useEffect 추가
+  useEffect(() => {
+    const realtimeWordsListener = new ROSLIB.Topic({
+      ros: ros,
+      name: '/realtime_words',
+      messageType: 'std_msgs/String'
+    });
+
+    realtimeWordsListener.subscribe((message) => {
+      try {
+        const data = JSON.parse(message.data);
+        if (data.type === 'word_phrase') {
+          console.log('📝 실시간 단어 수신:', data.phrase);
+          
+          // 새로운 구문으로 교체
+          setCurrentPhrase(data.phrase);
+          setIsFinalPhrase(!!data.is_final);   // ★ 추가
+          setIsShowingWords(true);
+          
+          // 선택적: 단어 히스토리 관리 (필요시)
+          setRealtimeWords(prev => [...prev.slice(-4), {
+            phrase: data.phrase,
+            timestamp: data.timestamp,
+            id: Date.now()
+          }]);
+        }
+      } catch (e) {
+        console.error('실시간 단어 JSON 파싱 오류:', e);
+      }
+    });
+
+    return () => realtimeWordsListener.unsubscribe();
+  }, []);
+
+
+    // 단어 표시 여부 결정 함수
+  const shouldShowRealtimeWords = () => {
+    // trigger_detected이고, 음악이 재생 중이 아니며, 검색 상태가 아닐 때
+    return triggerDetected && 
+          !musicPlaying && 
+          recommendStatus !== 'searching' && 
+          !isWaitingAudioMode && 
+          !isWaitingImageMode && 
+          !isMp3WaitingMode && 
+          !imageVisible && 
+          isShowingWords;
+  };
+
+
+
+
+  //   // 실시간 단어 렌더링 함수
+  // const renderRealtimeWords = () => {
+  //   if (!shouldShowRealtimeWords() || !currentPhrase) {
+  //     return null;
+  //   }
+
+  //   return (
+  //     <div style={{
+  //       position: 'fixed',
+  //       top: '50%',
+  //       left: '50%',
+  //       transform: 'translate(-50%, -50%)',
+  //       zIndex: 20,
+  //       textAlign: 'center',
+  //       animation: 'fadeInScale 0.3s ease-out'
+  //     }}>
+  //       <div style={{
+  //         fontSize: '4rem',
+  //         fontWeight: 'bold',
+  //         color: '#fff',
+  //         textShadow: '2px 2px 4px rgba(0,0,0,0.7)',
+  //         backgroundColor: 'rgba(0,0,0,0.3)',
+  //         padding: '20px 40px',
+  //         borderRadius: '15px',
+  //         border: '2px solid rgba(255,255,255,0.3)',
+  //         backdropFilter: 'blur(10px)',
+  //         maxWidth: '80vw',
+  //         wordBreak: 'keep-all',
+  //         whiteSpace: 'nowrap'
+  //       }}>
+  //         {currentPhrase}
+  //       </div>
+        
+  //       {/* 선택적: 이전 단어들 표시 */}
+  //       <div style={{
+  //         marginTop: '20px',
+  //         opacity: 0.6,
+  //         fontSize: '1.5rem'
+  //       }}>
+  //         {realtimeWords.slice(-3).map((word, index) => (
+  //           <span key={word.id} style={{
+  //             margin: '0 10px',
+  //             opacity: 1 - (index * 0.3)
+  //           }}>
+  //             {word.phrase}
+  //           </span>
+  //         ))}
+  //       </div>
+  //     </div>
+  //   );
+  // };
+
+
+// //0709 수정 전(최종 문장 노란색으로 렌더링)
+//   const renderRealtimeWords = () => {
+//     if (!shouldShowRealtimeWords() || !currentPhrase) {
+//       return null;
+//     }
+//     const phraseStyle = isFinalPhrase
+//         ? { color: '#FFD700' }         // ★ 최종 문장 색 : 노란색 예시
+//         : { color: '#FFFFFF' };        // 일반 문장 : 흰색
+
+
+
+  
+//     return (
+//       <div style={{
+//         position: 'fixed',
+//         top: '50%',
+//         left: '50%',
+//         transform: 'translate(-50%, -50%)',
+//         zIndex: 20,
+//         textAlign: 'center',
+//         animation: 'fadeInScale 0.3s ease-out'
+//       }}>
+//         <div style={{
+//           fontSize: '5rem',                        // 🆕 더 큰 글씨
+//           fontWeight: 'bold',
+//           color: '#ffffff',                        // 🆕 순백색
+//           textShadow: '3px 3px 6px rgba(0,0,0,0.8)', // 🆕 더 진한 그림자 (가독성)
+//           maxWidth: '90vw',
+//           wordBreak: 'keep-all',
+//           whiteSpace: 'nowrap',
+//           letterSpacing: '0.05em',                  // 🆕 글자 간격 추가
+//           ...phraseStyle
+//         }}>
+//           {currentPhrase}
+//         </div>
+//       </div>
+//     );
+//   };
+  
+
+// //최종 문장 돌아다니는 효과(한글자별)
+// const renderRealtimeWords = () => {
+//   if (!shouldShowRealtimeWords() || !currentPhrase) {
+//     return null;
+//   }
+
+//   // 최종 문장일 때만 한글자씩 애니메이션
+//   if (isFinalPhrase) {
+//     const characters = currentPhrase.split('');
+    
+//     return (
+//       <>
+//         {/* CSS 애니메이션 스타일 추가 */}
+//         <style>{createAnimationStyles()}</style>
+        
+//         {/* 각 글자별 애니메이션 */}
+//         <div style={{
+//           position: 'fixed',
+//           top: 0,
+//           left: 0,
+//           width: '100vw',
+//           height: '100vh',
+//           zIndex: 20,
+//           pointerEvents: 'none'
+//         }}>
+//           {characters.map((char, index) => (
+//             char.trim() ? (
+//               <AnimatedCharacter 
+//                 key={`${char}-${index}`}
+//                 char={char}
+//                 index={index}
+//                 totalChars={characters.length}
+//               />
+//             ) : null
+//           ))}
+//         </div>
+//       </>
+//     );
+//   }
+
+//   // 일반 문장은 기존 방식 유지
+//   return (
+//     <div style={{
+//       position: 'fixed',
+//       top: '50%',
+//       left: '50%',
+//       transform: 'translate(-50%, -50%)',
+//       zIndex: 20,
+//       textAlign: 'center',
+//       animation: 'fadeInScale 0.3s ease-out'
+//     }}>
+//       <div style={{
+//         fontSize: '5rem',
+//         fontWeight: 'bold',
+//         color: '#ffffff',
+//         textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
+//         maxWidth: '90vw',
+//         wordBreak: 'keep-all',
+//         whiteSpace: 'nowrap',
+//         letterSpacing: '0.05em'
+//       }}>
+//         {currentPhrase}
+//       </div>
+//     </div>
+//   );
+// };
+
+
+
+const renderRealtimeWords = () => {
+  if (!shouldShowRealtimeWords() || !currentPhrase) {
+    return null;
+  }
+
+  // 최종 문장일 때만 단어별 애니메이션
+  if (isFinalPhrase) {
+    // 🔥 핵심 수정: 띄어쓰기 단위로 분리
+    const words = currentPhrase.split(' ').filter(word => word.trim()); // 빈 문자열 제거
+    
+    return (
+      <>
+        {/* CSS 애니메이션 스타일 추가 */}
+        <style>{createAnimationStyles()}</style>
+        
+        {/* 각 단어별 애니메이션 */}
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
+          zIndex: 20,
+          pointerEvents: 'none'
+        }}>
+          {words.map((word, index) => (
+            <AnimatedWord 
+              key={`${word}-${index}`}
+              word={word}
+              index={index}
+              totalWords={words.length}
+            />
+          ))}
+        </div>
+      </>
+    );
+  }
+
+  // 일반 문장은 기존 방식 유지
+  return (
+    <div style={{
+      position: 'fixed',
+      top: '50%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+      zIndex: 20,
+      textAlign: 'center',
+      animation: 'fadeInScale 0.3s ease-out'
+    }}>
+      <div style={{
+        fontSize: '5rem',
+        fontWeight: 'bold',
+        color: '#ffffff',
+        textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
+        maxWidth: '90vw',
+        wordBreak: 'keep-all',
+        whiteSpace: 'nowrap',
+        letterSpacing: '0.05em'
+      }}>
+        {currentPhrase}
+      </div>
+    </div>
+  );
+};
 
 
 
@@ -367,78 +858,78 @@ function SpectrumVisualizer() {
 
   //==========================================================
 
-  // 🆕 마이크 스펙트럼 구독
-  useEffect(() => {
-    if (musicPlaying) return;
+  // // 🆕 마이크 스펙트럼 구독
+  // useEffect(() => {
+  //   if (musicPlaying) return;
     
-    const micSpectrumListener = new ROSLIB.Topic({
-      ros: ros,
-      name: '/audio_visualizer',
-      messageType: 'std_msgs/String'
-    });
+  //   const micSpectrumListener = new ROSLIB.Topic({
+  //     ros: ros,
+  //     name: '/audio_visualizer',
+  //     messageType: 'std_msgs/String'
+  //   });
     
-    micSpectrumListener.subscribe((message) => {
-      try {
-        const data = JSON.parse(message.data);
-        if (data.spectrum) {
-          // 🆕 마이크 스펙트럼 값 웹 콘솔 출력
-        console.log('🎤 마이크 스펙트럼 수신:', {
-          length: data.spectrum.length,
-          first_10_values: data.spectrum.slice(0, 10),
-          max_value: Math.max(...data.spectrum),
-          min_value: Math.min(...data.spectrum),
-          average: data.spectrum.reduce((a, b) => a + b, 0) / data.spectrum.length,
-          timestamp: new Date().toLocaleTimeString()
-        });
+  //   micSpectrumListener.subscribe((message) => {
+  //     try {
+  //       const data = JSON.parse(message.data);
+  //       if (data.spectrum) {
+  //         // 🆕 마이크 스펙트럼 값 웹 콘솔 출력
+  //       console.log('🎤 마이크 스펙트럼 수신:', {
+  //         length: data.spectrum.length,
+  //         first_10_values: data.spectrum.slice(0, 10),
+  //         max_value: Math.max(...data.spectrum),
+  //         min_value: Math.min(...data.spectrum),
+  //         average: data.spectrum.reduce((a, b) => a + b, 0) / data.spectrum.length,
+  //         timestamp: new Date().toLocaleTimeString()
+  //       });
         
 
-          const smoothedData = applyMicSmoothing(data.spectrum);
-          setMicSpectrum(smoothedData);
-          //setMicSpectrum(data.spectrum);
+  //         const smoothedData = applyMicSmoothing(data.spectrum);
+  //         setMicSpectrum(smoothedData);
+  //         //setMicSpectrum(data.spectrum);
 
-        }
-      } catch (e) {
-        console.error('Mic spectrum JSON parse error:', e);
-      }
-    });
+  //       }
+  //     } catch (e) {
+  //       console.error('Mic spectrum JSON parse error:', e);
+  //     }
+  //   });
     
-    return () => {
-      micSpectrumListener.unsubscribe();
-      //previousMicSpectrumRef.current = [];
-    };
-  }, [musicPlaying]);
+  //   return () => {
+  //     micSpectrumListener.unsubscribe();
+  //     //previousMicSpectrumRef.current = [];
+  //   };
+  // }, [musicPlaying]);
 
 
     //==========================================================
 
-  // 🆕 대기 스펙트럼 구독 - 대기 효과음1 (/waiting_spectrum)
-  useEffect(() => {
-    const waitingSpectrumListener = new ROSLIB.Topic({
-      ros: ros,
-      name: '/waiting_spectrum',
-      messageType: 'std_msgs/String'
-    });
+  // // 🆕 대기 스펙트럼 구독 - 대기 효과음1  waiting1 구독 (/waiting_spectrum)
+  // useEffect(() => {
+  //   const waitingSpectrumListener = new ROSLIB.Topic({
+  //     ros: ros,
+  //     name: '/waiting_spectrum',
+  //     messageType: 'std_msgs/String'
+  //   });
     
-    waitingSpectrumListener.subscribe((message) => {
-      try {
-        const data = JSON.parse(message.data);
-        if (data.spectrum) {
-          setIsWaitingAudioMode(true);
-          setIsWaitingImageMode(false);
-          setRecommendStatus('waiting_audio'); // 대기 오디오 상태
-          setCurrentGif(''); // 기존 GIF 제거
-          const smoothedData = applyAdvancedSmoothing(data.spectrum);
-          setWaitingSpectrum(smoothedData);
-        }
-      } catch (e) {
-        console.error('Waiting spectrum JSON parse error:', e);
-      }
-    });
+  //   waitingSpectrumListener.subscribe((message) => {
+  //     try {
+  //       const data = JSON.parse(message.data);
+  //       if (data.spectrum) {
+  //         setIsWaitingAudioMode(true);
+  //         setIsWaitingImageMode(false);
+  //         setRecommendStatus('waiting_audio'); // 대기 오디오 상태
+  //         setCurrentGif(''); // 기존 GIF 제거
+  //         const smoothedData = applyAdvancedSmoothing(data.spectrum);
+  //         setWaitingSpectrum(smoothedData);
+  //       }
+  //     } catch (e) {
+  //       console.error('Waiting spectrum JSON parse error:', e);
+  //     }
+  //   });
     
-    return () => {
-      waitingSpectrumListener.unsubscribe();
-    };
-  }, []);
+  //   return () => {
+  //     waitingSpectrumListener.unsubscribe();
+  //   };
+  // }, []);
 
 
 //==========================================================
@@ -941,102 +1432,6 @@ for (let i = 0; i < numBars; i++) {
     
 }
 
-
-  //   // 🎨 Mp3Player waiting용 그림자 효과 (나중에 다른 색상으로 변경 가능)
-  //   ctx.shadowColor = 'rgba(51, 51, 51, 0.4)'; // 반투명 그림자[3][6]
-  //   ctx.shadowBlur = 8;
-  //   ctx.shadowOffsetX = 2;
-  //   ctx.shadowOffsetY = 2;
-
-
-
-
-  //   // 베지어 곡선 스펙트럼 (UserQuestion waiting과 동일한 방식)
-  //   ctx.beginPath();
-
-  //   const points = [];
-  //   for (let i = 0; i <= numBars; i++) {
-  //     const angle = (i % numBars / numBars) * 2 * Math.PI;
-  //     const barLength = bars[i % numBars] * maxBarLength;
-  //     const radius = baseRadius + barLength;
-      
-  //     const x = centerX + Math.cos(angle) * radius;
-  //     const y = centerY + Math.sin(angle) * radius;
-  //     points.push({ x, y, angle });
-  //   }
-
-  //   ctx.moveTo(points[0].x, points[0].y);
-
-  //   for (let i = 1; i < points.length; i++) {
-  //     const current = points[i];
-  //     const previous = points[i - 1];
-  //     const next = points[(i + 1) % points.length];
-      
-  //     const smoothingFactor = 0.2;
-  //     const cp1x = previous.x + (current.x - previous.x) * smoothingFactor;
-  //     const cp1y = previous.y + (current.y - previous.y) * smoothingFactor;
-  //     const cp2x = current.x - (next.x - current.x) * smoothingFactor;
-  //     const cp2y = current.y - (next.y - current.y) * smoothingFactor;
-      
-  //     ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
-  //   }
-
-
-
-
-  //   // 내부 원 처리 (동일)
-  //   const innerPoints = [];
-  //   for (let i = numBars; i >= 0; i--) {
-  //     const angle = (i / numBars) * 2 * Math.PI;
-  //     const x = centerX + Math.cos(angle) * baseRadius;
-  //     const y = centerY + Math.sin(angle) * baseRadius;
-  //     innerPoints.push({ x, y });
-  //   }
-
-  //   for (let i = 0; i < innerPoints.length; i++) {
-  //     const current = innerPoints[i];
-  //     const next = innerPoints[(i + 1) % innerPoints.length];
-      
-  //     if (i === 0) {
-  //       ctx.lineTo(current.x, current.y);
-  //     } else {
-  //       const smoothingFactor = 0.15;
-  //       const cp1x = current.x + (next.x - current.x) * smoothingFactor;
-  //       const cp1y = current.y + (next.y - current.y) * smoothingFactor;
-  //       ctx.quadraticCurveTo(cp1x, cp1y, current.x, current.y);
-  //     }
-  //   }
-
-  //   ctx.closePath();
-
-  //   // 🎨 Mp3Player waiting용 그라데이션 (나중에 다른 색상으로 변경 가능)
-  //   const gradient = ctx.createRadialGradient(
-  //     centerX, centerY, baseRadius,
-  //     centerX, centerY, baseRadius + maxBarLength
-  //   );
-  //   gradient.addColorStop(0, 'rgba(82, 82, 82, 0.8)'); // 빨간색 계열로 차별화
-  //   gradient.addColorStop(0.7, 'rgba(82, 82, 82,0.6)');
-  //   gradient.addColorStop(1, 'rgba(82, 82, 82, 0.3)');
-    
-  //   ctx.fillStyle = gradient;
-  //   ctx.fill();
-
-
-
-
-  //   // 그림자 효과 제거
-  //   ctx.shadowColor = 'transparent';
-  //   ctx.shadowBlur = 0;
-  //   ctx.shadowOffsetX = 0;
-  //   ctx.shadowOffsetY = 0;
-
-
-  //          // 🆕 중앙 원 색 채우기
-  //  ctx.lineWidth = 0;
-  //  ctx.beginPath();
-  //  ctx.arc(centerX, centerY, baseRadius , 0, 2 * Math.PI); // 크기를 0.1에서 0.8로 증가
-  //  ctx.fillStyle = 'rgba(82, 82, 82, 0.8)'; 
-  //  ctx.fill();
     
   }, [mp3WaitingSpectrum, isMp3WaitingMode , canvasSize]);
 
@@ -1335,55 +1730,34 @@ const getScreenTransform = () => {
 
 
     {/* {!(musicPlaying && currentImage) && (   */}
-    {!(musicPlaying && currentImage) && !waitingImageVisible && (
+    {!(musicPlaying && currentImage) && !waitingImageVisible && !shouldShowRealtimeWords() && (
       <canvas 
         ref={canvasRef}
         style={{
-      // 🔧 모든 모드에서 화면 전체 사용
-      width: '100vw',
-      height: '100vh',
-      position: 'fixed',
-      top: '0',
-      left: '0',
-      zIndex: 10,
-      border: 'none',
-      outline: 'none',
-      display: 'block',
-      WebkitTapHighlightColor: 'transparent'
-    }}
+          width: '100vw',
+          height: '100vh',
+          position: 'fixed',
+          top: '0',
+          left: '0',
+          zIndex: 10,
+          border: 'none',
+          outline: 'none',
+          display: 'block',
+          WebkitTapHighlightColor: 'transparent'
+        }}
       />
     )}
 
+    {/* 실시간 단어 표시 */}
+    {renderRealtimeWords()}
 
+    {/* 기존 이미지 표시 */}
+    {musicPlaying && renderImage()}
+    {renderWaitingImage()}
 
-      {/* 이미지 표시 - 음악 재생 중에만 */}
-      {musicPlaying && renderImage()}
-      
-      {/* 대기중 이미지 표시 */}
-      {renderWaitingImage()}
- 
-
-
-
-
-
-
-
-
-
-
-    </div>
-  );
-  
-  
-  
-  
-  
+  </div>
+);
   
 }
 
 export default SpectrumVisualizer;
-
-
-
-
