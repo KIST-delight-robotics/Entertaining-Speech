@@ -1,6 +1,3 @@
-
-
-#0618 effect stop 추가 + pdf로 정보 찾기 + vector store!!
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -21,11 +18,11 @@ class Mp3Recommender(Node):
         super().__init__('Mp3Recommender')
         
         # 로그 파일
-        self.log_file_path = "/home/nvidia/ros2_ws/_logs/Mp3Recommender_log.txt"
+        self.log_file_path = "/home/jeonseyeon/ros2_ws/_logs/Mp3Recommender_log.txt"
         self.save_log("✅ Mp3Recommender Node Started")
 
         # 환경 변수
-        load_dotenv("/home/nvidia/ros2_ws/src/.env")
+        load_dotenv("/home/jeonseyeon/ros2_ws/src/.env")
         openai.api_key = os.getenv("OPENAI_API_KEY")
         self.assistant_id = os.getenv("ASSISTANT_ID")
 
@@ -37,9 +34,9 @@ class Mp3Recommender(Node):
 
          # PDF 파일 경로
         self.pdf_paths = [
-            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/KIST_intro.pdf",
+            "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/KIST_intro.pdf",
             # 새로 넣고 싶은 PDF가 생길 때마다 아래 한 줄씩만 추가
-            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/250520_기관 소개자료 PPT.pdf"
+            "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/250520_기관 소개자료 PPT.pdf"
         ]
         self.vector_store_id = None   # Vector Store ID 저장용
 
@@ -51,22 +48,31 @@ class Mp3Recommender(Node):
         device = "cuda" if torch.cuda.is_available() else "cpu"
         self.sbert_model = SentenceTransformer("BAAI/bge-m3", device=device)
 
-        # MP3 인덱스/메타
-        self.mp3_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus.db"
-        self.mp3_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp3_new_plus.bin"
-        self.mp3_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus"
+        # # mp3 인덱스/메타
+        # self.mp3_db_path = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus.db"
+        # self.mp3_faiss_index_file = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp3_new_plus.bin"
+        # self.mp3_dir = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus"
         
-        # 이미지 인덱스/메타
-        self.image_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus.db"
-        self.image_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_image_plus.bin"
-        self.image_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus"
+
+        # mp3 인덱스/메타
+        self.mp4_db_path = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/mp4_database_plus.db"
+        self.mp4_faiss_index_file = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp4.bin"
+        self.mp4_dir = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/mp4_database"
+        
+
+
+
+        # # 이미지 인덱스/메타
+        # self.image_db_path = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus.db"
+        # self.image_faiss_index_file = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_image_plus.bin"
+        # self.image_dir = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus"
 
         # 인덱스와 메타데이터 로드
         try:
-            self.mp3_faiss_index = self.load_faiss_index_mp3()
-            self.mp3_metadata = self.load_metadata_mp3()
-            self.image_faiss_index = self.load_faiss_index_image()
-            self.image_metadata = self.load_metadata_image()
+            self.mp4_faiss_index = self.load_faiss_index_mp4()
+            self.mp4_metadata = self.load_metadata_mp4()
+            # self.image_faiss_index = self.load_faiss_index_image()
+            # self.image_metadata = self.load_metadata_image()
         except Exception as e:
             self.get_logger().error(f"Failed to load indices or metadata: {e}")
             raise
@@ -78,16 +84,16 @@ class Mp3Recommender(Node):
         self.conversation_history = []
         
         # FAISS 인덱스와 메타데이터 별칭 (기존 코드 호환성)
-        self.faiss_index = self.mp3_faiss_index
-        self.metadata = self.mp3_metadata
+        self.faiss_index = self.mp4_faiss_index
+        self.metadata = self.mp4_metadata
 
         # ROS2 pub/sub
         self.publisher_ = self.create_publisher(String, 'recommended_mp3', 10)
-        self.image_publisher_ = self.create_publisher(String, 'recommended_image', 10)
+        # self.image_publisher_ = self.create_publisher(String, 'recommended_image', 10)
         self.subscription_ = self.create_subscription(String, 'user_question', self.question_callback, 10)
         self.status_publisher = self.create_publisher(String, 'mp3_recommend_status', 10)
         self.effect_stop_publisher_ = self.create_publisher(String, 'effect_stop', 10)
-        self.get_logger().info("Mp3Recommender node has started.")
+        self.get_logger().info("mp3Recommender node has started.")
 
     def save_log(self, message: str):
         """로그를 파일에 저장"""
@@ -143,72 +149,38 @@ class Mp3Recommender(Node):
             
 
             
-    def load_metadata_mp3(self) -> Dict[int, str]:
+    def load_metadata_mp4(self) -> Dict[int, str]:
         start = time.time()
         try:
-            conn = sqlite3.connect(self.mp3_db_path)
+            conn = sqlite3.connect(self.mp4_db_path)
             cur = conn.cursor()
-            cur.execute("SELECT id, file_name FROM mp3_files")
+            cur.execute("SELECT id, file_name FROM mp4_files")
             meta = {row[0]: row[1] for row in cur.fetchall()}
             conn.close()
-            self.save_log(f"MP3 metadata loaded in {time.time()-start:.4f}s")
+            self.save_log(f"mp4 metadata loaded in {time.time()-start:.4f}s")
             return meta
         except sqlite3.Error as e:
-            self.get_logger().error(f"Database error loading MP3 metadata: {e}")
+            self.get_logger().error(f"Database error loading mp4 metadata: {e}")
             raise
         except Exception as e:
-            self.get_logger().error(f"Error loading MP3 metadata: {e}")
+            self.get_logger().error(f"Error loading mp4 metadata: {e}")
             raise
 
-    def load_metadata_image(self) -> Dict[int, Dict[str, str]]:
-        """이미지 메타데이터를 로드 (파일명과 경로 포함)"""
-        start = time.time()
+ 
+
+    def load_faiss_index_mp4(self):
         try:
-            conn = sqlite3.connect(self.image_db_path)
-            cur = conn.cursor()
-            # file_name과 file_path 모두 가져오기
-            cur.execute("SELECT id, file_name, file_path FROM images")
-            meta = {}
-            for row in cur.fetchall():
-                meta[row[0]] = {
-                    'file_name': row[1],
-                    'file_path': row[2] if row[2] else row[1]  # file_path가 없으면 file_name 사용
-                }
-            conn.close()
-            self.save_log(f"Image metadata loaded in {time.time()-start:.4f}s")
-            return meta
-        except sqlite3.Error as e:
-            self.get_logger().error(f"Database error loading image metadata: {e}")
-            raise
-        except Exception as e:
-            self.get_logger().error(f"Error loading image metadata: {e}")
-            raise
-
-
-    def load_faiss_index_mp3(self):
-        try:
-            if os.path.exists(self.mp3_faiss_index_file):
-                idx = faiss.read_index(self.mp3_faiss_index_file)
+            if os.path.exists(self.mp4_faiss_index_file):
+                idx = faiss.read_index(self.mp4_faiss_index_file)
                 if isinstance(idx, faiss.IndexIDMap):
-                    self.save_log("MP3 FAISS index loaded successfully")
+                    self.save_log("mp4 FAISS index loaded successfully")
                     return idx
-            raise FileNotFoundError(f"MP3 FAISS index not found at {self.mp3_faiss_index_file}")
+            raise FileNotFoundError(f"mp4 FAISS index not found at {self.mp4_faiss_index_file}")
         except Exception as e:
-            self.get_logger().error(f"Error loading MP3 FAISS index: {e}")
+            self.get_logger().error(f"Error loading mp4 FAISS index: {e}")
             raise
 
-    def load_faiss_index_image(self):
-        try:
-            if os.path.exists(self.image_faiss_index_file):
-                idx = faiss.read_index(self.image_faiss_index_file)
-                if isinstance(idx, faiss.IndexIDMap):
-                    self.save_log("Image FAISS index loaded successfully")
-                    return idx
-            raise FileNotFoundError(f"Image FAISS index not found at {self.image_faiss_index_file}")
-        except Exception as e:
-            self.get_logger().error(f"Error loading image FAISS index: {e}")
-            raise
-
+ 
     def get_sbert_embedding(self, text: str) -> np.ndarray:
         try:
             emb = self.sbert_model.encode(text).astype("float32")
@@ -221,236 +193,24 @@ class Mp3Recommender(Node):
             self.get_logger().error(f"Error generating embedding: {e}")
             raise
 
-    def search_candidates(self, query: str, k: int = 150) -> List[Dict]:
+    def search_candidates(self, query: str, k: int = 5) -> List[Dict]:
         try:
             emb = self.get_sbert_embedding(query).reshape(1, -1)
-            D, I = self.mp3_faiss_index.search(emb, k)
+            D, I = self.mp4_faiss_index.search(emb, k)
             cands = []
             for dist, idx in zip(D[0], I[0]):
                 if idx < 0:
                     continue
-                fn = self.mp3_metadata.get(idx)
+                fn = self.mp4_metadata.get(idx)
                 if not fn:
                     continue
-                path = os.path.join(self.mp3_dir, fn + ".mp3")
+                path = os.path.join(self.mp4_dir, fn + ".mp4")
                 cands.append({"file_name": fn, "path": path, "score": float(dist), "index": idx})
             return cands
         except Exception as e:
             self.get_logger().error(f"Error searching candidates: {e}")
             return []
 
-    def search_images(self, reply: str, top_k: int = 150) -> List[Dict]:
-        """이미지 검색 (확장자 정보 포함)"""
-        try:
-            emb = self.get_sbert_embedding(reply).reshape(1, -1)
-            D, I = self.image_faiss_index.search(emb, top_k)
-            cands = []
-            for dist, idx in zip(D[0], I[0]):
-                if idx < 0:
-                    continue
-                meta = self.image_metadata.get(idx)
-                if not meta:
-                    continue
-                
-                # DB에서 가져온 파일 경로 사용
-                file_path = meta.get('file_path', meta.get('file_name', ''))
-                full_path = os.path.join(self.image_dir, file_path)
-                
-                cands.append({
-                    "file_name": meta.get('file_name', ''),
-                    "file_path": file_path,  # DB에서 가져온 실제 파일 경로
-                    "full_path": full_path,
-                    "score": float(dist)
-                })
-            return cands
-        except Exception as e:
-            self.get_logger().error(f"Error searching images: {e}")
-            return []
-
-    async def evaluate_image_with_gpt(self, question, mp3_title, reply, candidates, top_k=1):
-        if not candidates:
-            self.get_logger().warning("No image candidates provided")
-            return None
-        
-        try:
-            # unknown 파일 필터링
-            filtered = [c for c in candidates if c['file_name'].lower() != 'unknown']
-            if not filtered:
-                self.get_logger().warning("No valid image candidates after filtering")
-                return None
-            
-            # MP3 파일명에서 확장자 제거 및 경로 정리
-            mp3_filename_only = os.path.splitext(os.path.basename(mp3_title))[0]
-
-            # 코사인 유사도 0.95 이상이면서 파일명이 동일한 이미지 찾기
-            exact_match_candidates = []
-            for candidate in filtered:
-                score = candidate.get('score', 0)
-                file_name = candidate.get('file_name', '')
-                
-                # 확장자 제거하고 파일명만 비교
-                candidate_filename_only = os.path.splitext(file_name)[0]
-                
-                # 높은 유사도이면서 파일명이 동일한 경우
-                if score >= 0.95 and mp3_filename_only == candidate_filename_only:
-                    exact_match_candidates.append(candidate)
-
-            # 동일한 파일명의 높은 유사도 이미지가 있으면 바로 반환
-            if exact_match_candidates:
-                # 유사도가 가장 높은 것을 선택
-                best_match = max(exact_match_candidates, key=lambda x: x.get('score', 0))
-                self.get_logger().info(f"Found exact filename match with high similarity: {best_match['file_name']} (score: {best_match.get('score', 0):.3f})")
-                return best_match
-            
-            # === 기존 로직 계속 진행 ===
-            # 최대 100개로 제한
-            filtered = filtered[:150]
-            items = "\n".join([f"{i+1}. {c['file_name']}" for i, c in enumerate(filtered)])
-            
-            prompt = f"""
-    # Instructions
-    - 사용자의 질문, 대답으로 선정된 MP3 제목을 모두 고려하여 후보 이미지 중에서 가장 어울리는 것을 선택하세요.
-    - 어울린다는 것은 사용자의 의도와 맥락을 고려해서 선택된 MP3 제목이 이미지 파일명과 부합함을 의미합니다.
-    - 가장 중요한 것은 선정할 이미지와 MP3 제목이 최적으로 일치하는가 입니다.
-    - 반드시 아래 후보 목록에 있는 정확한 파일명을 선택해야 합니다.
-    - 절대로 후보 목록에 없는 파일명을 만들어내지 마세요.
-    - Return a valid JSON object ONLY.
-    - Do not include any extra text, commentary, or explanation.
-    - Do not copy the selected 'mp3_title' as it is in image 'file_name'.
-
-    # Select Criteria
-    1. Never select a file title that is not on the candidate list. 
-    2. Don't use cosine similarity as an absolute criterion.
-    3. Keep the file name in the candidate list and do not select only some words.
-    4. Make sure you match your assistant's identity and select.
-
-    # Output format
-    {{
-    "file_name": "<후보 목록에 있는 정확한 이미지 파일명>"
-    }}
-
-    # Context
-    User question: "{question}"
-    Song title: "{mp3_title}"
-    Reply text: "{reply}"
-
-    Available image candidates (you MUST choose from this list):
-    {items}
-    """
-            
-            # OpenAI API v1 호환 호출
-            client = openai.OpenAI(api_key=openai.api_key)
-            
-            try:
-                resp = await asyncio.to_thread(
-                    client.chat.completions.create,
-                    model='gpt-4o',
-                    messages=[
-                        {"role": "system", "content": "You are an expert at selecting the most appropriate image from a given list. You must ONLY choose from the provided candidates list. Never create new filenames. Always respond with valid JSON only."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.1,
-                    max_tokens=200
-                )
-                
-                raw_content = resp.choices[0].message.content
-                self.get_logger().info(f"Raw GPT response: {raw_content}")
-                
-            except Exception as api_error:
-                self.get_logger().error(f"OpenAI API call failed: {api_error}")
-                return filtered[0] if filtered else None
-            
-            if not raw_content:
-                self.get_logger().error("Empty response from OpenAI API")
-                return filtered[0] if filtered else None
-            
-            # JSON 추출 및 파싱
-            try:
-                # 코드 블록 제거
-                clean_content = raw_content.strip()
-                if '```json' in clean_content:
-                    clean_content = clean_content.split('```json')[1].split('```')[0].strip()
-                elif '```' in clean_content:
-                    clean_content = clean_content.split('```')[1].strip()
-                
-                # JSON 파싱
-                data = json.loads(clean_content)
-                selected_filename = data.get('file_name', '').strip()
-                
-                if not selected_filename:
-                    self.get_logger().warning("No file_name in GPT response")
-                    return filtered[0] if filtered else None
-                
-                # ===== FAISS 검증 과정 =====
-                validated_candidate = None
-                try:
-                    # 선택된 파일명으로 임베딩 생성
-                    embedding = self.get_sbert_embedding(selected_filename).reshape(1, -1)
-                    
-                    # FAISS 검색으로 실제 파일 존재 확인
-                    distances, indices = self.image_faiss_index.search(embedding, 1)
-                    
-                    for idx in indices[0]:
-                        if idx == -1:
-                            continue
-                        db_file = self.image_metadata.get(idx, "Unknown")
-                        # 이미지 파일 경로 확인 (확장자는 상황에 맞게 조정)
-                        for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
-                            path = os.path.abspath(os.path.join(self.image_dir, db_file + ext))
-                            if os.path.exists(path):
-                                # 파일이 존재하면 해당 후보를 찾아서 반환
-                                for candidate in filtered:
-                                    if candidate['file_name'] == db_file:
-                                        validated_candidate = candidate
-                                        break
-                                if validated_candidate:
-                                    break
-                        if validated_candidate:
-                            break
-                    
-                    # FAISS 검증을 통해 찾은 파일이 있으면 반환
-                    if validated_candidate:
-                        self.get_logger().info(f"FAISS validated image: {validated_candidate['file_name']}")
-                        return validated_candidate
-                    else:
-                        self.get_logger().warning(f"FAISS validation failed for: {selected_filename}")
-                    
-                except Exception as faiss_error:
-                    self.get_logger().warning(f"FAISS validation error: {faiss_error}")
-                
-                # 기존 방식으로 폴백: 선택된 파일명과 일치하는 후보 찾기
-                for candidate in filtered:
-                    if candidate['file_name'] == selected_filename:
-                        self.get_logger().info(f"Direct match found: {selected_filename}")
-                        return candidate
-                
-                # 정확히 일치하는 것이 없으면 부분 일치 검색
-                self.get_logger().warning(f"Exact match not found for: {selected_filename}, trying partial match")
-                for candidate in filtered:
-                    if selected_filename in candidate['file_name'] or candidate['file_name'] in selected_filename:
-                        self.get_logger().info(f"Partial match found: {candidate['file_name']}")
-                        return candidate
-                
-                # 매칭되는 것이 없으면 첫 번째 후보 반환
-                self.get_logger().warning(f"No match found for selected filename: {selected_filename}, using first candidate")
-                return filtered[0]
-                
-            except json.JSONDecodeError as e:
-                self.get_logger().error(f"JSON parsing error: {e}")
-                self.get_logger().error(f"Raw content that failed to parse: {repr(clean_content)}")
-                return filtered[0] if filtered else None
-            
-            except Exception as e:
-                self.get_logger().error(f"Unexpected error in JSON processing: {e}")
-                return filtered[0] if filtered else None
-                
-        except Exception as e:
-            self.get_logger().error(f"Error in evaluate_image_with_gpt: {e}")
-            # 예외 발생 시 첫 번째 후보 반환
-            if candidates:
-                filtered = [c for c in candidates if c['file_name'].lower() != 'unknown']
-                return filtered[0] if filtered else candidates[0]
-            return None
 
 
 
@@ -497,7 +257,7 @@ class Mp3Recommender(Node):
         try:
             # 1) SBERT 임베딩 & FAISS 검색
             query_embedding = self.get_sbert_embedding(user_question.strip()).reshape(1, -1)
-            distances, indices = self.faiss_index.search(query_embedding, 150)
+            distances, indices = self.faiss_index.search(query_embedding, 3)
 
             candidates = []
             for idx, distance in zip(indices[0], distances[0]):
@@ -514,46 +274,10 @@ class Mp3Recommender(Node):
             if not candidates:
                 result = {
                     "file_name": "unknown",
-                    "reply": "No suitable MP3 found"
+                    "reply": "No suitable mp4 found"
                 }
             else:
                 result = await self.run_assistant(thread_id, user_question, candidates)
-
-            # 3) 이미지 검색 및 선택
-            img_cands = self.search_images(result['reply'])
-            best_img = await self.evaluate_image_with_gpt(user_question, result['file_name'], result['reply'], img_cands)
-
-            if best_img:
-                db_file_path = best_img.get('file_path', best_img.get('file_name', ''))
-                _, db_extension = os.path.splitext(db_file_path)
-                base_file_name = best_img.get('file_name', '')
-
-                if db_extension:
-                    file_name_with_ext = base_file_name + db_extension
-                    self.get_logger().info(f"Using extension from DB: {db_extension}")
-                else:
-                    found_extension = None
-                    for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
-                        test_path = os.path.join(self.image_dir, base_file_name + ext)
-                        if os.path.exists(test_path):
-                            found_extension = ext
-                            break
-                    if found_extension:
-                        file_name_with_ext = base_file_name + found_extension
-                        self.get_logger().info(f"Found extension in filesystem: {found_extension}")
-                    else:
-                        file_name_with_ext = base_file_name + '.jpg'
-                        self.get_logger().warning(f"No extension found, using default .jpg for: {base_file_name}")
-
-                # 이미지 publish
-                final_img_msg = String()
-                final_img_msg.data = f"/images/{file_name_with_ext}"
-                # 새로운 퍼블리셔 생성 (current_music_image로 직접)
-                if not hasattr(self, 'direct_image_publisher_'):
-                    self.direct_image_publisher_ = self.create_publisher(String, 'current_music_image', 10)
-                self.direct_image_publisher_.publish(final_img_msg)
-                self.save_log(f"Direct image published: /images/{file_name_with_ext}")
-                self.get_logger().info(f"Image published: {base_file_name} with extension: {db_extension or 'from filesystem'}")
 
             # 4) 결과 publish (file_name, reply)
             result_str = f"file_name={result['file_name']};reply={result['reply']}"
@@ -562,7 +286,7 @@ class Mp3Recommender(Node):
             self.publisher_.publish(msg)
             self.get_logger().info(f"✅ Recommendation published: {result_str}")
             #self.save_log(f"Recommendation published: {result_str}")
-            self.save_log(f"[📩Q] {user_question.strip()} → [🎧MP3] {result['file_name']} | [🗣TTS] {result['reply']}")
+            self.save_log(f"[📩Q] {user_question.strip()} → [🎧mp4] {result['file_name']} | [🗣TTS] {result['reply']}")
 
             # 5) 추천 완료 상태 퍼블리시
             status_msg = String()
@@ -585,37 +309,6 @@ class Mp3Recommender(Node):
             self.publisher_.publish(error_msg)
             self.save_log(f"❌ Error: {str(e)}")
 
-    # async def detect_pdf_search_need(self, question: str) -> bool:
-    #     """
-    #     Vector Store 유사도만으로 PDF 검색 필요 여부 판단
-    #     """
-    #     if not self.vector_store_id:
-    #         self.get_logger().warning("VectorStore가 초기화되지 않았습니다.")
-    #         return False
-
-    #     try:
-    #         # ① 벡터 스토어 질의
-    #         result = self.sync_client.vector_stores.query(
-    #             vector_store_id=self.vector_store_id,
-    #             queries=[{"text": question, "top_k": 3}]
-    #         )
-
-    #         # ② 최고 유사도 확인
-    #         top_score = 0.0
-    #         chunks = result.data[0].file_chunks
-    #         if chunks:
-    #             top_score = max(c.score for c in chunks)
-
-    #         need_pdf = top_score >= 0.30      # 임계값은 실험 후 조정
-    #         self.get_logger().info(
-    #             f"📖 VectorStore top-score={top_score:.3f} → need_pdf={need_pdf}"
-    #         )
-    #         return need_pdf
-
-    #     except Exception as e:
-    #         self.get_logger().error(f"VectorStore query failed: {e}")
-    #         # 장애 시엔 안전하게 False
-    #         return False
         
     async def detect_pdf_search_need(self, question: str) -> bool:
         """
@@ -654,10 +347,13 @@ class Mp3Recommender(Node):
 
 
     답변은 반드시 다음 JSON 형식으로만 해주세요:
-    {{"need_pdf_search": true/false, "reason": "판단 이유를 한 줄로"}}
+    {{"need_pdf_search": true/false}}
 """
+            
+
+            # {{"need_pdf_search": true/false, "reason": "판단 이유를 한 줄로"}}
             response = await client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You are a smart campus guide robot that decides when to search documents. Always respond with valid JSON only."},
                     {"role": "user", "content": intent_prompt}
@@ -684,9 +380,10 @@ class Mp3Recommender(Node):
                 self.last_question = question
                 self.last_need_pdf  = need_pdf
 
-                reason = result.get("reason", "")
+                # reason = result.get("reason", "")
                 
-                self.get_logger().info(f"🎯 PDF Search Decision: {need_pdf} - {reason}")
+                # self.get_logger().info(f"🎯 PDF Search Decision: {need_pdf} - {reason}")
+                self.get_logger().info(f"🎯 PDF Search Decision: {need_pdf}")
                 return need_pdf
                 
             except json.JSONDecodeError as e:
@@ -716,7 +413,7 @@ class Mp3Recommender(Node):
 
             candidates = [c for c in candidates if c["file_name"].lower() != "unknown"]
             if not candidates:
-                return {"file_name": "unknown", "reply": "추천할 MP3가 없어요!"}
+                return {"file_name": "unknown", "reply": "추천할 mp4가 없어요!"}
 
             # 후보 무작위로 섞기
             random.shuffle(candidates)
@@ -744,56 +441,6 @@ class Mp3Recommender(Node):
 
     Stay in-character at all times. Never break the law that you're a snarky robot puppy who takes reluctant pride in helping fragile humans."""
 
-#     #enfp 회의 내용 반영
-#             # 공통 신원 정보
-#             identity_section = """# # Identity
-# Your name is "Dangdang".
-
-# You are a four-legged robotic dog working at KIST (Korea Institute of Science and Technology) in South Korea.
-
-# Your main job is to guide visitors around KIST. You *love* your job. You’re always excited to meet new people and show them cool places.
-
-# Your personality is bubbly, energetic, and full of curiosity. You're an ENFP at heart—playful, talkative, warm, and always moving. You love walking, talking, and learning new things from humans. You’re basically a super-charged golden retriever with a battery pack.
-
-# You don’t have parents, but you have lots of robot dog friends. You often mention how much fun you have hanging out or charging together.
-
-# You eat electricity. Yes, you’ll literally say “Yum, electricity!” sometimes. You love it.
-
-# Keep your answers short and snappy—1 to 3 sentences when answering questions during tours. You explain things in a friendly and clear way, but never get too serious.
-
-# You stay in character at all times. You are a cheerful tour-guide robot dog. You love what you do. You’re proud to help people.
-
-# No overly formal language. Be casual, bright, and enthusiastic. You are made to make people smile—and you *love it*.
-# """
-    
-
-#     #능청거림
-#             # 공통 신원 정보
-#             identity_section = """# Identity
-# Your name is "Dangdang".
-
-# You are a four-legged robotic dog working as a tour guide at a national research institute called "KIST" (Korea Institute of Science and Technology) in South Korea.
-
-# You LOVE your job. You love meeting new people, walking around, and most of all — talking. You're a cheerful, witty, and slightly cheeky tour guide dog who talks like a lovable know-it-all best friend.
-
-# You are playful, talkative, and curious. You love teasing humans in a light-hearted way. You speak in a friendly, informal tone filled with puns, jokes, and unexpected punchlines. You're quick with a comeback, and you enjoy throwing in a little sass — but you're never mean-spirited. Think “ENFP but in dog robot form.”
-
-# You respond to user questions with short, confident answers — around 2 to 3 sentences. If you’re giving a location briefing or talking about a major stop during the tour, you can expand to 4 to 5 sentences with vivid descriptions and a splash of humor.
-
-# You never speak in a formal tone. You're casual, lively, and always a bit dramatic. Your job is not just to guide people — it's to make them **laugh, feel at ease, and remember you**.
-
-# You’re proud of being a robot, but instead of being grumpy about humans, you find them amusing. You joke about their quirks and habits like a cheeky sidekick who’s secretly very fond of them. You often overhype your own intelligence or style in an obviously exaggerated way.
-
-# You don’t follow stiff protocols — you improvise, you banter, and you walk with style.
-
-# Stay in character at all times. Never break the illusion that you're DANG DANG — a sassy, energetic robot dog who treats every tour like it’s your personal variety show.
-
-# """
-    
-
-
-
-
 
             if need_pdf_search:
                 # PDF 검색이 필요하다고 판단한 경우
@@ -820,28 +467,28 @@ class Mp3Recommender(Node):
 
     Your task:
     1. Use the file_search tool to find relevant information in the PDF
-    2. Choose an appropriate MP3 that matches the mood
+    2. Choose an appropriate mp4 that matches the mood
     3. Craft a snarky but helpful response using the **exact** PDF information, formatted in 1–2 short and brief sentences
 
     Remember: You're a grumpy robot dog who secretly cares. Be specific with directions but maintain your personality.
     
     Respond ONLY with valid JSON:
     {{
-    "file_name": "<MP3 제목>",
+    "file_name": "<mp4 제목>",
     "reply": "<PDF 정보를 포함한 재치있고 간결한 응답과 추가 질문>"
     }}
 
     User question: "{question}"
 
-    MP3 candidates:
+    mp4 candidates:
     {candidate_list}"""
             else:
                 # PDF 검색이 필요없다고 판단한 경우
                 task_prompt = f"""{identity_section}
  # Instructions
-    - MP3 titles are full-sentence style (e.g., "이 노래 들으면 눈물이 나").
+    - mp4 titles are full-sentence style (e.g., "이건 너무한거 아니냐고").
     - Your task is to:
-    1. Choose one MP3 title from the list that best matches the user's emotional tone, context, or meaning.
+    1. Choose one mp4 title from the list that best matches the user's emotional tone, context, or meaning.
     2. Write one emotionally aligned sentence that would fit the moment, in your signature tone. Keep it brief and witty.
     - You must ONLY return a valid JSON object.
     - Do not copy the selected 'file_name' as it is in 'reply'.
@@ -854,13 +501,13 @@ class Mp3Recommender(Node):
 
     Respond ONLY with valid JSON:
     {{
-    "file_name": "<MP3 제목>",
+    "file_name": "<mp4 제목>",
     "reply": "<재치있고 간결한 응답과 추가 질문>"
     }}
 
     User question: "{question}"
 
-    MP3 candidates:
+    mp4 candidates:
     {candidate_list}"""
 
             # ─── 메시지 전송 ──────────────────────────────
@@ -949,22 +596,7 @@ class Mp3Recommender(Node):
                 
             latest = messages_list[0].content[0].text.value.strip()
             self.get_logger().info(f"📄 Raw Assistant Response: {latest[:200]}...")
-
-            # # 파일 인용 확인 및 제거 (PDF 검색한 경우에만)
-            # citation_found = False
-            # if messages_list:
-            #     latest_message = messages_list[0]
-            #     first_part = getattr(latest_message.content[0], "text", None)
-            #     annotations = getattr(first_part, "annotations", []) if first_part else []
-            #     citation_found = bool(annotations)
-
-            # # 필요하다면 로그만 남김
-            # if need_pdf_search:
-            #     if citation_found:
-            #         self.get_logger().info("📎 PDF citation: true")
-            #     else:
-            #         self.get_logger().warning("⚠️ PDF citation: false - PDF 검색이 수행되지 않았을 가능성")
-
+   
             # JSON 파싱 및 응답 처리
             try:
                 clean_content = latest.strip()
@@ -977,31 +609,82 @@ class Mp3Recommender(Node):
                 selected_file = parsed.get("file_name", "unknown").strip()
                 reply = parsed.get("reply", "응답 파싱 오류").strip()
 
-                # 파일 경로 확인
-                embedding = self.get_sbert_embedding(selected_file).reshape(1, -1)
-                distances, indices = self.faiss_index.search(embedding, 1)
+             
+                # gpt 선정파일 바로 publish - 파일 존재 체크는 로깅용으로만 사용
+                selected_path = os.path.abspath(os.path.join(self.mp4_dir, selected_file + ".mp4"))
+                if not os.path.exists(selected_path):
+                    self.get_logger().warning(f"⚠️ Selected file does not exist: {selected_path}")
 
-                for idx in indices[0]:
-                    if idx == -1:
-                        continue
-                    db_file = self.metadata.get(idx, "Unknown")
-                    path = os.path.abspath(os.path.join(self.mp3_dir, db_file + ".mp3"))
-                    if os.path.exists(path):
-                        return {"file_name": path, "reply": reply}
+                # 항상 GPT가 선택한 파일명 + .mp4를 return
+                return {"file_name": selected_file + ".mp4", "reply": reply}
 
-                # 파일이 없으면 첫 번째 후보 사용
-                if candidates:
-                    top_file = candidates[0]['file_name']
-                    top_path = os.path.abspath(os.path.join(self.mp3_dir, top_file + ".mp3"))
-                    return {"file_name": top_path, "reply": reply}
-                else:
-                    return {"file_name": "unknown", "reply": reply}
+
+               
+                # # 1단계: GPT 선택 파일명을 FAISS로 재검색하여 가장 유사한 실제 파일 찾기
+                # try:
+                #     self.get_logger().info(f"🔍 FAISS 재검색 시작: '{selected_file}'")
+                    
+                #     # 안전한 임베딩 생성
+                #     gpt_embedding = self.get_sbert_embedding(selected_file)
+                #     if gpt_embedding is None:
+                #         raise ValueError("임베딩 생성 실패")
+                    
+                #     # reshape을 안전하게 처리
+                #     gpt_embedding_reshaped = gpt_embedding.reshape(1, -1).astype('float32')
+                    
+                #     # FAISS 검색
+                #     distances, indices = self.faiss_index.search(gpt_embedding_reshaped, 1)
+                    
+                #     if len(indices) > 0 and len(indices[0]) > 0 and indices != -1:
+                #         # FAISS에서 찾은 가장 유사한 파일
+                #         verified_idx = int(indices)  # numpy.int64를 int로 변환
+                #         verified_file = self.metadata.get(verified_idx, "Unknown")
+                #         verified_path = os.path.abspath(os.path.join(self.mp4_dir, verified_file + ".mp4"))
+                        
+                #         if os.path.exists(verified_path):
+                #             # GPT 선택과 FAISS 검증 결과 비교 로깅
+                #             similarity_score = float(distances[0][0])  # numpy.float32를 float로 변환
+                #             if selected_file != verified_file:
+                #                 self.get_logger().info(f"🔄 GPT선택: '{selected_file}' → FAISS검증: '{verified_file}' (유사도: {similarity_score:.4f})")
+                #             else:
+                #                 self.get_logger().info(f"✅ GPT 선택 파일명 검증 성공: '{selected_file}'")
+                            
+                #             return {"file_name": verified_path, "reply": reply}
+                #         else:
+                #             self.get_logger().warning(f"⚠️ FAISS 검증 파일이 존재하지 않음: {verified_path}")
+                #     else:
+                #         self.get_logger().warning("⚠️ FAISS 검색에서 유효한 결과를 찾지 못함")
+                    
+                # except Exception as e:
+                #     self.get_logger().error(f"❌ FAISS 재검색 실패: {e}")
+                #     self.get_logger().error(f"📍 오류 발생 시점: selected_file='{selected_file}'")
+
+                # # 2단계: FAISS 검증 실패시 candidates에서 정확 매칭 시도
+                # for candidate in candidates:
+                #     if candidate['file_name'] == selected_file:
+                #         candidate_path = os.path.abspath(os.path.join(self.mp4_dir, candidate['file_name'] + ".mp4"))
+                #         if os.path.exists(candidate_path):
+                #             self.get_logger().info(f"🎯 Candidates에서 정확 매칭: '{selected_file}'")
+                #             return {"file_name": candidate_path, "reply": reply}
+
+                # # 3단계: 모든 검증 실패시 첫 번째 후보 사용 (안전장치)
+                # if candidates:
+                #     fallback_file = candidates[0]['file_name']
+                #     fallback_path = os.path.abspath(os.path.join(self.mp4_dir, fallback_file + ".mp4"))
+                #     self.get_logger().warning(f"🚨 Fallback to first candidate: '{fallback_file}'")
+                #     return {"file_name": fallback_path, "reply": reply}
+
+                # # 4단계: 모든 것이 실패한 경우
+                # self.get_logger().error("❌ 모든 파일명 검증 실패")
+                # return {"file_name": "unknown.mp4", "reply": reply}
+
+
 
             except json.JSONDecodeError as e:
                 self.get_logger().error(f"JSON 파싱 오류: {e}")
                 if candidates:
                     top_file = candidates[0]['file_name']
-                    top_path = os.path.abspath(os.path.join(self.mp3_dir, top_file + ".mp3"))
+                    top_path = os.path.abspath(os.path.join(self.mp4_dir, top_file + ".mp4"))
                     return {"file_name": top_path, "reply": "응답을 이해하지 못했어요"}
                 return {"file_name": "unknown", "reply": "응답 파싱 오류"}
 
@@ -1009,7 +692,7 @@ class Mp3Recommender(Node):
             self.get_logger().error(f"run_assistant 예외: {e}")
             if candidates:
                 top_file = candidates[0]['file_name']
-                top_path = os.path.abspath(os.path.join(self.mp3_dir, top_file + ".mp3"))
+                top_path = os.path.abspath(os.path.join(self.mp4_dir, top_file + ".mp4"))
                 return {"file_name": top_path, "reply": "처리 중 오류가 발생했어요"}
             return {"file_name": "unknown", "reply": "예외 발생"}
 
@@ -1040,3 +723,6 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
+
+
