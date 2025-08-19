@@ -1,5 +1,3 @@
-
-#밈이미지 시도(0602)
 import os
 import requests
 import threading
@@ -53,6 +51,29 @@ class Mp3Player(Node):
         self.image_publisher_ = self.create_publisher(String, "current_music_image", 10)
         # 기존 publisher들 다음에 추가
         self.mp3_waiting_spectrum_pub = self.create_publisher(String, "/mp3_waiting_spectrum", 10)
+
+
+        # 🆕 TTS 요청 구독 추가
+        self.tts_subscription = self.create_subscription(
+            String,
+            "tts_request",
+            self.tts_request_callback,
+            10
+        )
+        
+        # 🆕 TTS 완료 상태 퍼블리시 추가
+        self.tts_status_publisher = self.create_publisher(String, "tts_status", 10)
+
+        # TTS 재생 요청 구독
+        self.tts_play_subscription = self.create_subscription(
+            String,
+            "tts_play_request",
+            self.tts_play_request_callback,
+            10
+        )
+
+
+
 
         
 
@@ -457,7 +478,68 @@ class Mp3Player(Node):
         log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
         with open(log_file_path, "a", encoding="utf-8") as f:
             f.write(log_message)
+# ──────────────────────────────────────────────────────────────────────────────
+# reply TTS 코드
+# ──────────────────────────────────────────────────────────────────────────────
+    def tts_request_callback(self, msg):
+        """TTS 요청 수신 및 처리"""
+        try:
+            reply_text = msg.data
+            self.get_logger().info(f"🗣️ TTS 요청 수신: {reply_text}")
+            self.save_log(f"🗣️ TTS 요청 수신: {reply_text}")
+            
+            # TTS 생성 시작 신호
+            self.publish_tts_status("tts_generating")
+            
+            # TTS 생성
+            self.text2speech(reply_text)
+            
+            # TTS 준비 완료 신호
+            self.publish_tts_status("tts_ready")
+            
+        except Exception as e:
+            error_msg = f"❌ TTS 생성 중 오류: {e}"
+            self.get_logger().error(error_msg)
+            self.save_log(error_msg)
+            self.publish_tts_status("tts_error")
 
+    def play_tts_audio(self):
+        """TTS 오디오 재생 (App.jsx에서 요청시)"""
+        try:
+            self.get_logger().info("🎵 TTS 오디오 재생 시작")
+            self.save_log("🎵 TTS 오디오 재생 시작")
+            
+            # 재생 시작 신호
+            self.publish_tts_status("tts_playing")
+            
+            # 실제 재생
+            self.play_mp3(self.reply_path)
+            
+            # 재생 완료 신호
+            self.publish_tts_status("tts_done")
+            
+            self.get_logger().info("🎵 TTS 오디오 재생 완료")
+            self.save_log("🎵 TTS 오디오 재생 완료")
+            
+        except Exception as e:
+            error_msg = f"❌ TTS 재생 중 오류: {e}"
+            self.get_logger().error(error_msg)
+            self.save_log(error_msg)
+            self.publish_tts_status("tts_error")
+
+    def publish_tts_status(self, status):
+        """TTS 상태 퍼블리시"""
+        msg = String()
+        msg.data = status
+        self.tts_status_publisher.publish(msg)
+        self.get_logger().info(f"📡 TTS 상태: {status}")
+        self.save_log(f"📡 TTS 상태: {status}")
+
+
+    def tts_play_request_callback(self, msg):
+        """TTS 재생 요청 처리"""
+        if msg.data == "play_tts":
+            self.play_tts_audio()
 
 
 
