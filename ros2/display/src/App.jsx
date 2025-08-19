@@ -47,16 +47,25 @@ function downsampleArray(arr, targetLen) {
 
 
 function SpectrumVisualizer() {
+
+  // 🆕 비디오 관련 상태 변수들 추가
+  const [currentVideo, setCurrentVideo] = useState(null);
+  const [videoVisible, setVideoVisible] = useState(false);
+  const [currentReply, setCurrentReply] = useState(''); // 추가: reply 텍스트
+  const videoRef = useRef(null); // 비디오 ref 추가
+
+
+
   // 🆕 분리된 스펙트럼 상태
   const [musicSpectrum, setMusicSpectrum] = useState([]);
   const [micSpectrum, setMicSpectrum] = useState([]);
 
   const [musicPlaying, setMusicPlaying] = useState(false);
-  const [currentImage, setCurrentImage] = useState(null); // 이미지 상태 추가
+  //const [currentImage, setCurrentImage] = useState(null); // 이미지 상태 추가
   const canvasRef = useRef(null);
   const [recommendStatus, setRecommendStatus] = useState('done');
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 400 });
-  const [imageVisible, setImageVisible] = useState(false);
+  //const [imageVisible, setImageVisible] = useState(false);
   const [canShowSpectrum, setCanShowSpectrum] = useState(false);
 
   // 🆕 방향 상태 추가
@@ -102,68 +111,355 @@ function SpectrumVisualizer() {
 
   
   const [isFinalPhrase, setIsFinalPhrase]   = useState(false);
-  
+
+
+ // 🆕 TTS 관련 상태 추가
+ const [ttsStatus, setTtsStatus] = useState('idle'); // idle, generating, ready, playing, done, error
+ const [showReply, setShowReply] = useState(false);
+
+
+
+
+
+
+// 🆕 TTS 상태 구독
+useEffect(() => {
+  const ttsStatusListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/tts_status',
+    messageType: 'std_msgs/String'
+  });
+
+  ttsStatusListener.subscribe((message) => {
+    console.log('🗣️ TTS 상태 변경:', message.data);
+    setTtsStatus(message.data);
+  });
+
+  return () => {
+    ttsStatusListener.unsubscribe();
+  };
+}, []);
+
+// 🆕 TTS 재생 요청 퍼블리셔 생성
+const ttsPlayPublisher = useRef(null);
+
+useEffect(() => {
+  if (!ttsPlayPublisher.current) {
+    ttsPlayPublisher.current = new ROSLIB.Topic({
+      ros: ros,
+      name: '/tts_play_request',
+      messageType: 'std_msgs/String'
+    });
+  }
+}, []);
+
+
+
 
 
 
   
 
+// 🆕 Mp3Recommender에서 오는 mp4 정보 구독
+useEffect(() => {
+  const mp4Listener = new ROSLIB.Topic({
+      ros: ros,
+      name: '/recommended_mp4', // Mp3Recommender에서 publish하는 토픽
+      messageType: 'std_msgs/String'
+  });
+
+  mp4Listener.subscribe((message) => {
+      console.log('🎬 MP4 추천 메시지 수신:', message.data);
+      
+      if (message.data && message.data.trim() !== "") {
+          // Mp3Recommender에서 "file_name=xxx.mp4;reply=yyy" 형식으로 전송
+          const parts = message.data.split(';');
+          let fileName = '';
+          let reply = '';
+          
+          parts.forEach(part => {
+              if (part.startsWith('file_name=')) {
+                  fileName = part.substring('file_name='.length);
+              } else if (part.startsWith('reply=')) {
+                  reply = part.substring('reply='.length);
+              }
+          });
 
 
-// //한글자별
-// // 1. 글자별 애니메이션 컴포넌트
-// const AnimatedCharacter = ({ char, index, totalChars }) => {
-//   // 각 글자마다 고유한 애니메이션 패턴 생성
-//   const animationName = `float-${index % 5}`; // 5가지 패턴 순환
-//   const animationDelay = `${index * 0.1}s`; // 순차적 시작
-//   const animationDuration = `${6 + Math.random() * 4}s`; // 3-5초 랜덤
+          console.log('🔍 파싱된 파일명:', fileName);
+          console.log('🔍 파싱된 응답:', reply);
 
-//   return (
-//     <span
-//       style={{
-//         position: 'absolute',
-//         fontSize: '4rem',
-//         fontWeight: 'bold',
-//         color: '#FFD700',
-//         textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
-//         animation: `${animationName} ${animationDuration} ${animationDelay} infinite ease-in-out`,
-//         zIndex: 30
-//       }}
-//     >
-//       {char}
-//     </span>
-//   );
-// };
+          if (fileName && fileName !== 'unknown' && !fileName.includes('unknown')) {
+          
+              // mp4 파일 경로 생성 (Mp3Recommender의 mp4_dir 경로 사용)
+              const videoPath = `/videos/${fileName}`;
+              
+              console.log('🎬 비디오 표시:', videoPath);
+              console.log('🗣️ Reply 텍스트:', reply);
+              
+              setCurrentVideo(videoPath);
+              setCurrentReply(reply);
+              setVideoVisible(true);
+              
+              // 🆕 대기 모드 종료 (Mp3Recommender 비디오가 왔으므로)
+              setWaitingImage(null);
+              setWaitingImageVisible(false);
+              setIsWaitingImageMode(false);
+              setIsWaitingAudioMode(false);
+              setIsMp3WaitingMode(false);
+
+              // searching 상태도 해제
+              if (recommendStatus === 'searching') {
+                  setRecommendStatus('processing');
+              }
+              console.log('✅ 비디오 상태 업데이트 완료');
+          } else {
+              console.log('🎬 유효하지 않은 파일명 또는 unknown:', fileName);
+          }
+      } else {
+          console.log('🎬 비디오 숨김');
+          setCurrentVideo(null);
+          setVideoVisible(false);
+          setCurrentReply('');
+
+          // 비디오가 숨김 상태가 되면 스펙트럼 시각화 시작
+          if (musicPlaying) {
+              console.log('🎵 비디오 숨김 완료 - 스펙트럼 시각화 시작');
+              setCanShowSpectrum(true);
+              setRecommendStatus('done');
+          }
+      }
+  });
+
+  return () => {
+      console.log('🎬 MP4 리스너 해제');
+      mp4Listener.unsubscribe();
+  };
+}, [musicPlaying, recommendStatus]);
+
+// 🆕 비디오 렌더링 함수
+const renderVideo = () => {
+  console.log('🎬 renderVideo 호출:', {
+    currentVideo,
+    videoVisible,
+    musicPlaying
+  });
+
+  if (!currentVideo || !videoVisible) {
+    console.log('🎬 비디오 렌더링 조건 불만족');
+      return null;
+  }
 
 
 
-// // 띄어쓰기 기준 단어별
-// const AnimatedWord = ({ word, index, totalWords }) => {
-//   // 각 단어마다 고유한 애니메이션 패턴 생성
-//   const animationName = `float-${index % 5}`; // 5가지 패턴 순환
-//   const animationDelay = `${index * 0.3}s`; // 단어별 시작 간격 (0.3초)
-//   const animationDuration = `${3 + Math.random() * 2}s`; // 3-5초 랜덤
+  // App.jsx - renderVideo 안
+const createSafeUrl = (path) => {
+  try {
+    // // 파일명만 인코딩
+    // const lastSlash = path.lastIndexOf('/');
+    // const dir = path.substring(0, lastSlash + 1);      // '/videos/'
+    // const file = path.substring(lastSlash + 1);        // '파티분위기....mp4'
+    // return dir + encodeURIComponent(file);
+
+    const lastSlash = path.lastIndexOf('/');
+  const dir  = path.slice(0, lastSlash + 1);   // "/videos/"
+  const file = path.slice(lastSlash + 1);      // "why so long.mp4"
+  return dir + encodeURIComponent(file);      // 디렉터리 부분은 인코딩 X
+
+
+  } catch (e) {
+    console.error('비디오 URL 생성 오류:', e);
+    return path;
+  }
+};
+
+
+
+  const safeVideoUrl = createSafeUrl(currentVideo);
+  console.log('🎬 안전한 비디오 URL:', safeVideoUrl);
+
+
+
+
+
+  return (
+      <div style={{
+          position: 'absolute',
+          top: '0',
+          left: '0',
+          width: '100vw',
+          height: '100vh',
+          zIndex: 15,
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: '#000'
+      }}>
+          <video 
+          key={safeVideoUrl} 
+          ref={videoRef}
+          src={safeVideoUrl}
+          autoPlay
+        
+      
+          playsInline
+          controls // 🔧 임시 디버깅용 컨트롤 추가
+          style={{
+            width: 'auto',
+            height: '100vh',
+            minWidth: '100vw',
+            objectFit: 'cover',
+            objectPosition: 'center'
+          }}
+          onLoadStart={() => {
+            console.log('🎬 비디오 로드 시작:', safeVideoUrl);
+          }}
+          onLoadedMetadata={() => {
+            console.log('🎬 비디오 메타데이터 로드 완료');
+          }}
+          onLoadedData={() => {
+            console.log('🎬 비디오 데이터 로드 완료:', safeVideoUrl);
+            if (videoRef.current) {
+              videoRef.current.play().then(() => {
+                console.log('✅ 비디오 자동재생 성공');
+              }).catch(e => {
+                console.error('❌ 비디오 자동재생 실패:', e);
+              });
+            }
+          }}
+
+         // 🆕 핵심 수정: 비디오 종료 후 TTS 재생 시퀀스
+         onEnded={() => {
+          console.log('🎬 비디오 재생 완료 - TTS 대기');
+          setVideoVisible(false);
+          
+          // TTS가 준비된 경우 즉시 재생, 아니면 대기
+          if (ttsStatus === 'tts_ready') {
+            console.log('🗣️ TTS 준비 완료 - 즉시 재생');
+            requestTtsPlay();
+          } else {
+            console.log('🗣️ TTS 준비 대기 중...');
+            setShowReply(true); // TTS 대기 중 표시
+          }
+        }}
+
+
+
+
+
+         
+          onError={(e) => {
+            console.error('🎬 비디오 로드 실패:', safeVideoUrl);
+            console.error('🎬 에러 상세:', e.target.error);
+          }}
+        />
+          
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+      </div>
+  );
+};
+
+
+// 🆕 TTS 재생 요청 함수
+const requestTtsPlay = () => {
+  if (ttsPlayPublisher.current) {
+    const msg = new ROSLIB.Message({
+      data: 'play_tts'
+    });
+    ttsPlayPublisher.current.publish(msg);
+    console.log('🗣️ TTS 재생 요청 전송');
+  }
+};
+
+
+// 🆕 TTS 상태 변화 감지 및 처리
+useEffect(() => {
+  if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
+    // 비디오 종료 후 TTS가 준비되면 재생
+    console.log('🗣️ TTS 준비 완료 - 재생 시작');
+    setShowReply(false);
+    requestTtsPlay();
+  } else if (ttsStatus === 'tts_done') {
+    // TTS 재생 완료 후 초기 상태로 복귀
+    console.log('🗣️ TTS 재생 완료 - 초기 상태로 복귀');
+    setCurrentVideo(null);
+    setCurrentReply('');
+    setVideoVisible(false);
+    setShowReply(false);
+    setRecommendStatus('done');
+    
+    // 스펙트럼 모드로 전환 (필요시)
+    if (musicPlaying) {
+      setCanShowSpectrum(true);
+    }
+  }
+}, [ttsStatus, videoVisible, showReply, musicPlaying]);
+
+// 🆕 TTS 대기 중 표시 함수
+const renderTtsWaiting = () => {
+  if (!showReply || !currentReply) {
+    return null;
+  }
+
+  return (
+    <div style={{
+      position: 'absolute',
+      top: '0',
+      left: '0',
+      width: '100vw',
+      height: '100vh',
+      zIndex: 20,
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: 'rgba(0, 0, 0, 0.8)'
+    }}>
+      <div style={{
+        color: '#fff',
+        fontSize: '1.5rem',
+        textAlign: 'center',
+        padding: '20px'
+      }}>
+        <div>음성을 준비하는 중...</div>
+        <div style={{ 
+          fontSize: '1rem', 
+          marginTop: '10px',
+          opacity: 0.7 
+        }}>
+          {currentReply}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   
-
-//   return (
-//     <span
-//       style={{
-//         position: 'absolute',
-//         fontSize: '4rem',
-//         fontWeight: 'bold',
-//         color: '#FFD700',
-//         textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
-//         animation: `${animationName} ${animationDuration} ${animationDelay} infinite ease-in-out`,
-//         zIndex: 30,
-//         whiteSpace: 'nowrap', // 🆕 단어 내 줄바꿈 방지
-//         letterSpacing: '0.05em' // 🆕 글자 간격 조정
-//       }}
-//     >
-//       {word}
-//     </span>
-//   );
-// };
-
 //글자 길이별 속도 조절
 const AnimatedWord = ({ word, index, totalWords }) => {
   const animationName = `float-${index % 5}`;
@@ -349,172 +645,11 @@ const createAnimationStyles = () => {
           !isWaitingAudioMode && 
           !isWaitingImageMode && 
           !isMp3WaitingMode && 
-          !imageVisible && 
+          !videoVisible && 
           isShowingWords;
   };
 
 
-
-
-  //   // 실시간 단어 렌더링 함수
-  // const renderRealtimeWords = () => {
-  //   if (!shouldShowRealtimeWords() || !currentPhrase) {
-  //     return null;
-  //   }
-
-  //   return (
-  //     <div style={{
-  //       position: 'fixed',
-  //       top: '50%',
-  //       left: '50%',
-  //       transform: 'translate(-50%, -50%)',
-  //       zIndex: 20,
-  //       textAlign: 'center',
-  //       animation: 'fadeInScale 0.3s ease-out'
-  //     }}>
-  //       <div style={{
-  //         fontSize: '4rem',
-  //         fontWeight: 'bold',
-  //         color: '#fff',
-  //         textShadow: '2px 2px 4px rgba(0,0,0,0.7)',
-  //         backgroundColor: 'rgba(0,0,0,0.3)',
-  //         padding: '20px 40px',
-  //         borderRadius: '15px',
-  //         border: '2px solid rgba(255,255,255,0.3)',
-  //         backdropFilter: 'blur(10px)',
-  //         maxWidth: '80vw',
-  //         wordBreak: 'keep-all',
-  //         whiteSpace: 'nowrap'
-  //       }}>
-  //         {currentPhrase}
-  //       </div>
-        
-  //       {/* 선택적: 이전 단어들 표시 */}
-  //       <div style={{
-  //         marginTop: '20px',
-  //         opacity: 0.6,
-  //         fontSize: '1.5rem'
-  //       }}>
-  //         {realtimeWords.slice(-3).map((word, index) => (
-  //           <span key={word.id} style={{
-  //             margin: '0 10px',
-  //             opacity: 1 - (index * 0.3)
-  //           }}>
-  //             {word.phrase}
-  //           </span>
-  //         ))}
-  //       </div>
-  //     </div>
-  //   );
-  // };
-
-
-// //0709 수정 전(최종 문장 노란색으로 렌더링)
-//   const renderRealtimeWords = () => {
-//     if (!shouldShowRealtimeWords() || !currentPhrase) {
-//       return null;
-//     }
-//     const phraseStyle = isFinalPhrase
-//         ? { color: '#FFD700' }         // ★ 최종 문장 색 : 노란색 예시
-//         : { color: '#FFFFFF' };        // 일반 문장 : 흰색
-
-
-
-  
-//     return (
-//       <div style={{
-//         position: 'fixed',
-//         top: '50%',
-//         left: '50%',
-//         transform: 'translate(-50%, -50%)',
-//         zIndex: 20,
-//         textAlign: 'center',
-//         animation: 'fadeInScale 0.3s ease-out'
-//       }}>
-//         <div style={{
-//           fontSize: '5rem',                        // 🆕 더 큰 글씨
-//           fontWeight: 'bold',
-//           color: '#ffffff',                        // 🆕 순백색
-//           textShadow: '3px 3px 6px rgba(0,0,0,0.8)', // 🆕 더 진한 그림자 (가독성)
-//           maxWidth: '90vw',
-//           wordBreak: 'keep-all',
-//           whiteSpace: 'nowrap',
-//           letterSpacing: '0.05em',                  // 🆕 글자 간격 추가
-//           ...phraseStyle
-//         }}>
-//           {currentPhrase}
-//         </div>
-//       </div>
-//     );
-//   };
-  
-
-// //최종 문장 돌아다니는 효과(한글자별)
-// const renderRealtimeWords = () => {
-//   if (!shouldShowRealtimeWords() || !currentPhrase) {
-//     return null;
-//   }
-
-//   // 최종 문장일 때만 한글자씩 애니메이션
-//   if (isFinalPhrase) {
-//     const characters = currentPhrase.split('');
-    
-//     return (
-//       <>
-//         {/* CSS 애니메이션 스타일 추가 */}
-//         <style>{createAnimationStyles()}</style>
-        
-//         {/* 각 글자별 애니메이션 */}
-//         <div style={{
-//           position: 'fixed',
-//           top: 0,
-//           left: 0,
-//           width: '100vw',
-//           height: '100vh',
-//           zIndex: 20,
-//           pointerEvents: 'none'
-//         }}>
-//           {characters.map((char, index) => (
-//             char.trim() ? (
-//               <AnimatedCharacter 
-//                 key={`${char}-${index}`}
-//                 char={char}
-//                 index={index}
-//                 totalChars={characters.length}
-//               />
-//             ) : null
-//           ))}
-//         </div>
-//       </>
-//     );
-//   }
-
-//   // 일반 문장은 기존 방식 유지
-//   return (
-//     <div style={{
-//       position: 'fixed',
-//       top: '50%',
-//       left: '50%',
-//       transform: 'translate(-50%, -50%)',
-//       zIndex: 20,
-//       textAlign: 'center',
-//       animation: 'fadeInScale 0.3s ease-out'
-//     }}>
-//       <div style={{
-//         fontSize: '5rem',
-//         fontWeight: 'bold',
-//         color: '#ffffff',
-//         textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
-//         maxWidth: '90vw',
-//         wordBreak: 'keep-all',
-//         whiteSpace: 'nowrap',
-//         letterSpacing: '0.05em'
-//       }}>
-//         {currentPhrase}
-//       </div>
-//     </div>
-//   );
-// };
 
 
 
@@ -714,7 +849,7 @@ const renderRealtimeWords = () => {
             setMusicPlaying(false);
             setRecommendStatus('done');
             setCanShowSpectrum(false);
-            setImageVisible(false);
+            setVideoVisible(false);
             setIsMp3WaitingMode(false); // Mp3 waiting 모드 종료
         }
     });
@@ -855,84 +990,6 @@ const renderRealtimeWords = () => {
     //  previousSpectrumRef.current = [];
     };
   }, [musicPlaying]);
-
-  //==========================================================
-
-  // // 🆕 마이크 스펙트럼 구독
-  // useEffect(() => {
-  //   if (musicPlaying) return;
-    
-  //   const micSpectrumListener = new ROSLIB.Topic({
-  //     ros: ros,
-  //     name: '/audio_visualizer',
-  //     messageType: 'std_msgs/String'
-  //   });
-    
-  //   micSpectrumListener.subscribe((message) => {
-  //     try {
-  //       const data = JSON.parse(message.data);
-  //       if (data.spectrum) {
-  //         // 🆕 마이크 스펙트럼 값 웹 콘솔 출력
-  //       console.log('🎤 마이크 스펙트럼 수신:', {
-  //         length: data.spectrum.length,
-  //         first_10_values: data.spectrum.slice(0, 10),
-  //         max_value: Math.max(...data.spectrum),
-  //         min_value: Math.min(...data.spectrum),
-  //         average: data.spectrum.reduce((a, b) => a + b, 0) / data.spectrum.length,
-  //         timestamp: new Date().toLocaleTimeString()
-  //       });
-        
-
-  //         const smoothedData = applyMicSmoothing(data.spectrum);
-  //         setMicSpectrum(smoothedData);
-  //         //setMicSpectrum(data.spectrum);
-
-  //       }
-  //     } catch (e) {
-  //       console.error('Mic spectrum JSON parse error:', e);
-  //     }
-  //   });
-    
-  //   return () => {
-  //     micSpectrumListener.unsubscribe();
-  //     //previousMicSpectrumRef.current = [];
-  //   };
-  // }, [musicPlaying]);
-
-
-    //==========================================================
-
-  // // 🆕 대기 스펙트럼 구독 - 대기 효과음1  waiting1 구독 (/waiting_spectrum)
-  // useEffect(() => {
-  //   const waitingSpectrumListener = new ROSLIB.Topic({
-  //     ros: ros,
-  //     name: '/waiting_spectrum',
-  //     messageType: 'std_msgs/String'
-  //   });
-    
-  //   waitingSpectrumListener.subscribe((message) => {
-  //     try {
-  //       const data = JSON.parse(message.data);
-  //       if (data.spectrum) {
-  //         setIsWaitingAudioMode(true);
-  //         setIsWaitingImageMode(false);
-  //         setRecommendStatus('waiting_audio'); // 대기 오디오 상태
-  //         setCurrentGif(''); // 기존 GIF 제거
-  //         const smoothedData = applyAdvancedSmoothing(data.spectrum);
-  //         setWaitingSpectrum(smoothedData);
-  //       }
-  //     } catch (e) {
-  //       console.error('Waiting spectrum JSON parse error:', e);
-  //     }
-  //   });
-    
-  //   return () => {
-  //     waitingSpectrumListener.unsubscribe();
-  //   };
-  // }, []);
-
-
-//==========================================================
 
 
   // 🆕 대기 이미지 구독 (/waiting_image)
@@ -1125,7 +1182,7 @@ useEffect(() => {
     
     // if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode) return;
     // 🆕 Mp3Player waiting 모드도 마이크 스펙트럼 비활성화 조건에 추가
-    if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode || isMp3WaitingMode  || isWaitingImageMode || isTransitioning) return;
+    if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode || isMp3WaitingMode  || isWaitingImageMode || isTransitioning|| videoVisible) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     
@@ -1139,7 +1196,7 @@ useEffect(() => {
     ctx.fillStyle = '#222222';
     ctx.fillRect(0, 0, width, height);
     
-    if (recommendStatus === 'searching' && !imageVisible) {
+    if (recommendStatus === 'searching' && !videoVisible) {
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, width, height);
       return;
@@ -1177,7 +1234,7 @@ useEffect(() => {
       return;
     }
 
-    if (imageVisible || currentImage) {
+    if (videoVisible) {
       console.log('🎵 마이크 모드 - 이미지 표시 중이므로 차단');
       return;
     }
@@ -1265,7 +1322,7 @@ const totalGaps = (numBars - 1);
 
 
     
-  }, [micSpectrum, musicPlaying, recommendStatus, canvasSize, triggerDetected, imageVisible, isWaitingImageMode, isTransitioning]);
+  }, [micSpectrum, musicPlaying, recommendStatus, canvasSize, triggerDetected, videoVisible, isWaitingImageMode, isTransitioning]);
 
  
 
@@ -1466,135 +1523,78 @@ for (let i = 0; i < numBars; i++) {
 
 
 
-  // 4. 이미지 토픽 구독 추가
-  useEffect(() => {
-    const imageListener = new ROSLIB.Topic({
-        ros: ros,
-        name: '/current_music_image',
-        messageType: 'std_msgs/String'
-    });
+//   // 4. 이미지 토픽 구독 추가
+//   useEffect(() => {
+//     const imageListener = new ROSLIB.Topic({
+//         ros: ros,
+//         name: '/current_music_image',
+//         messageType: 'std_msgs/String'
+//     });
 
-    imageListener.subscribe((message) => {
-        console.log('🖼️ 이미지 메시지 수신:', message.data);
+//     imageListener.subscribe((message) => {
+//         console.log('🖼️ 이미지 메시지 수신:', message.data);
         
-        if (message.data && message.data.trim() !== "") {
-            const imagePath = message.data;
+//         if (message.data && message.data.trim() !== "") {
+//             const imagePath = message.data;
            
 
 
 
-            console.log('🖼️ 이미지 표시:', imagePath);
-            setCurrentImage(imagePath);
-            setImageVisible(true);
-            setCurrentGif(''); // 이 줄 추가
+//             console.log('🖼️ 이미지 표시:', imagePath);
+            
+//             setVideoVisible(true);
+//             setCurrentGif(''); // 이 줄 추가
 
 
-            // 🆕 대기 모드 종료 (Mp3Recommender 이미지가 왔으므로)
-            setWaitingImage(null);
-            setWaitingImageVisible(false);
-            setIsWaitingImageMode(false);
-            setIsWaitingAudioMode(false);
-
-
-
-
-            // searching 상태도 해제
-            if (recommendStatus === 'searching') {
-              setRecommendStatus('processing');
-  }
-
-
-        } else {
-            console.log('🖼️ 이미지 숨김');
-            setCurrentImage(null);
-            setImageVisible(false);
-
-
-            // 이미지가 숨김 상태가 되면 스펙트럼 시각화 시작
-            if (musicPlaying) {
-              console.log('🎵 이미지 숨김 완료 - 스펙트럼 시각화 시작');
-              setCanShowSpectrum(true);
-              setRecommendStatus('done');
-          }
+//             // 🆕 대기 모드 종료 (Mp3Recommender 이미지가 왔으므로)
+//             setWaitingImage(null);
+//             setWaitingImageVisible(false);
+//             setIsWaitingImageMode(false);
+//             setIsWaitingAudioMode(false);
 
 
 
 
-
-        }
-    });
-
-    return () => {
-        console.log('🖼️ 이미지 리스너 해제');
-        imageListener.unsubscribe();
-    };
-}, [musicPlaying]);
+//             // searching 상태도 해제
+//             if (recommendStatus === 'searching') {
+//               setRecommendStatus('processing');
+//   }
 
 
+//         } else {
+//             console.log('🖼️ 이미지 숨김');
+     
+//             setVideoVisible(false);
 
 
-// 5. 이미지 표시 컴포넌트
-const renderImage = () => {
-    if (!currentImage || !imageVisible){
-        return null;
-    }
-
-
-    // [수정] 파일명만 정확하게 인코딩하는 로직으로 변경
-    const createSafeUrl = (path) => {
-      try {
-          // 1. 마지막 '/'를 기준으로 디렉터리 경로와 파일명을 분리합니다.
-          const lastSlashIndex = path.lastIndexOf('/');
-          const directoryPath = path.substring(0, lastSlashIndex + 1); // 예: "/images/"
-          const fileName = path.substring(lastSlashIndex + 1);      // 예: "어.. 얘 멋있다!.jpg"
-
-          // 2. 파일명 부분만 완벽하게 인코딩합니다.
-          const encodedFileName = encodeURIComponent(fileName);
-
-          // 3. 디렉터리 경로와 인코딩된 파일명을 다시 합쳐 완전한 URL을 만듭니다.
-          return directoryPath + encodedFileName;
-      } catch (e) {
-          console.error("URL 생성 중 오류 발생:", e);
-          return path; // 오류 발생 시 원본 경로 반환
-      }
-  };
-
-  const safeImageUrl = createSafeUrl(currentImage);
+//             // 이미지가 숨김 상태가 되면 스펙트럼 시각화 시작
+//             if (musicPlaying) {
+//               console.log('🎵 이미지 숨김 완료 - 스펙트럼 시각화 시작');
+//               setCanShowSpectrum(true);
+//               setRecommendStatus('done');
+//           }
 
 
 
 
 
-    return (
-      <div style={{
-        position: 'absolute',
-        top: '0',              // 🆕 화면 맨 위부터
-        left: '0',             // 🆕 화면 맨 왼쪽부터
-        width: '100vw',        // 🆕 화면 전체 너비
-        height: '100vh',       // 🆕 화면 전체 높이
-        zIndex: 15,
-        display: 'flex',       // 🆕 중앙 정렬을 위한 flexbox
-        justifyContent: 'center',
-        alignItems: 'center'
-    }}>
-            <img 
-                src={safeImageUrl} 
-                alt="Music Visual"
-                style={{
-                  width: 'auto',              // 🆕 너비 자동 (비율 유지)
-                  height: '100vh',            // 🆕 세로를 화면에 꽉 차게
-                  minWidth: '100vw',           // 🆕 최소 너비로 화면 전체 커버
-                  objectFit: 'contain',         // 넘치는 부분 자르기
-                  objectPosition: 'center',   // 중앙 정렬
-                  borderRadius: '0px',
-                  boxShadow: 'none'     
-                }}
-                onLoad={() => console.log('🖼️ 이미지 로드 성공:', safeImageUrl)}
-                onError={() => console.error('🖼️ 이미지 로드 실패:', safeImageUrl)}
-            />
-        </div>
-    );
-};
+//         }
+//     });
+
+//     return () => {
+//         console.log('🖼️ 이미지 리스너 해제');
+//         imageListener.unsubscribe();
+//     };
+// }, [musicPlaying]);
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1692,9 +1692,9 @@ const getScreenTransform = () => {
       // backgroundColor: (recommendStatus === 'searching' && !imageVisible) ? '#fff' : 
       //            (musicPlaying || imageVisible) ? '#000' : '#222222',
       // 🆕 대기 모드 고려한 배경색 로직
-      backgroundColor: (recommendStatus === 'searching' && !imageVisible && !isWaitingAudioMode) ? '#fff' : 
+      backgroundColor: (recommendStatus === 'searching' && !videoVisible && !isWaitingAudioMode) ? '#fff' : 
       (isWaitingAudioMode) ? '#fff' :
-      (musicPlaying || imageVisible) ? '#000' : '#222222',
+      (musicPlaying || videoVisible) ? '#000' : '#222222',
 
       // 🆕 화면 변환 적용
       transform: getScreenTransform(),
@@ -1729,8 +1729,8 @@ const getScreenTransform = () => {
 
 
 
-    {/* {!(musicPlaying && currentImage) && (   */}
-    {!(musicPlaying && currentImage) && !waitingImageVisible && !shouldShowRealtimeWords() && (
+   {/* 캔버스 표시 조건 수정 */}
+   {!videoVisible && !showReply && !waitingImageVisible && !shouldShowRealtimeWords() && (
       <canvas 
         ref={canvasRef}
         style={{
@@ -1752,7 +1752,9 @@ const getScreenTransform = () => {
     {renderRealtimeWords()}
 
     {/* 기존 이미지 표시 */}
-    {musicPlaying && renderImage()}
+    {videoVisible && renderVideo()}
+    {/* 🆕 TTS 대기 중 표시 */}
+    {renderTtsWaiting()}
     {renderWaitingImage()}
 
   </div>
@@ -1761,3 +1763,9 @@ const getScreenTransform = () => {
 }
 
 export default SpectrumVisualizer;
+
+
+
+
+
+
