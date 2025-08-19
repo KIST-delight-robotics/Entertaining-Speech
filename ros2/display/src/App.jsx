@@ -119,6 +119,82 @@ function SpectrumVisualizer() {
 
 
 
+// 🆕 TTS 관련 상태 추가
+const [ttsVolume, setTtsVolume] = useState(0);
+const [isTtsPlaying, setIsTtsPlaying] = useState(false);
+
+
+
+
+// 🆕 TTS 스펙트럼 구독
+useEffect(() => {
+  const ttsSpectrumListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/tts_spectrum',
+    messageType: 'std_msgs/String'
+  });
+  
+  ttsSpectrumListener.subscribe((message) => {
+    try {
+      const data = JSON.parse(message.data);
+      if (data.rms !== undefined) {
+        console.log('🗣️ TTS 음량 데이터 수신:', data);
+        console.log('🗣️ isTtsPlaying 상태:', isTtsPlaying);
+        
+        // 🔧 RMS 값을 직접 사용하여 더 정확한 음량 반영
+        const rmsValue = data.rms;
+        const normalizedRms = Math.min(1.0, rmsValue / 100000); // 1000으로 나누어 0-1 범위로
+        
+        console.log('🗣️ RMS 값:', rmsValue);
+        console.log('🗣️ 정규화된 RMS:', normalizedRms);
+        
+        // 🆕 TTS 전용 스무딩 적용
+        const smoothedVolume = applyTtsVolumeSmoothing(normalizedRms);
+        setTtsVolume(smoothedVolume);
+        
+        console.log('🗣️ 최종 TTS 음량:', smoothedVolume);
+      }
+    } catch (e) {
+      console.error('TTS volume JSON parse error:', e);
+    }
+  });
+  
+  return () => {
+    ttsSpectrumListener.unsubscribe();
+  };
+}, []);
+
+// 🆕 TTS 음량 스무딩 함수
+const previousTtsVolumeRef = useRef(0);
+
+const applyTtsVolumeSmoothing = (newVolume) => {
+  const previous = previousTtsVolumeRef.current;
+  
+  let smoothed;
+  if (newVolume > previous) {
+    // 음성 증가: 빠른 반응 (70% 새값)
+    smoothed = previous * 0.3 + newVolume * 0.7;
+  } else {
+    // 음성 감소: 자연스러운 감쇠 (40% 새값)
+    smoothed = previous * 0.6 + newVolume * 0.4;
+  }
+  
+  previousTtsVolumeRef.current = smoothed;
+  return smoothed;
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -385,28 +461,72 @@ const requestTtsPlay = () => {
 };
 
 
-// 🆕 TTS 상태 변화 감지 및 처리
+// // 🆕 TTS 상태 변화 감지 및 처리
+// useEffect(() => {
+//   if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
+//     // 비디오 종료 후 TTS가 준비되면 재생
+//     console.log('🗣️ TTS 준비 완료 - 재생 시작');
+//     setShowReply(false);
+//     requestTtsPlay();
+//   } else if (ttsStatus === 'tts_done') {
+//     // TTS 재생 완료 후 초기 상태로 복귀
+//     console.log('🗣️ TTS 재생 완료 - 초기 상태로 복귀');
+//     setCurrentVideo(null);
+//     setCurrentReply('');
+//     setVideoVisible(false);
+//     setShowReply(false);
+//     setRecommendStatus('done');
+    
+//     // 스펙트럼 모드로 전환 (필요시)
+//     if (musicPlaying) {
+//       setCanShowSpectrum(true);
+//     }
+//   }
+// }, [ttsStatus, videoVisible, showReply, musicPlaying]);
+
+
+
+
+// 🆕 TTS 상태 변화 감지 및 처리 (기존 useEffect 수정)
 useEffect(() => {
   if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
-    // 비디오 종료 후 TTS가 준비되면 재생
     console.log('🗣️ TTS 준비 완료 - 재생 시작');
     setShowReply(false);
+    setIsTtsPlaying(true); // 🆕 TTS 재생 상태 활성화
     requestTtsPlay();
+  } else if (ttsStatus === 'tts_playing') {
+    // 🆕 TTS 재생 중 상태 유지
+    setIsTtsPlaying(true);
   } else if (ttsStatus === 'tts_done') {
-    // TTS 재생 완료 후 초기 상태로 복귀
     console.log('🗣️ TTS 재생 완료 - 초기 상태로 복귀');
     setCurrentVideo(null);
     setCurrentReply('');
     setVideoVisible(false);
     setShowReply(false);
+    setIsTtsPlaying(false); // 🆕 TTS 재생 상태 비활성화
+    setTtsVolume(0); // 🆕 TTS 음량 초기화
+    previousTtsVolumeRef.current = 0; // 🆕 스무딩 상태 초기화
     setRecommendStatus('done');
     
-    // 스펙트럼 모드로 전환 (필요시)
     if (musicPlaying) {
       setCanShowSpectrum(true);
     }
   }
 }, [ttsStatus, videoVisible, showReply, musicPlaying]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // 🆕 TTS 대기 중 표시 함수
 const renderTtsWaiting = () => {
@@ -1097,6 +1217,79 @@ const renderRealtimeWords = () => {
   
 
     
+
+
+
+
+ //--------------------------------------------------------------------------------------------------------- 
+ // 🆕 tts 전체음량 기반 원형 스펙트럼 렌더링 
+ //--------------------------------------------------------------------------------------------------------- 
+
+ useEffect(() => {
+  if (!isTtsPlaying) return;
+  
+  const canvas = canvasRef.current;
+  if (!canvas) return;
+  
+  const ctx = canvas.getContext('2d');
+  const { width, height } = canvasSize;
+  
+  canvas.width = width;
+  canvas.height = height;
+  
+  // TTS용 배경 (어두운 배경)
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(0, 0, width, height);
+  
+  // 🆕 원형 스펙트럼 설정
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const baseRadius = Math.min(width, height) * 0.1;     // 기본 원 크기
+  const maxRadius = Math.min(width, height) * 0.4;      // 최대 원 크기
+  
+  // 🆕 전체 음량에 비례한 원의 크기 계산
+  const volumeRadius = baseRadius + (ttsVolume * (maxRadius - baseRadius));
+  
+  // 🆕 TTS용 스타일 (금색 계열, 그라데이션)
+  const gradient = ctx.createRadialGradient(
+    centerX, centerY, baseRadius,
+    centerX, centerY, volumeRadius
+  );
+  gradient.addColorStop(0, 'rgba(255, 215, 0, 0.8)');  // 금색 중심
+  gradient.addColorStop(0.7, 'rgba(255, 165, 0, 0.6)'); // 주황색 중간
+  gradient.addColorStop(1, 'rgba(255, 215, 0, 0.2)');   // 금색 외곽 (투명)
+
+  // 🆕 메인 원 그리기 (채워진 원)
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, volumeRadius, 0, 2 * Math.PI);
+  ctx.fillStyle = gradient;
+  ctx.fill();
+  
+  // 🆕 외곽선 그리기 (더 강조)
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, volumeRadius, 0, 2 * Math.PI);
+  ctx.strokeStyle = `rgba(255, 215, 0, ${0.5 + ttsVolume * 0.5})`; // 음량에 따른 투명도
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  
+  // 🆕 중앙 점 표시 (TTS 재생 중임을 나타냄)
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, 8, 0, 2 * Math.PI);
+  ctx.fillStyle = '#FFD700';
+  ctx.fill();
+  
+  // 🆕 음량 표시 텍스트 (디버깅용 - 원하면 제거)
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = '16px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText(
+    `음량: ${(ttsVolume * 100).toFixed(1)}%`, 
+    centerX, 
+    centerY + volumeRadius + 30
+  );
+  
+}, [ttsVolume, isTtsPlaying, canvasSize]);
+
     
   //==========================================================
 
@@ -1692,7 +1885,7 @@ const getScreenTransform = () => {
       // backgroundColor: (recommendStatus === 'searching' && !imageVisible) ? '#fff' : 
       //            (musicPlaying || imageVisible) ? '#000' : '#222222',
       // 🆕 대기 모드 고려한 배경색 로직
-      backgroundColor: (recommendStatus === 'searching' && !videoVisible && !isWaitingAudioMode) ? '#fff' : 
+      backgroundColor: isTtsPlaying ? '#1a1a1a' :  (recommendStatus === 'searching' && !videoVisible && !isWaitingAudioMode) ? '#fff' : 
       (isWaitingAudioMode) ? '#fff' :
       (musicPlaying || videoVisible) ? '#000' : '#222222',
 
