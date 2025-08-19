@@ -1,3 +1,4 @@
+
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -13,16 +14,18 @@ from dotenv import load_dotenv
 import numpy as np
 from openai import AsyncOpenAI
 
+import re
+
 class Mp3Recommender(Node):
     def __init__(self):
         super().__init__('Mp3Recommender')
         
         # 로그 파일
-        self.log_file_path = "/home/jeonseyeon/ros2_ws/_logs/Mp3Recommender_log.txt"
+        self.log_file_path = "/home/nvidia/ros2_ws/_logs/Mp3Recommender_log.txt"
         self.save_log("✅ Mp3Recommender Node Started")
 
         # 환경 변수
-        load_dotenv("/home/jeonseyeon/ros2_ws/src/.env")
+        load_dotenv("/home/nvidia/ros2_ws/src/.env")
         openai.api_key = os.getenv("OPENAI_API_KEY")
         self.assistant_id = os.getenv("ASSISTANT_ID")
 
@@ -34,9 +37,9 @@ class Mp3Recommender(Node):
 
          # PDF 파일 경로
         self.pdf_paths = [
-            "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/KIST_intro.pdf",
+            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/KIST_intro.pdf",
             # 새로 넣고 싶은 PDF가 생길 때마다 아래 한 줄씩만 추가
-            "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/250520_기관 소개자료 PPT.pdf"
+            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/250520_기관 소개자료 PPT.pdf"
         ]
         self.vector_store_id = None   # Vector Store ID 저장용
 
@@ -49,23 +52,23 @@ class Mp3Recommender(Node):
         self.sbert_model = SentenceTransformer("BAAI/bge-m3", device=device)
 
         # # mp3 인덱스/메타
-        # self.mp3_db_path = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus.db"
-        # self.mp3_faiss_index_file = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp3_new_plus.bin"
-        # self.mp3_dir = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus"
+        # self.mp3_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus.db"
+        # self.mp3_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp3_new_plus.bin"
+        # self.mp3_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus"
         
 
         # mp3 인덱스/메타
-        self.mp4_db_path = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/mp4_database_plus.db"
-        self.mp4_faiss_index_file = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp4.bin"
-        self.mp4_dir = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/mp4_database"
+        self.mp4_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp4_database_mp4.db"
+        self.mp4_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp4.bin"
+        self.mp4_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp4_database(특수문자제외ver2)"
         
 
 
 
         # # 이미지 인덱스/메타
-        # self.image_db_path = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus.db"
-        # self.image_faiss_index_file = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_image_plus.bin"
-        # self.image_dir = "/home/jeonseyeon/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus"
+        # self.image_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus.db"
+        # self.image_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_image_plus.bin"
+        # self.image_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus"
 
         # 인덱스와 메타데이터 로드
         try:
@@ -88,12 +91,15 @@ class Mp3Recommender(Node):
         self.metadata = self.mp4_metadata
 
         # ROS2 pub/sub
-        self.publisher_ = self.create_publisher(String, 'recommended_mp3', 10)
+        # self.publisher_ = self.create_publisher(String, 'recommended_mp3', 10)
+        self.publisher_ = self.create_publisher(String, 'recommended_mp4', 10)
+        # 🆕 TTS 요청용 퍼블리시 추가
+        self.tts_publisher = self.create_publisher(String, 'tts_request', 10)
         # self.image_publisher_ = self.create_publisher(String, 'recommended_image', 10)
         self.subscription_ = self.create_subscription(String, 'user_question', self.question_callback, 10)
-        self.status_publisher = self.create_publisher(String, 'mp3_recommend_status', 10)
+        self.status_publisher = self.create_publisher(String, 'mp4_recommend_status', 10)
         self.effect_stop_publisher_ = self.create_publisher(String, 'effect_stop', 10)
-        self.get_logger().info("mp3Recommender node has started.")
+        self.get_logger().info("mp4Recommender node has started.")
 
     def save_log(self, message: str):
         """로그를 파일에 저장"""
@@ -122,12 +128,25 @@ class Mp3Recommender(Node):
             self.get_logger().info(f"🗄️ Vector Store created: {vs.id}")
 
             
-            # 여러 개 파일 한꺼번에 업로드
-            file_objs = [open(p, "rb") for p in self.pdf_paths]
-            batch = self.sync_client.vector_stores.file_batches.upload_and_poll(
-                vector_store_id=vs.id, files=file_objs
-            )
-            self.get_logger().info(f"📑 upload_and_poll → {batch.status} {batch.file_counts}")
+            # # 여러 개 파일 한꺼번에 업로드
+            # file_objs = [open(p, "rb") for p in self.pdf_paths]
+            # batch = self.sync_client.vector_stores.file_batches.upload_and_poll(
+            #     vector_store_id=vs.id, files=file_objs
+            # )
+            # self.get_logger().info(f"📑 upload_and_poll → {batch.status} {batch.file_counts}")
+
+
+            # 2) 한 파일씩 업로드 후 poll
+            for pdf in self.pdf_paths:
+                with open(pdf, "rb") as f:
+                    self.get_logger().info(f"⬆️ '{os.path.basename(pdf)}' 업로드 시작")
+                    batch = self.sync_client.vector_stores.file_batches.upload_and_poll(
+                        vector_store_id=vs.id,
+                        files=[f],          # 리스트지만 한 파일만
+                        poll_interval=2.0,  # 초
+                        timeout=300         # 5 분까지 기다림
+                    )
+                    self.get_logger().info(f"✅ {pdf} → {batch.status}")
 
 
             # 3) Assistant에 file_search + vector_store 연결
@@ -252,7 +271,7 @@ class Mp3Recommender(Node):
 
     async def process_question(self, thread_id: str, user_question: str):
         """
-        실제 질의 처리 & GPT 호출 & 추천 결과 Publish + 이미지 + 효과음 종료 신호
+        실제 질의 처리 & GPT 호출 & 추천 결과 Publish + TTS 요청
         """
         try:
             # 1) SBERT 임베딩 & FAISS 검색
@@ -280,13 +299,23 @@ class Mp3Recommender(Node):
                 result = await self.run_assistant(thread_id, user_question, candidates)
 
             # 4) 결과 publish (file_name, reply)
+           
             result_str = f"file_name={result['file_name']};reply={result['reply']}"
             msg = String()
             msg.data = result_str
             self.publisher_.publish(msg)
+
+
+            # 🆕 TTS 요청 별도 퍼블리시
+            if result['reply'] and result['reply'] != "No suitable mp4 found":
+                tts_msg = String()
+                tts_msg.data = result['reply']
+                self.tts_publisher.publish(tts_msg)
+                self.get_logger().info(f"🗣️ TTS 요청 전송: {result['reply']}")
+
             self.get_logger().info(f"✅ Recommendation published: {result_str}")
-            #self.save_log(f"Recommendation published: {result_str}")
             self.save_log(f"[📩Q] {user_question.strip()} → [🎧mp4] {result['file_name']} | [🗣TTS] {result['reply']}")
+
 
             # 5) 추천 완료 상태 퍼블리시
             status_msg = String()
@@ -723,6 +752,5 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
 
 
