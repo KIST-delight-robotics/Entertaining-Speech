@@ -73,6 +73,10 @@ class Mp3Player(Node):
         )
 
 
+        # 🆕 TTS 전용 스펙트럼 퍼블리셔 추가
+        self.tts_spectrum_publisher = self.create_publisher(String, "/tts_spectrum", 10)
+
+
 
 
         
@@ -503,8 +507,34 @@ class Mp3Player(Node):
             self.save_log(error_msg)
             self.publish_tts_status("tts_error")
 
+    # def play_tts_audio(self):
+    #     """TTS 오디오 재생 (App.jsx에서 요청시)"""
+    #     try:
+    #         self.get_logger().info("🎵 TTS 오디오 재생 시작")
+    #         self.save_log("🎵 TTS 오디오 재생 시작")
+            
+    #         # 재생 시작 신호
+    #         self.publish_tts_status("tts_playing")
+            
+    #         # 실제 재생
+    #         self.play_mp3(self.reply_path)
+            
+    #         # 재생 완료 신호
+    #         self.publish_tts_status("tts_done")
+            
+    #         self.get_logger().info("🎵 TTS 오디오 재생 완료")
+    #         self.save_log("🎵 TTS 오디오 재생 완료")
+            
+    #     except Exception as e:
+    #         error_msg = f"❌ TTS 재생 중 오류: {e}"
+    #         self.get_logger().error(error_msg)
+    #         self.save_log(error_msg)
+    #         self.publish_tts_status("tts_error")
+
+
+
     def play_tts_audio(self):
-        """TTS 오디오 재생 (App.jsx에서 요청시)"""
+        """TTS 오디오 재생 (App.jsx에서 요청시) - 스펙트럼 포함"""
         try:
             self.get_logger().info("🎵 TTS 오디오 재생 시작")
             self.save_log("🎵 TTS 오디오 재생 시작")
@@ -512,8 +542,8 @@ class Mp3Player(Node):
             # 재생 시작 신호
             self.publish_tts_status("tts_playing")
             
-            # 실제 재생
-            self.play_mp3(self.reply_path)
+            # 🆕 TTS 전용 스펙트럼과 함께 재생
+            self.play_tts_with_spectrum(self.reply_path)
             
             # 재생 완료 신호
             self.publish_tts_status("tts_done")
@@ -527,6 +557,76 @@ class Mp3Player(Node):
             self.save_log(error_msg)
             self.publish_tts_status("tts_error")
 
+    def play_tts_with_spectrum(self, file_path):
+        """TTS 전용 전체 음량 기반 스펙트럼과 함께 재생"""
+        try:
+            sound = AudioSegment.from_file(file_path, format="mp3")
+            sound = self.match_target_amplitude(sound, -14.0)
+            
+            # 임시 WAV로 변환 후 저장
+            temp_wav = "/tmp/tts_audio.wav"
+            sound.export(temp_wav, format="wav")
+
+            # TTS 전용 스펙트럼과 재생 병렬로 실행
+            playback_thread = threading.Thread(target=self.tts_publish_and_play, args=(temp_wav,))
+            playback_thread.start()
+            playback_thread.join()
+
+        except Exception as e:
+            self.get_logger().error(f"❌ TTS 스펙트럼 재생 실패: {file_path} → {e}")
+            self.save_log(f"❌ TTS 스펙트럼 재생 실패: {file_path} → {e}")
+
+    def tts_publish_and_play(self, wav_path):
+        """TTS 전용 전체 음량 기반 스펙트럼 퍼블리시 및 재생"""
+        wf = wave.open(wav_path, 'rb')
+        chunk_size = 2024
+
+        def publish_tts_volume():
+            data = wf.readframes(chunk_size)
+            while data:
+                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+                if wf.getnchannels() == 2:
+                    samples = samples.reshape((-1, 2)).mean(axis=1)
+                
+                # 🆕 전체 음량 계산 (RMS - Root Mean Square)
+                rms = np.sqrt(np.mean(samples**2))
+                
+                # 🆕 FFT로 주파수 분석 (참고용, 전체 에너지만 사용)
+                fft = np.fft.fft(samples)
+                magnitude_spectrum = np.abs(fft[:len(fft)//2])
+                
+                # 🆕 전체 에너지 합계 (모든 주파수 대역의 에너지 합)
+                total_energy = np.sum(magnitude_spectrum)
+                
+                # 🆕 정규화된 전체 음량 (0~1 범위)
+                normalized_volume = min(1.0, rms / 32768.0 * 10)  # int16 최대값으로 정규화
+                normalized_energy = min(1.0, total_energy / 1000000)  # 적절한 범위로 정규화
+
+                # 🆕 TTS 전용 데이터 (RMS와 전체 에너지를 모두 전송)
+                tts_data = {
+                    "volume": float(normalized_volume),
+                    "energy": float(normalized_energy),
+                    "rms": float(rms)
+                }
+
+                msg = String()
+                msg.data = json.dumps(tts_data)
+                self.tts_spectrum_publisher.publish(msg)
+                
+                data = wf.readframes(chunk_size)
+                time.sleep(chunk_size / wf.getframerate())
+
+        spectrum_thread = threading.Thread(target=publish_tts_volume)
+        spectrum_thread.start()
+
+        # 시스템 명령어로 재생
+        os.system(f"aplay {wav_path}")
+        spectrum_thread.join()
+        wf.close()
+
+
+
+        
     def publish_tts_status(self, status):
         """TTS 상태 퍼블리시"""
         msg = String()
