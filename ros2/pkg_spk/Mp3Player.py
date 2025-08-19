@@ -1,3 +1,4 @@
+
 import os
 import requests
 import threading
@@ -17,6 +18,11 @@ import random
 import wave
 import pyaudio
 import csv
+from google.cloud import speech
+import io
+import os
+
+
 
 class Mp3Player(Node):
     def __init__(self):
@@ -78,8 +84,73 @@ class Mp3Player(Node):
 
 
 
-
+        # 🆕 TTS 자막 데이터 퍼블리셔 추가
+        self.tts_subtitle_publisher = self.create_publisher(String, "/tts_subtitle", 10)
         
+        # Google Cloud 인증 설정
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/home/nvidia/ros2_ws/my-service-account.json'
+
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 단어별 타임스탬프 추출 함수 추가
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+
+    def extract_word_timestamps(self, audio_path, original_text):
+        """
+        Google Cloud Speech-to-Text API를 사용하여 단어별 타임스탬프 추출
+        """
+        try:
+            # Google Cloud Speech client 생성
+            client = speech.SpeechClient()
+            
+            # 오디오 파일 읽기
+            with io.open(audio_path, "rb") as audio_file:
+                content = audio_file.read()
+            
+            audio = speech.RecognitionAudio(content=content)
+            config = speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=16000,  # WAV 파일 샘플레이트와 맞춰야 함
+                language_code="ko-KR",    # 한국어, 영어의 경우 "en-US"
+                enable_word_time_offsets=True,  # 🔑 단어별 타임스탬프 활성화
+                enable_word_confidence=True,    # 단어별 신뢰도 추가
+                model="latest_short",           # 짧은 오디오용 최신 모델
+            )
+            
+            # STT 요청 실행
+            self.get_logger().info("🗣️ Google STT API 요청 시작...")
+            response = client.recognize(config=config, audio=audio)
+            
+            word_timestamps = []
+            
+            for result in response.results:
+                alternative = result.alternatives[0]
+                self.get_logger().info(f"🗣️ STT 인식 결과: {alternative.transcript}")
+                
+                for word_info in alternative.words:
+                    word = word_info.word
+                    start_time = word_info.start_time.total_seconds()
+                    end_time = word_info.end_time.total_seconds()
+                    confidence = word_info.confidence
+                    
+                    word_timestamps.append({
+                        "word": word,
+                        "start": round(start_time, 3),
+                        "end": round(end_time, 3),
+                        "confidence": round(confidence, 3)
+                    })
+            
+            self.get_logger().info(f"🎯 단어별 타임스탬프 추출 완료: {len(word_timestamps)}개 단어")
+            return word_timestamps
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ 단어 타임스탬프 추출 실패: {e}")
+            return []
+
 
 
 
@@ -403,14 +474,69 @@ class Mp3Player(Node):
 
 
 
+    # def text2speech(self, text):
+    #     """
+    #     ElevenLabs TTS 호출 → reply.mp3 저장
+    #     """
+    #     api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
+    #     #스폰지밥
+    #     # voice_id = "59zWnTQLbwyr94bFbcUe"
+    #     #중성마녀
+    #     voice_id = "2oCsvoTtWZkaDZUSExSz"
+    #     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+
+    #     headers = {
+    #         "xi-api-key": api_key,
+    #         "Content-Type": "application/json",
+    #         "Accept": "audio/mpeg"
+    #     }
+
+    #     # 스폰지밥
+    #     # data = {
+    #     #     "text": text,
+    #     #     "model_id": "eleven_multilingual_v2",
+    #     #     "voice_settings": {
+    #     #         "stability": 0.5,
+    #     #         "similarity_boost": 0.75,
+    #     #         "style": 0.25,
+    #     #         "speed": 0.9
+    #     #     },
+    #     #     "apply_text_normalization": "on"
+    #     # }
+
+    #     #중성마녀
+    #     data = {
+    #         "text": text,
+    #         "model_id": "eleven_multilingual_v2",
+    #         "voice_settings": {
+    #             "stability": 0.95,
+    #             "similarity_boost": 0.6,
+    #             "style": 0.4,
+    #             "speed": 0.8
+    #         },
+    #         "apply_text_normalization": "on"
+    #     }
+
+    #     try:
+    #         response = requests.post(url, headers=headers, json=data)
+    #         if response.status_code == 200:
+    #             with open(self.reply_path, "wb") as f:
+    #                 f.write(response.content)
+    #             print(f"🟢 음성 변환 성공 → {self.reply_path}")
+    #         else:
+    #             print(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
+    #     except Exception as e:
+    #         print(f"🔴 TTS 호출 실패: {e}")
+
+
+
+
+
     def text2speech(self, text):
         """
-        ElevenLabs TTS 호출 → reply.mp3 저장
+        ElevenLabs TTS 호출 → reply.mp3 저장 → 단어별 타임스탬프 추출
         """
         api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        #스폰지밥
-        # voice_id = "59zWnTQLbwyr94bFbcUe"
-        #중성마녀
         voice_id = "2oCsvoTtWZkaDZUSExSz"
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
@@ -420,20 +546,6 @@ class Mp3Player(Node):
             "Accept": "audio/mpeg"
         }
 
-        #스폰지밥
-        # data = {
-        #     "text": text,
-        #     "model_id": "eleven_multilingual_v2",
-        #     "voice_settings": {
-        #         "stability": 0.5,
-        #         "similarity_boost": 0.75,
-        #         "style": 0.25,
-        #         "speed": 0.9
-        #     },
-        #     "apply_text_normalization": "on"
-        # }
-
-        #중성마녀
         data = {
             "text": text,
             "model_id": "eleven_multilingual_v2",
@@ -451,11 +563,46 @@ class Mp3Player(Node):
             if response.status_code == 200:
                 with open(self.reply_path, "wb") as f:
                     f.write(response.content)
-                print(f"🟢 음성 변환 성공 → {self.reply_path}")
+                self.get_logger().info(f"🟢 음성 변환 성공 → {self.reply_path}")
+                
+                # 🆕 WAV로 변환 (Google STT API용)
+                sound = AudioSegment.from_file(self.reply_path, format="mp3")
+                wav_path = "/tmp/tts_for_stt.wav"
+                # Google STT 요구사항에 맞게 변환: 16kHz, 1채널
+                sound = sound.set_frame_rate(16000).set_channels(1)
+                sound.export(wav_path, format="wav")
+                
+                # 🆕 단어별 타임스탬프 추출
+                word_timestamps = self.extract_word_timestamps(wav_path, text)
+                
+                # 🆕 자막 데이터 퍼블리시
+                if word_timestamps:
+                    subtitle_data = {
+                        "original_text": text,
+                        "words": word_timestamps,
+                        "total_duration": word_timestamps[-1]["end"] if word_timestamps else 0
+                    }
+                    
+                    msg = String()
+                    msg.data = json.dumps(subtitle_data, ensure_ascii=False)
+                    self.tts_subtitle_publisher.publish(msg)
+                    self.get_logger().info(f"📝 자막 데이터 퍼블리시 완료: {len(word_timestamps)}개 단어")
+                else:
+                    self.get_logger().warning("⚠️ 타임스탬프 추출 실패 - 기본 자막 데이터 전송")
+                    # 폴백: 타임스탬프 없는 기본 자막
+                    fallback_data = {
+                        "original_text": text,
+                        "words": [{"word": text, "start": 0, "end": 3, "confidence": 1.0}],
+                        "total_duration": 3
+                    }
+                    msg = String()
+                    msg.data = json.dumps(fallback_data, ensure_ascii=False)
+                    self.tts_subtitle_publisher.publish(msg)
+                
             else:
-                print(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
+                self.get_logger().error(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
         except Exception as e:
-            print(f"🔴 TTS 호출 실패: {e}")
+            self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
 
 
 
@@ -576,57 +723,110 @@ class Mp3Player(Node):
             self.get_logger().error(f"❌ TTS 스펙트럼 재생 실패: {file_path} → {e}")
             self.save_log(f"❌ TTS 스펙트럼 재생 실패: {file_path} → {e}")
 
+    # def tts_publish_and_play(self, wav_path):
+    #     """TTS 전용 전체 음량 기반 스펙트럼 퍼블리시 및 재생"""
+    #     wf = wave.open(wav_path, 'rb')
+    #     chunk_size = 2024
+
+    #     def publish_tts_volume():
+    #         data = wf.readframes(chunk_size)
+    #         while data:
+    #             samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+    #             if wf.getnchannels() == 2:
+    #                 samples = samples.reshape((-1, 2)).mean(axis=1)
+                
+    #             # 🆕 전체 음량 계산 (RMS - Root Mean Square)
+    #             rms = np.sqrt(np.mean(samples**2))
+                
+    #             # 🆕 FFT로 주파수 분석 (참고용, 전체 에너지만 사용)
+    #             fft = np.fft.fft(samples)
+    #             magnitude_spectrum = np.abs(fft[:len(fft)//2])
+                
+    #             # 🆕 전체 에너지 합계 (모든 주파수 대역의 에너지 합)
+    #             total_energy = np.sum(magnitude_spectrum)
+                
+    #             # 🆕 정규화된 전체 음량 (0~1 범위)
+    #             normalized_volume = min(1.0, rms / 32768.0 * 10)  # int16 최대값으로 정규화
+    #             normalized_energy = min(1.0, total_energy / 1000000)  # 적절한 범위로 정규화
+
+    #             # 🆕 TTS 전용 데이터 (RMS와 전체 에너지를 모두 전송)
+    #             tts_data = {
+    #                 "volume": float(normalized_volume),
+    #                 "energy": float(normalized_energy),
+    #                 "rms": float(rms)
+    #             }
+
+    #             msg = String()
+    #             msg.data = json.dumps(tts_data)
+    #             self.tts_spectrum_publisher.publish(msg)
+                
+    #             data = wf.readframes(chunk_size)
+    #             time.sleep(chunk_size / wf.getframerate())
+
+    #     spectrum_thread = threading.Thread(target=publish_tts_volume)
+    #     spectrum_thread.start()
+
+    #     # 시스템 명령어로 재생
+    #     os.system(f"aplay {wav_path}")
+    #     spectrum_thread.join()
+    #     wf.close()
+
+
+
+
+
     def tts_publish_and_play(self, wav_path):
-        """TTS 전용 전체 음량 기반 스펙트럼 퍼블리시 및 재생"""
+        """TTS 재생 시간 정보 퍼블리시 및 재생"""
         wf = wave.open(wav_path, 'rb')
         chunk_size = 2024
+        frame_rate = wf.getframerate()
+        start_time = time.time()
 
-        def publish_tts_volume():
+        def publish_tts_time():
             data = wf.readframes(chunk_size)
             while data:
-                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-                if wf.getnchannels() == 2:
-                    samples = samples.reshape((-1, 2)).mean(axis=1)
+                # 🆕 현재 재생 시간 계산
+                current_time = round(time.time() - start_time, 3)
                 
-                # 🆕 전체 음량 계산 (RMS - Root Mean Square)
-                rms = np.sqrt(np.mean(samples**2))
-                
-                # 🆕 FFT로 주파수 분석 (참고용, 전체 에너지만 사용)
-                fft = np.fft.fft(samples)
-                magnitude_spectrum = np.abs(fft[:len(fft)//2])
-                
-                # 🆕 전체 에너지 합계 (모든 주파수 대역의 에너지 합)
-                total_energy = np.sum(magnitude_spectrum)
-                
-                # 🆕 정규화된 전체 음량 (0~1 범위)
-                normalized_volume = min(1.0, rms / 32768.0 * 10)  # int16 최대값으로 정규화
-                normalized_energy = min(1.0, total_energy / 1000000)  # 적절한 범위로 정규화
-
-                # 🆕 TTS 전용 데이터 (RMS와 전체 에너지를 모두 전송)
-                tts_data = {
-                    "volume": float(normalized_volume),
-                    "energy": float(normalized_energy),
-                    "rms": float(rms)
+                # 🆕 재생 시간 정보 전송 (RMS 대신)
+                time_data = {
+                    "current_time": current_time,
+                    "status": "playing",
+                    "timestamp": time.time()
                 }
 
                 msg = String()
-                msg.data = json.dumps(tts_data)
-                self.tts_spectrum_publisher.publish(msg)
+                msg.data = json.dumps(time_data)
+                self.tts_spectrum_publisher.publish(msg)  # 기존 퍼블리셔 재활용
                 
                 data = wf.readframes(chunk_size)
-                time.sleep(chunk_size / wf.getframerate())
+                time.sleep(chunk_size / frame_rate)
+            
+            # 🆕 재생 완료 신호
+            final_data = {
+                "current_time": current_time,
+                "status": "finished",
+                "timestamp": time.time()
+            }
+            msg = String()
+            msg.data = json.dumps(final_data)
+            self.tts_spectrum_publisher.publish(msg)
 
-        spectrum_thread = threading.Thread(target=publish_tts_volume)
-        spectrum_thread.start()
+        time_thread = threading.Thread(target=publish_tts_time)
+        time_thread.start()
 
         # 시스템 명령어로 재생
         os.system(f"aplay {wav_path}")
-        spectrum_thread.join()
+        time_thread.join()
         wf.close()
 
 
 
-        
+
+
+
+
+
     def publish_tts_status(self, status):
         """TTS 상태 퍼블리시"""
         msg = String()
