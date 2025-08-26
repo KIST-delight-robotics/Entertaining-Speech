@@ -260,6 +260,11 @@ class UserQuestion(Node):
 
         # 🆕 질문 확인 TTS 파일 저장 경로 추가
         self.question_confirm_path = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/question_confirm.mp3"
+
+        # 🆕 TTS 상태 구독 추가
+        self.tts_status_subscription = self.create_subscription(
+            String, "tts_status", self.tts_status_callback, 10
+        )
             
 
 
@@ -408,6 +413,110 @@ class UserQuestion(Node):
 
 
 
+    def tts_status_callback(self, msg):
+        """TTS 상태 변화 감지 - 30초 타이머 기반 speaker_id 관리"""
+        if msg.data == "tts_done":
+            self.get_logger().info("🎵 TTS 재생 완료 - 30초 타이머 기반 대기 모드로 전환")
+            self.save_log("🎵 TTS 재생 완료 - 30초 타이머 기반 대기 모드로 전환")
+            
+            # ✅ 상태 초기화 (speaker_id는 변경하지 않음)
+            self.music_playing = False
+            self.word_processor.reset() 
+            self.publish_realtime_phrase("")
+            
+            # 기본 상태 초기화
+            self.processing = False
+            self.last_published_text = ""
+            self.partial_transcript = ""
+            self.force_published = False
+            self.transcribing = False
+            self.ignore_stt = False
+            self.is_sound_playing = False
+            
+            # 대기 관련 상태 초기화
+            self.waiting_sequence_running = False
+            self.waiting_image_displayed = False
+            self.current_waiting_image_path = ""
+            
+            # ✅ 핵심: speaker_id는 변경하지 않고 대기 상태만 설정
+            self.trigger_detected = True  # 새로운 질문 대기 모드
+            self.waiting_for_input_after_music = True
+            
+            # 트리거 상태 퍼블리시
+            self.publish_trigger_status()
+            
+            # ✅ 완전한 버퍼 초기화로 STT 재시작
+            self.complete_buffer_reset_and_restart()
+            
+            # ✅ 30초 타이머 시작 (기존 speaker_id 유지)
+            self.start_30s_timer()
+            
+            self.get_logger().info(f"✅ TTS 완료 후 대기 모드 - 현재 speaker_id: {self.current_speaker_id} (30초 유지)")
+
+
+    def complete_buffer_reset_and_restart(self):
+        """TTS 완료 후 완전한 버퍼 초기화 및 STT 재시작"""
+        self.get_logger().info("🧹 완전한 버퍼 초기화 시작")
+        
+        try:
+            # 1. 기존 STT 스레드 완전 종료
+            self.transcribing = False
+            
+            # 2. 오디오 스트림 완전 정리
+            self.stop_audio_stream()
+            
+            # 3. 모든 오디오 버퍼 완전 초기화
+            while not self.audio_stream.empty():
+                try:
+                    self.audio_stream.get_nowait()
+                except queue.Empty:
+                    break
+            
+            # 4. 시각화 큐도 완전 초기화
+            while not self.visualizer_queue.empty():
+                try:
+                    self.visualizer_queue.get_nowait()
+                except queue.Full:
+                    break
+            
+            # 5. 오디오 버퍼 초기화
+            self.audio_buffer = []
+            
+            # 6. STT 관련 상태 완전 초기화
+            self.partial_transcript = ""
+            self.last_published_text = ""
+            
+            # 7. 스펙트럼 관련 버퍼 초기화
+            self.spectrum_buffer = []
+            self.spectrum_count = 0
+            
+            self.get_logger().info("🧹 모든 버퍼 초기화 완료")
+            
+            # 8. 잠시 대기 후 새로운 오디오 스트림 시작
+            time.sleep(0.5)  # 시스템 안정화 대기
+            
+            # 9. 새로운 오디오 스트림 시작
+            self.start_audio_stream()
+            
+            self.get_logger().info("✅ STT 완전 재시작 완료")
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ 버퍼 초기화 실패: {e}")
+            # 비상 복구
+            self.force_restart_stt()
+
+
+
+
+
+
+
+
+
+
+
+
+
     def stt_restart_callback(self, msg):
         """🆕 TTS 완료 후 STT 재시작 콜백"""
         if msg.data == "restart_stt_after_tts":
@@ -469,6 +578,9 @@ class UserQuestion(Node):
         self.get_logger().info("⏳ 음악 종료 후 30초 타이머 시작")
         self.timer_30s = threading.Timer(30, self.timer_30s_expired)
         self.timer_30s.start()
+
+
+
 
 
     def timer_30s_expired(self):
@@ -568,22 +680,63 @@ class UserQuestion(Node):
 
 
 
-    def audio_callback(self, in_data, frame_count, time_info, status):
-        # 1) 시각화용 큐에 즉시 저장 (blocking 없이)
-        try:
-            self.visualizer_queue.put_nowait(in_data)
-        except queue.Full:
-            pass
+    # def audio_callback(self, in_data, frame_count, time_info, status):
+    #     # 1) 시각화용 큐에 즉시 저장 (blocking 없이)
+    #     try:
+    #         self.visualizer_queue.put_nowait(in_data)
+    #     except queue.Full:
+    #         pass
 
       
     
-        # 3) STT 큐 등 기존 로직
-        if not (self.music_playing or self.ignore_stt):
-            self.audio_stream.put(in_data)
-            if self.trigger_detected:
-                self.audio_buffer.append(in_data)
+    #     # 3) STT 큐 등 기존 로직
+    #     if not (self.music_playing or self.ignore_stt):
+    #         self.audio_stream.put(in_data)
+    #         if self.trigger_detected:
+    #             self.audio_buffer.append(in_data)
 
+    #     return None, pyaudio.paContinue
+
+
+
+
+    def audio_callback(self, in_data, frame_count, time_info, status):
+        """오디오 콜백 - 버퍼 관리 최적화"""
+        # 1. 시각화용 큐 (넌블로킹)
+        try:
+            self.visualizer_queue.put_nowait(in_data)
+        except queue.Full:
+            # 큐가 가득 찬 경우 오래된 데이터 제거
+            try:
+                self.visualizer_queue.get_nowait()
+                self.visualizer_queue.put_nowait(in_data)
+            except queue.Empty:
+                pass
+        
+        # 2. STT 데이터 처리 - 더 엄격한 조건
+        should_process_stt = (
+            not self.music_playing and 
+            not self.ignore_stt and 
+            not self.is_sound_playing and
+            self.transcribing  # STT가 실제로 동작 중일 때만
+        )
+        
+        if should_process_stt:
+            try:
+                self.audio_stream.put_nowait(in_data)
+                if self.trigger_detected:
+                    self.audio_buffer.append(in_data)
+            except queue.Full:
+                # STT 큐가 가득 찬 경우 가장 오래된 데이터 제거
+                try:
+                    self.audio_stream.get_nowait()
+                    self.audio_stream.put_nowait(in_data)
+                except queue.Empty:
+                    pass
+        
         return None, pyaudio.paContinue
+
+        
 
 
     def visualizer_worker(self):
