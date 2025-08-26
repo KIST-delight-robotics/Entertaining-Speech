@@ -1,4 +1,8 @@
 
+
+#동적자막(google-stt 이용) + 원본 텍스트 기반 자막 생성
+
+
 import os
 import requests
 import threading
@@ -90,6 +94,8 @@ class Mp3Player(Node):
         # Google Cloud 인증 설정
         os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/home/nvidia/ros2_ws/my-service-account.json'
 
+        # 🆕 STT 재시작 신호 퍼블리셔 추가 (music_done 대신)
+        self.stt_restart_publisher = self.create_publisher(String, "stt_restart", 10)
 
 
 
@@ -104,24 +110,21 @@ class Mp3Player(Node):
         Google Cloud Speech-to-Text API를 사용하여 단어별 타임스탬프 추출
         """
         try:
-            # Google Cloud Speech client 생성
             client = speech.SpeechClient()
             
-            # 오디오 파일 읽기
             with io.open(audio_path, "rb") as audio_file:
                 content = audio_file.read()
             
             audio = speech.RecognitionAudio(content=content)
             config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-                sample_rate_hertz=16000,  # WAV 파일 샘플레이트와 맞춰야 함
-                language_code="ko-KR",    # 한국어, 영어의 경우 "en-US"
-                enable_word_time_offsets=True,  # 🔑 단어별 타임스탬프 활성화
-                enable_word_confidence=True,    # 단어별 신뢰도 추가
-                model="latest_short",           # 짧은 오디오용 최신 모델
+                sample_rate_hertz=16000,
+                language_code="ko-KR",
+                enable_word_time_offsets=True,
+                enable_word_confidence=True,
+                model="default",
             )
             
-            # STT 요청 실행
             self.get_logger().info("🗣️ Google STT API 요청 시작...")
             response = client.recognize(config=config, audio=audio)
             
@@ -129,7 +132,9 @@ class Mp3Player(Node):
             
             for result in response.results:
                 alternative = result.alternatives[0]
-                self.get_logger().info(f"🗣️ STT 인식 결과: {alternative.transcript}")
+                stt_text = alternative.transcript
+                self.get_logger().info(f"🗣️ STT 인식 결과: '{stt_text}'")
+                self.get_logger().info(f"🔍 원본 텍스트: '{original_text}'")
                 
                 for word_info in alternative.words:
                     word = word_info.word
@@ -144,11 +149,11 @@ class Mp3Player(Node):
                         "confidence": round(confidence, 3)
                     })
             
-            self.get_logger().info(f"🎯 단어별 타임스탬프 추출 완료: {len(word_timestamps)}개 단어")
+            self.get_logger().info(f"🎯 STT 타임스탬프 추출 완료: {len(word_timestamps)}개 단어")
             return word_timestamps
             
         except Exception as e:
-            self.get_logger().error(f"❌ 단어 타임스탬프 추출 실패: {e}")
+            self.get_logger().error(f"❌ STT 타임스탬프 추출 실패: {e}")
             return []
 
 
@@ -534,7 +539,7 @@ class Mp3Player(Node):
 
     def text2speech(self, text):
         """
-        ElevenLabs TTS 호출 → reply.mp3 저장 → 단어별 타임스탬프 추출
+        ElevenLabs TTS 호출 → reply.mp3 저장 → 원본 텍스트 기반 자막 생성
         """
         api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
         voice_id = "2oCsvoTtWZkaDZUSExSz"
@@ -542,12 +547,19 @@ class Mp3Player(Node):
 
         headers = {
             "xi-api-key": api_key,
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",  # UTF-8 명시
             "Accept": "audio/mpeg"
         }
 
+        # 🆕 텍스트 전처리
+        cleaned_text = text.strip()
+        cleaned_text = ' '.join(cleaned_text.split())
+        
+        # 🆕 디버깅 로그
+        self.get_logger().info(f"🗣️ TTS 원본 텍스트: '{cleaned_text}'")
+
         data = {
-            "text": text,
+            "text": cleaned_text,
             "model_id": "eleven_multilingual_v2",
             "voice_settings": {
                 "stability": 0.95,
@@ -559,50 +571,216 @@ class Mp3Player(Node):
         }
 
         try:
-            response = requests.post(url, headers=headers, json=data)
+            response = requests.post(
+                url,
+                headers=headers,
+                data=json.dumps(data, ensure_ascii=False).encode('utf-8')
+            )
+            
             if response.status_code == 200:
                 with open(self.reply_path, "wb") as f:
                     f.write(response.content)
-                self.get_logger().info(f"🟢 음성 변환 성공 → {self.reply_path}")
                 
-                # 🆕 WAV로 변환 (Google STT API용)
+                file_size = os.path.getsize(self.reply_path)
+                self.get_logger().info(f"🟢 음성 변환 성공 → {self.reply_path} ({file_size} bytes)")
+                
+                # 🆕 WAV 변환 (STT API용)
                 sound = AudioSegment.from_file(self.reply_path, format="mp3")
                 wav_path = "/tmp/tts_for_stt.wav"
-                # Google STT 요구사항에 맞게 변환: 16kHz, 1채널
                 sound = sound.set_frame_rate(16000).set_channels(1)
                 sound.export(wav_path, format="wav")
                 
-                # 🆕 단어별 타임스탬프 추출
-                word_timestamps = self.extract_word_timestamps(wav_path, text)
+                # 🆕 STT 타임스탬프 추출
+                stt_timestamps = self.extract_word_timestamps(wav_path, cleaned_text)
                 
-                # 🆕 자막 데이터 퍼블리시
-                if word_timestamps:
+                # 🔑 핵심: 원본 텍스트로 덮어쓰기
+                corrected_timestamps = self.merge_original_with_stt_timestamps(
+                    original_text=cleaned_text,
+                    stt_timestamps=stt_timestamps
+                )
+                
+                # 🆕 수정된 자막 데이터 퍼블리시
+                if corrected_timestamps:
                     subtitle_data = {
-                        "original_text": text,
-                        "words": word_timestamps,
-                        "total_duration": word_timestamps[-1]["end"] if word_timestamps else 0
+                        "original_text": cleaned_text,
+                        "words": corrected_timestamps,
+                        "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
                     }
                     
                     msg = String()
                     msg.data = json.dumps(subtitle_data, ensure_ascii=False)
                     self.tts_subtitle_publisher.publish(msg)
-                    self.get_logger().info(f"📝 자막 데이터 퍼블리시 완료: {len(word_timestamps)}개 단어")
+                    self.get_logger().info(f"📝 수정된 자막 데이터 퍼블리시: {len(corrected_timestamps)}개 단어")
                 else:
-                    self.get_logger().warning("⚠️ 타임스탬프 추출 실패 - 기본 자막 데이터 전송")
-                    # 폴백: 타임스탬프 없는 기본 자막
-                    fallback_data = {
-                        "original_text": text,
-                        "words": [{"word": text, "start": 0, "end": 3, "confidence": 1.0}],
-                        "total_duration": 3
-                    }
-                    msg = String()
-                    msg.data = json.dumps(fallback_data, ensure_ascii=False)
-                    self.tts_subtitle_publisher.publish(msg)
-                
+                    self.get_logger().warning("⚠️ 자막 수정 실패 - 기본 자막 사용")
+                    self._publish_fallback_subtitle(cleaned_text)
+                    
             else:
-                self.get_logger().error(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
+                self.get_logger().error(f"🔴 TTS 오류: {response.status_code}")
+                self.get_logger().error(f"응답: {response.text}")
         except Exception as e:
             self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
+
+
+    def merge_original_with_stt_timestamps(self, original_text, stt_timestamps):
+        """
+        원본 텍스트의 단어(구두점 포함)를 STT 타임스탬프에 덮어쓰기
+        """
+        try:
+            # 🆕 원본 텍스트 그대로 사용 (구두점 보존)
+            original_words = original_text.split()  # 공백으로만 분리, 구두점 유지
+            
+            # 🆕 STT 비교용으로만 구두점 제거된 버전 생성
+            import re
+            original_clean_words = []
+            for word in original_words:
+                clean_word = re.sub(r'[^\w]', '', word)  # 구두점만 제거
+                if clean_word:  # 빈 문자열이 아닐 때만 추가
+                    original_clean_words.append(clean_word)
+            
+            self.get_logger().info(f"🔍 원본 단어 수(구두점 포함): {len(original_words)}")
+            self.get_logger().info(f"🔍 원본 단어 수(구두점 제거): {len(original_clean_words)}")
+            self.get_logger().info(f"🔍 STT 단어 수: {len(stt_timestamps)}")
+            self.get_logger().info(f"🔍 원본 단어들(구두점 포함): {original_words}")
+            self.get_logger().info(f"🔍 원본 단어들(구두점 제거): {original_clean_words}")
+            
+            if not stt_timestamps:
+                self.get_logger().warning("⚠️ STT 타임스탬프가 없어 원본 텍스트만 사용")
+                return self._create_default_timestamps(original_words)  # 구두점 포함 버전 사용
+            
+            # 🆕 단어 수 차이 처리
+            corrected_timestamps = []
+            
+            if len(original_clean_words) <= len(stt_timestamps):
+                # 🔑 구두점 제거된 단어 수를 기준으로 매칭, 하지만 결과는 구두점 포함
+                for i, orig_word in enumerate(original_words):
+                    if i < len(stt_timestamps):
+                        corrected_timestamps.append({
+                            "word": orig_word,  # 🎯 구두점 포함된 원본 단어 사용
+                            "start": stt_timestamps[i]["start"],
+                            "end": stt_timestamps[i]["end"],
+                            "confidence": stt_timestamps[i].get("confidence", 1.0)
+                        })
+                    else:
+                        # STT보다 원본 단어가 많은 경우 (구두점으로 인해)
+                        # 이전 타임스탬프를 연장하여 사용
+                        if corrected_timestamps:
+                            prev_end = corrected_timestamps[-1]["end"]
+                            corrected_timestamps.append({
+                                "word": orig_word,
+                                "start": prev_end,
+                                "end": prev_end + 0.2,  # 0.2초 추가
+                                "confidence": 0.8
+                            })
+            else:
+                # 원본 단어가 더 많은 경우: 시간 분할
+                corrected_timestamps = self._distribute_extra_words(
+                    original_words, stt_timestamps  # 구두점 포함 버전 사용
+                )
+            
+            self.get_logger().info(f"✅ 덮어쓰기 완료: {len(corrected_timestamps)}개 단어 (구두점 포함)")
+            return corrected_timestamps
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ 단어 덮어쓰기 실패: {e}")
+            return stt_timestamps  # 실패시 원본 STT 결과 반환
+
+
+    def _distribute_extra_words(self, original_words, stt_timestamps):
+        """
+        원본 단어 수가 STT보다 많을 때 시간을 분할하여 배치 (구두점 포함)
+        """
+        corrected_timestamps = []
+        
+        if not stt_timestamps:
+            return self._create_default_timestamps(original_words)
+        
+        # 🆕 구두점이 있는 단어는 조금 더 짧은 시간 할당
+        total_duration = stt_timestamps[-1]["end"] - stt_timestamps[0]["start"]
+        
+        # 🆕 단어별 가중치 계산 (구두점 있는 단어는 더 짧게)
+        word_weights = []
+        for word in original_words:
+            import re
+            clean_length = len(re.sub(r'[^\w]', '', word))
+            if clean_length == 0:  # 구두점만 있는 경우
+                weight = 0.1
+            else:
+                weight = max(0.3, clean_length * 0.2)  # 최소 0.3초, 글자당 0.2초
+            word_weights.append(weight)
+        
+        total_weight = sum(word_weights)
+        start_time = stt_timestamps[0]["start"]
+        
+        for i, (word, weight) in enumerate(zip(original_words, word_weights)):
+            duration = (weight / total_weight) * total_duration
+            word_start = start_time
+            word_end = word_start + duration
+            
+            corrected_timestamps.append({
+                "word": word,  # 🎯 구두점 포함
+                "start": round(word_start, 3),
+                "end": round(word_end, 3),
+                "confidence": 0.9
+            })
+            
+            start_time = word_end  # 다음 단어의 시작점
+        
+        return corrected_timestamps
+
+    def _create_default_timestamps(self, words):
+        """
+        STT 실패시 기본 타임스탬프 생성 (구두점 포함)
+        """
+        timestamps = []
+        current_time = 0.0
+        
+        for word in words:
+            import re
+            # 🆕 구두점 포함 단어의 길이에 따라 시간 조정
+            clean_length = len(re.sub(r'[^\w]', '', word))
+            
+            if clean_length == 0:  # 구두점만 있는 경우 (예: ".")
+                duration = 0.1
+            elif len(word) <= 2:  # 짧은 단어
+                duration = 0.3
+            elif len(word) <= 5:  # 중간 길이 단어
+                duration = 0.5
+            else:  # 긴 단어
+                duration = 0.7
+            
+            start_time = current_time
+            end_time = start_time + duration
+            
+            timestamps.append({
+                "word": word,  # 🎯 구두점 포함
+                "start": round(start_time, 3),
+                "end": round(end_time, 3),
+                "confidence": 1.0
+            })
+            
+            current_time = end_time
+        
+        return timestamps
+
+
+    def _publish_fallback_subtitle(self, text):
+        """
+        폴백 자막 데이터 퍼블리시
+        """
+        fallback_data = {
+            "original_text": text,
+            "words": [{"word": text, "start": 0, "end": 3, "confidence": 1.0}],
+            "total_duration": 3
+        }
+        
+        msg = String()
+        msg.data = json.dumps(fallback_data, ensure_ascii=False)
+        self.tts_subtitle_publisher.publish(msg)
+
+
+
+
 
 
 
@@ -834,6 +1012,20 @@ class Mp3Player(Node):
         self.tts_status_publisher.publish(msg)
         self.get_logger().info(f"📡 TTS 상태: {status}")
         self.save_log(f"📡 TTS 상태: {status}")
+
+
+        # 🆕 TTS 완료 시 UserQuestion에게 STT 재시작 신호 전송
+        if status == "tts_done":
+            restart_msg = String()
+            restart_msg.data = "restart_stt_after_tts"
+            self.stt_restart_publisher.publish(restart_msg)
+            self.get_logger().info("📡 TTS 완료 - UserQuestion STT 재시작 신호 전송")
+            self.save_log("📡 TTS 완료 - UserQuestion STT 재시작 신호 전송")
+
+            
+
+
+    
 
 
     def tts_play_request_callback(self, msg):
