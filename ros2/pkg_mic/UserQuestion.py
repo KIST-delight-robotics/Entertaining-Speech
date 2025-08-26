@@ -1,5 +1,4 @@
 
-
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -151,7 +150,8 @@ class UserQuestion(Node):
         #     String, "processing_done", self.processing_done_callback, 10
         # )
         self.processing_subscription = self.create_subscription(String, "processing_done", self.processing_done_callback, 10)
-        self.music_status_subscription = self.create_subscription(String, "music_status", self.music_status_callback, 10)
+        # self.music_status_subscription = self.create_subscription(String, "music_status", self.music_status_callback, 10)
+        self.stt_restart_subscription = self.create_subscription(String, "stt_restart", self.stt_restart_callback, 10)
         # effect_stop 토픽 구독자 추가
         self.effect_stop_subscription = self.create_subscription(String, "effect_stop", self.effect_stop_callback, 10)
 
@@ -375,36 +375,89 @@ class UserQuestion(Node):
 
 
 
-    def music_status_callback(self, msg):
-        """ 음악 상태에 따라 STT 동작 제어 """
-        if msg.data == "music_playing":
-            self.get_logger().info("Music is playing. Muting STT output.")
-            self.music_playing = True
-            self.audio_stream.queue.clear()
-            self.audio_buffer = []
-            self.partial_transcript = ""
-            self.stop_audio_stream()
+    # def music_status_callback(self, msg):
+    #     """ 음악 상태에 따라 STT 동작 제어 """
+    #     if msg.data == "music_playing":
+    #         self.get_logger().info("Music is playing. Muting STT output.")
+    #         self.music_playing = True
+    #         self.audio_stream.queue.clear()
+    #         self.audio_buffer = []
+    #         self.partial_transcript = ""
+    #         self.stop_audio_stream()
 
-        elif msg.data == "music_done":
-            self.get_logger().info("Music playback finished. Resuming STT output.")
+    #     elif msg.data == "music_done":
+    #         self.get_logger().info("Music playback finished. Resuming STT output.")
+    #         self.music_playing = False
+    #         self.word_processor.reset() 
+    #         self.publish_realtime_phrase("")   # ← True 플래그
+
+    #         # 음악 종료 후 입력 대기 플래그 활성화
+    #         self.trigger_detected = True
+    #         self.waiting_for_input_after_music = True
+    #         self.partial_transcript = ""
+    #         # 🆕 트리거 상태 퍼블리시 (대기 상태)
+    #         self.publish_trigger_status()
+
+    #         # 마이크 입력 다시 시작 및 STT 재개
+    #         self.start_audio_stream()
+    #         threading.Thread(target=self.transcribe_streaming, daemon=True).start()
+
+    #         # 음악 종료 후 30초 타이머 시작
+    #         self.start_30s_timer()
+    #         # 무음 모니터링은 최초 입력이 들어올 때 시작
+
+
+
+    def stt_restart_callback(self, msg):
+        """🆕 TTS 완료 후 STT 재시작 콜백"""
+        if msg.data == "restart_stt_after_tts":
+            self.get_logger().info("🔄 TTS 완료 - STT 재시작")
+            self.save_log("🔄 TTS 완료 - STT 재시작")
+            
+            # 🆕 상태 완전 초기화 (기존 music_done 로직과 유사하지만 더 포괄적)
             self.music_playing = False
             self.word_processor.reset() 
-            self.publish_realtime_phrase("")   # ← True 플래그
-
-            # 음악 종료 후 입력 대기 플래그 활성화
-            self.trigger_detected = True
-            self.waiting_for_input_after_music = True
+            self.publish_realtime_phrase("")
+            
+            # 모든 상태 초기화
+            self.processing = False
+            self.last_published_text = ""
             self.partial_transcript = ""
-            # 🆕 트리거 상태 퍼블리시 (대기 상태)
+            self.trigger_detected = True  # 🔑 핵심: 새로운 질문 대기 모드 활성화
+            self.waiting_for_input_after_music = True  # 음악 종료 후와 동일한 대기 상태
+            self.force_published = False
+            self.transcribing = False
+            self.ignore_stt = False
+            self.is_sound_playing = False
+            
+            # 대기 관련 상태 초기화
+            self.waiting_sequence_running = False
+            self.waiting_image_displayed = False
+            self.current_waiting_image_path = ""
+            
+            # 새로운 화자 ID 할당
+            self.current_speaker_id += 1
+            self.get_logger().info(f"🆕 새로운 speaker_id 할당: {self.current_speaker_id}")
+            
+            # 🆕 트리거 상태 퍼블리시 (새로운 질문 대기 상태)
             self.publish_trigger_status()
-
-            # 마이크 입력 다시 시작 및 STT 재개
+            
+            # 기존 타이머 정리
+            if self.timer_30s and self.timer_30s.is_alive():
+                self.timer_30s.cancel()
+                
+            # STT 재시작
             self.start_audio_stream()
             threading.Thread(target=self.transcribe_streaming, daemon=True).start()
-
-            # 음악 종료 후 30초 타이머 시작
+            
+            # 새로운 질문 대기 30초 타이머 시작
             self.start_30s_timer()
-            # 무음 모니터링은 최초 입력이 들어올 때 시작
+            
+            self.get_logger().info("✅ TTS 완료 후 STT 재시작 완료 - 새로운 질문 대기 중")
+            self.save_log("✅ TTS 완료 후 STT 재시작 완료 - 새로운 질문 대기 중")
+
+
+
 
 
 
