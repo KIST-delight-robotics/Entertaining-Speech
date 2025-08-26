@@ -296,54 +296,62 @@ const renderTtsKaraokeSubtitle = () => {
 
 
 
-// // 🆕 TTS 스펙트럼 구독
-// useEffect(() => {
-//   const ttsSpectrumListener = new ROSLIB.Topic({
-//     ros: ros,
-//     name: '/tts_spectrum',
-//     messageType: 'std_msgs/String'
-//   });
+
+
+// 🆕 개선된 활성 단어 찾기 로직
+const findActiveWordWithTolerance = (currentTime, words) => {
+  const TIMING_TOLERANCE = 0.2; // 200ms 허용 오차
+  const CONFIDENCE_THRESHOLD = 0.6; // 신뢰도 임계값
   
-//   ttsSpectrumListener.subscribe((message) => {
-//     try {
-//       const data = JSON.parse(message.data);
-//       if (data.rms !== undefined) {
-//         console.log('🗣️ TTS 음량 데이터 수신:', data);
-//         console.log('🗣️ isTtsPlaying 상태:', isTtsPlaying);
-        
-//         // 🔧 RMS 값을 직접 사용하여 더 정확한 음량 반영
-//         const rmsValue = data.rms;
-//         const normalizedRms = Math.min(1.0, rmsValue / 100000); // 1000으로 나누어 0-1 범위로
-        
-//         console.log('🗣️ RMS 값:', rmsValue);
-//         console.log('🗣️ 정규화된 RMS:', normalizedRms);
-        
-//         // 🆕 TTS 전용 스무딩 적용
-//         const smoothedVolume = applyTtsVolumeSmoothing(normalizedRms);
-//         setTtsVolume(smoothedVolume);
-        
-//         console.log('🗣️ 최종 TTS 음량:', smoothedVolume);
-//       }
-//     } catch (e) {
-//       console.error('TTS volume JSON parse error:', e);
-//     }
-//   });
+  // 1. 정확한 시간 범위 내 단어 찾기 (신뢰도 높은 단어 우선)
+  let candidates = words.map((word, index) => {
+    const isInRange = currentTime >= (word.start - TIMING_TOLERANCE) && 
+                     currentTime <= (word.end + TIMING_TOLERANCE);
+    const distance = Math.abs(currentTime - (word.start + word.end) / 2);
+    const confidence = word.confidence || 1.0;
+    
+    return {
+      index,
+      distance,
+      confidence,
+      isInRange,
+      word
+    };
+  }).filter(candidate => candidate.isInRange);
   
-//   return () => {
-//     ttsSpectrumListener.unsubscribe();
-//   };
-// }, []);
+  if (candidates.length === 0) {
+    // 2. 범위 내 단어가 없으면 가장 가까운 단어 찾기
+    candidates = words.map((word, index) => ({
+      index,
+      distance: Math.abs(currentTime - (word.start + word.end) / 2),
+      confidence: word.confidence || 1.0,
+      word
+    }));
+  }
+  
+  // 3. 신뢰도와 거리를 종합적으로 고려하여 최적 단어 선택
+  candidates.sort((a, b) => {
+    // 높은 신뢰도와 가까운 거리를 우선시
+    const scoreA = (a.confidence * 2) - (a.distance * 0.5);
+    const scoreB = (b.confidence * 2) - (b.distance * 0.5);
+    return scoreB - scoreA;
+  });
+  
+  const bestMatch = candidates[0];
+  
+  // 너무 멀거나 신뢰도가 낮으면 -1 반환
+  if (bestMatch.distance > 1.0 && bestMatch.confidence < CONFIDENCE_THRESHOLD) {
+    return -1;
+  }
+  
+  return bestMatch.index;
+};
 
-
-
-
-
-
-// 🆕 기존 TTS 스펙트럼 구독을 재생 시간 구독으로 수정
+// TTS 시간 구독에서 사용
 useEffect(() => {
   const ttsTimeListener = new ROSLIB.Topic({
     ros: ros,
-    name: '/tts_spectrum', // 기존 토픽명 유지
+    name: '/tts_spectrum',
     messageType: 'std_msgs/String'
   });
   
@@ -351,40 +359,33 @@ useEffect(() => {
     try {
       const data = JSON.parse(message.data);
       
-      // 🆕 시간 정보가 있는 경우
       if (data.current_time !== undefined && data.status === 'playing') {
-        console.log('🕐 TTS 재생 시간:', data.current_time);
         setCurrentTtsTime(data.current_time);
         
-        // 🆕 현재 시간에 해당하는 단어 인덱스 찾기
         if (ttsSubtitle && ttsSubtitle.words) {
-          const activeWordIndex = ttsSubtitle.words.findIndex(word => 
-            data.current_time >= word.start && data.current_time <= word.end
+          // 🆕 개선된 단어 찾기 사용
+          const activeWordIndex = findActiveWordWithTolerance(
+            data.current_time,
+            ttsSubtitle.words
           );
           
-          // 단어가 바뀐 경우에만 업데이트
           if (activeWordIndex !== currentWordIndex) {
             setCurrentWordIndex(activeWordIndex);
-            console.log('🎯 현재 활성 단어:', activeWordIndex >= 0 ? ttsSubtitle.words[activeWordIndex].word : '없음');
+            
+            // 🆕 디버깅 정보
+            if (activeWordIndex >= 0) {
+              const word = ttsSubtitle.words[activeWordIndex];
+              console.log(`🎯 단어 활성화: "${word.word}" (${word.start}s-${word.end}s, 신뢰도: ${word.confidence?.toFixed(2) || 'N/A'}, 매칭: ${word.match_type || 'unknown'})`);
+            }
           }
         }
-      } else if (data.status === 'finished') {
-        // 재생 완료
-        console.log('🏁 TTS 재생 완료');
-        setCurrentWordIndex(-1);
-        setCurrentTtsTime(0);
-      } else if (data.rms !== undefined) {
-        // 🆕 기존 RMS 데이터는 무시 (하위 호환성)
-        return;
       }
     } catch (e) {
       console.error('TTS time JSON parse error:', e);
     }
   });
   
-  return () => {
-    ttsTimeListener.unsubscribe();
-  };
+  return () => ttsTimeListener.unsubscribe();
 }, [ttsSubtitle, currentWordIndex]);
 
 
@@ -704,62 +705,6 @@ const requestTtsPlay = () => {
 };
 
 
-// // 🆕 TTS 상태 변화 감지 및 처리
-// useEffect(() => {
-//   if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
-//     // 비디오 종료 후 TTS가 준비되면 재생
-//     console.log('🗣️ TTS 준비 완료 - 재생 시작');
-//     setShowReply(false);
-//     requestTtsPlay();
-//   } else if (ttsStatus === 'tts_done') {
-//     // TTS 재생 완료 후 초기 상태로 복귀
-//     console.log('🗣️ TTS 재생 완료 - 초기 상태로 복귀');
-//     setCurrentVideo(null);
-//     setCurrentReply('');
-//     setVideoVisible(false);
-//     setShowReply(false);
-//     setRecommendStatus('done');
-    
-//     // 스펙트럼 모드로 전환 (필요시)
-//     if (musicPlaying) {
-//       setCanShowSpectrum(true);
-//     }
-//   }
-// }, [ttsStatus, videoVisible, showReply, musicPlaying]);
-
-
-
-
-// // 🆕 TTS 상태 변화 감지 및 처리 (기존 useEffect 수정)
-// useEffect(() => {
-//   if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
-//     console.log('🗣️ TTS 준비 완료 - 재생 시작');
-//     setShowReply(false);
-//     setIsTtsPlaying(true); // 🆕 TTS 재생 상태 활성화
-//     requestTtsPlay();
-//   } else if (ttsStatus === 'tts_playing') {
-//     // 🆕 TTS 재생 중 상태 유지
-//     setIsTtsPlaying(true);
-//   } else if (ttsStatus === 'tts_done') {
-//     console.log('🗣️ TTS 재생 완료 - 초기 상태로 복귀');
-//     setCurrentVideo(null);
-//     setCurrentReply('');
-//     setVideoVisible(false);
-//     setShowReply(false);
-//     setIsTtsPlaying(false); // 🆕 TTS 재생 상태 비활성화
-//     setTtsVolume(0); // 🆕 TTS 음량 초기화
-//     previousTtsVolumeRef.current = 0; // 🆕 스무딩 상태 초기화
-//     setRecommendStatus('done');
-    
-//     if (musicPlaying) {
-//       setCanShowSpectrum(true);
-//     }
-//   }
-// }, [ttsStatus, videoVisible, showReply, musicPlaying]);
-
-
-
-
 
 
 
@@ -938,24 +883,6 @@ const createAnimationStyles = () => {
     }
   `;
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1209,13 +1136,7 @@ const renderRealtimeWords = () => {
             setIsMp3WaitingMode(false); // Mp3 waiting 모드 종료
             
         } 
-        // else if (message.data === 'music_done') {
-        //     setMusicPlaying(false);
-        //     setRecommendStatus('done');
-        //     setCanShowSpectrum(false);
-        //     setVideoVisible(false);
-        //     setIsMp3WaitingMode(false); // Mp3 waiting 모드 종료
-        // }
+
     });
 
     return () => {
@@ -1225,58 +1146,6 @@ const renderRealtimeWords = () => {
 
 
 
-
-
-// // 🆕 TTS 상태 변화 감지 및 처리 (완전히 새로운 로직)
-// useEffect(() => {
-//   if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
-//     console.log('🗣️ TTS 준비 완료 - 재생 시작');
-//     setShowReply(false);
-//     setIsTtsPlaying(true);
-//     requestTtsPlay();
-//   } else if (ttsStatus === 'tts_playing') {
-//     setIsTtsPlaying(true);
-//   } else if (ttsStatus === 'tts_done') {
-//     console.log('🗣️ TTS 재생 완료 - 완전 초기화 및 새로운 질문 대기 모드로 전환');
-    
-//     // 🆕 모든 상태 완전 초기화 (기존 music_done보다 더 포괄적)
-//     setCurrentVideo(null);
-//     setCurrentReply('');
-//     setVideoVisible(false);
-//     setShowReply(false);
-//     setIsTtsPlaying(false);
-//     setTtsVolume(0);
-//     previousTtsVolumeRef.current = 0;
-//     setRecommendStatus('done');
-//     setCanShowSpectrum(false);
-//     setMusicPlaying(false);
-    
-//     // 🆕 대기 관련 상태들 완전 초기화
-//     setWaitingImage(null);
-//     setWaitingImageVisible(false);
-//     setIsWaitingImageMode(false);
-//     setIsWaitingAudioMode(false);
-//     setIsMp3WaitingMode(false);
-//     setIsTransitioning(false);
-    
-//     // 🆕 실시간 단어 상태 완전 초기화
-//     setRealtimeWords([]);
-//     setCurrentPhrase('');
-//     setIsShowingWords(false);
-//     setIsFinalPhrase(false);
-    
-//     // 🆕 TTS 자막 관련 완전 초기화
-//     setTtsSubtitle(null);
-//     setCurrentTtsTime(0);
-//     setCurrentWordIndex(-1);
-    
-//     // 🆕 방향 관련 상태 초기화 (새로운 질문을 위해)
-//     setIsDirectionFixed(false);
-//     setFixedDirection(null);
-    
-//     console.log('✅ TTS 완료 후 전체 상태 초기화 완료 - UserQuestion에서 STT 재시작됨');
-//   }
-// }, [ttsStatus, videoVisible, showReply]);
 
 
 
@@ -1334,82 +1203,6 @@ useEffect(() => {
     console.log('✅ TTS 완료 후 제한적 상태 초기화 - 비디오 상태 보존');
   }
 }, [ttsStatus, videoVisible, showReply]);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// 🆕 STT 재시작 신호 구독 추가 (선택적 - UI 동기화용)
-useEffect(() => {
-  const sttRestartListener = new ROSLIB.Topic({
-    ros: ros,
-    name: '/stt_restart',
-    messageType: 'std_msgs/String'
-  });
-  
-  sttRestartListener.subscribe((message) => {
-    if (message.data === 'restart_stt_after_tts') {
-      console.log('🔄 STT 재시작 신호 수신 - UI 새로운 질문 대기 모드');
-      
-      // 🆕 UI를 새로운 질문 대기 상태로 설정
-      setTriggerDetected(true); // 트리거 상태 활성화
-      
-      // 모든 시각적 요소 완전 초기화
-      setCurrentGif('');
-      setCurrentVideo(null);
-      setVideoVisible(false);
-    }
-  });
-  
-  return () => {
-    sttRestartListener.unsubscribe();
-  };
-}, []);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -2147,79 +1940,6 @@ for (let i = 0; i < numBars; i++) {
     return () => window.removeEventListener('resize', updateCanvasSize);
   }, [isWaitingAudioMode, isMp3WaitingMode]);
   
-
-
-
-
-
-//   // 4. 이미지 토픽 구독 추가
-//   useEffect(() => {
-//     const imageListener = new ROSLIB.Topic({
-//         ros: ros,
-//         name: '/current_music_image',
-//         messageType: 'std_msgs/String'
-//     });
-
-//     imageListener.subscribe((message) => {
-//         console.log('🖼️ 이미지 메시지 수신:', message.data);
-        
-//         if (message.data && message.data.trim() !== "") {
-//             const imagePath = message.data;
-           
-
-
-
-//             console.log('🖼️ 이미지 표시:', imagePath);
-            
-//             setVideoVisible(true);
-//             setCurrentGif(''); // 이 줄 추가
-
-
-//             // 🆕 대기 모드 종료 (Mp3Recommender 이미지가 왔으므로)
-//             setWaitingImage(null);
-//             setWaitingImageVisible(false);
-//             setIsWaitingImageMode(false);
-//             setIsWaitingAudioMode(false);
-
-
-
-
-//             // searching 상태도 해제
-//             if (recommendStatus === 'searching') {
-//               setRecommendStatus('processing');
-//   }
-
-
-//         } else {
-//             console.log('🖼️ 이미지 숨김');
-     
-//             setVideoVisible(false);
-
-
-//             // 이미지가 숨김 상태가 되면 스펙트럼 시각화 시작
-//             if (musicPlaying) {
-//               console.log('🎵 이미지 숨김 완료 - 스펙트럼 시각화 시작');
-//               setCanShowSpectrum(true);
-//               setRecommendStatus('done');
-//           }
-
-
-
-
-
-//         }
-//     });
-
-//     return () => {
-//         console.log('🖼️ 이미지 리스너 해제');
-//         imageListener.unsubscribe();
-//     };
-// }, [musicPlaying]);
-
-
-
-
-
 
 
 
