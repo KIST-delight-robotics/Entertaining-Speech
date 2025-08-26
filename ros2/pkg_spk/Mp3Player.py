@@ -1,5 +1,4 @@
 
-
 #동적자막(google-stt 이용) + 원본 텍스트 기반 자막 생성
 
 
@@ -25,7 +24,7 @@ import csv
 from google.cloud import speech
 import io
 import os
-
+import re
 
 
 class Mp3Player(Node):
@@ -38,13 +37,13 @@ class Mp3Player(Node):
         self.api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
 
 
-        # 구독: 추천된 MP3
-        self.subscription_ = self.create_subscription(
-            String,
-            "recommended_mp3",
-            self.mp3_callback,
-            10
-        )
+        # # 구독: 추천된 MP3
+        # self.subscription_ = self.create_subscription(
+        #     String,
+        #     "recommended_mp3",
+        #     self.mp3_callback,
+        #     10
+        # )
 
 
         # 퍼블리시: 음악 재생 상태
@@ -158,86 +157,6 @@ class Mp3Player(Node):
 
 
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Mp3Recommender에서 수신된 음악 및 TTS 재생
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-    def mp3_callback(self, msg):
-        """
-        수신된 추천 MP3 (key=value;key=value 형태) 파싱 → 음악 + TTS 재생
-        """
-        try:
-            result_dict = {}
-            for pair in msg.data.split(";"):
-                if "=" in pair:
-                    k, v = pair.split("=", 1)
-                    result_dict[k.strip()] = v.strip()
-
-            file_path = result_dict.get("file_name", "")
-            reply_text = result_dict.get("reply", "")
-
-            if not file_path:
-                self.get_logger().warn("파일 경로가 비어 있습니다.")
-                return
-
-            # 전체 경로가 아니면 조립
-            if not os.path.isabs(file_path):
-                file_path = os.path.join(self.file_path, file_path)
-
-            self.get_logger().info(f"🎵 추천 MP3: {file_path}")
-            self.get_logger().info(f"💬 Assistant 응답: {reply_text}")
-            self.save_log(f"🎵 추천 MP3: {file_path}")
-            self.save_log(f"💬 Assistant 응답: {reply_text}")
-
-            # 🎯 TTS 스레드 실행
-            tts_thread = threading.Thread(
-                target=self.text2speech, args=(reply_text,)
-            )
-            tts_thread.start()
-
-
-            # === 🎲 Mp3Player Waiting MP3 랜덤 재생 (스펙트럼 시각화 적용) ===
-            waiting_file = self.get_random_waiting_file()
-            if waiting_file:
-                self.get_logger().info("🎵 Mp3Player Waiting MP3 스펙트럼 재생 시작")
-                self.save_log("🎵 Mp3Player Waiting MP3 스펙트럼 재생 시작")
-                self.publish_music_status("mp3_waiting_playing")  # 상태명 변경으로 구분
-                self.play_waiting_with_spectrum(waiting_file)  # 새로운 함수 사용
-            else:
-                self.get_logger().warning("⚠️ Waiting 파일을 찾을 수 없어 생략합니다")
-                self.save_log("⚠️ Waiting 파일을 찾을 수 없어 생략합니다")
-
-
-
-
-            if self.current_image_path:
-                img_msg = String()
-                img_msg.data = self.current_image_path
-                self.image_publisher_.publish(img_msg)
-                self.get_logger().info(f"🖼️ 음악 재생 시작 - 이미지 표시: {self.current_image_path}")
-            
-            # === 음악 재생 ===
-            self.publish_music_status("music_playing")
-            self.play_mp3(file_path)
-            
-            # === 음악 재생 끝 - 이미지 숨김 ===
-            empty_img_msg = String()
-            empty_img_msg.data = ""
-            self.image_publisher_.publish(empty_img_msg)
-            self.get_logger().info("🖼️ 음악 재생 끝 - 이미지 숨김")
-            
-            # === TTS 재생 ===
-            tts_thread.join()
-            self.play_mp3(self.reply_path)
-            self.publish_music_status("music_done")
-
-
-        except Exception as e:
-            error_msg = f"❌ MP3 재생 중 오류 발생: {e}"
-            self.get_logger().error(error_msg)
-            self.save_log(error_msg)
 
 
 
@@ -479,64 +398,6 @@ class Mp3Player(Node):
 
 
 
-    # def text2speech(self, text):
-    #     """
-    #     ElevenLabs TTS 호출 → reply.mp3 저장
-    #     """
-    #     api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-    #     #스폰지밥
-    #     # voice_id = "59zWnTQLbwyr94bFbcUe"
-    #     #중성마녀
-    #     voice_id = "2oCsvoTtWZkaDZUSExSz"
-    #     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
-    #     headers = {
-    #         "xi-api-key": api_key,
-    #         "Content-Type": "application/json",
-    #         "Accept": "audio/mpeg"
-    #     }
-
-    #     # 스폰지밥
-    #     # data = {
-    #     #     "text": text,
-    #     #     "model_id": "eleven_multilingual_v2",
-    #     #     "voice_settings": {
-    #     #         "stability": 0.5,
-    #     #         "similarity_boost": 0.75,
-    #     #         "style": 0.25,
-    #     #         "speed": 0.9
-    #     #     },
-    #     #     "apply_text_normalization": "on"
-    #     # }
-
-    #     #중성마녀
-    #     data = {
-    #         "text": text,
-    #         "model_id": "eleven_multilingual_v2",
-    #         "voice_settings": {
-    #             "stability": 0.95,
-    #             "similarity_boost": 0.6,
-    #             "style": 0.4,
-    #             "speed": 0.8
-    #         },
-    #         "apply_text_normalization": "on"
-    #     }
-
-    #     try:
-    #         response = requests.post(url, headers=headers, json=data)
-    #         if response.status_code == 200:
-    #             with open(self.reply_path, "wb") as f:
-    #                 f.write(response.content)
-    #             print(f"🟢 음성 변환 성공 → {self.reply_path}")
-    #         else:
-    #             print(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
-    #     except Exception as e:
-    #         print(f"🔴 TTS 호출 실패: {e}")
-
-
-
-
-
     def text2speech(self, text):
         """
         ElevenLabs TTS 호출 → reply.mp3 저장 → 원본 텍스트 기반 자막 생성
@@ -622,68 +483,206 @@ class Mp3Player(Node):
             self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
 
 
-    def merge_original_with_stt_timestamps(self, original_text, stt_timestamps):
+
+
+    def align_words_with_dynamic_programming(self, original_words, stt_timestamps):
         """
-        원본 텍스트의 단어(구두점 포함)를 STT 타임스탬프에 덮어쓰기
+        동적 계획법과 음성학적 유사도를 활용한 정교한 단어 정렬
         """
-        try:
-            # 🆕 원본 텍스트 그대로 사용 (구두점 보존)
-            original_words = original_text.split()  # 공백으로만 분리, 구두점 유지
+        from difflib import SequenceMatcher
+        import re
+        
+        # 전처리: 구두점 제거 및 정규화
+        def normalize_word(word):
+            return re.sub(r'[^\w]', '', word).lower()
+        
+        orig_normalized = [normalize_word(w) for w in original_words]
+        stt_words = [ts["word"].lower() for ts in stt_timestamps]
+        
+        # 🆕 SequenceMatcher를 사용한 최적 정렬
+        matcher = SequenceMatcher(None, orig_normalized, stt_words)
+        opcodes = matcher.get_opcodes()
+        
+        aligned_results = []
+        current_stt_time = 0.0
+        
+        for tag, i1, i2, j1, j2 in opcodes:
+            if tag == 'equal':
+                # 정확히 매칭된 단어들
+                for k in range(i2 - i1):
+                    orig_idx = i1 + k
+                    stt_idx = j1 + k
+                    
+                    aligned_results.append({
+                        "word": original_words[orig_idx],
+                        "start": stt_timestamps[stt_idx]["start"],
+                        "end": stt_timestamps[stt_idx]["end"],
+                        "confidence": stt_timestamps[stt_idx]["confidence"],
+                        "match_type": "exact"
+                    })
+                    current_stt_time = stt_timestamps[stt_idx]["end"]
             
-            # 🆕 STT 비교용으로만 구두점 제거된 버전 생성
-            import re
-            original_clean_words = []
-            for word in original_words:
-                clean_word = re.sub(r'[^\w]', '', word)  # 구두점만 제거
-                if clean_word:  # 빈 문자열이 아닐 때만 추가
-                    original_clean_words.append(clean_word)
-            
-            self.get_logger().info(f"🔍 원본 단어 수(구두점 포함): {len(original_words)}")
-            self.get_logger().info(f"🔍 원본 단어 수(구두점 제거): {len(original_clean_words)}")
-            self.get_logger().info(f"🔍 STT 단어 수: {len(stt_timestamps)}")
-            self.get_logger().info(f"🔍 원본 단어들(구두점 포함): {original_words}")
-            self.get_logger().info(f"🔍 원본 단어들(구두점 제거): {original_clean_words}")
-            
-            if not stt_timestamps:
-                self.get_logger().warning("⚠️ STT 타임스탬프가 없어 원본 텍스트만 사용")
-                return self._create_default_timestamps(original_words)  # 구두점 포함 버전 사용
-            
-            # 🆕 단어 수 차이 처리
-            corrected_timestamps = []
-            
-            if len(original_clean_words) <= len(stt_timestamps):
-                # 🔑 구두점 제거된 단어 수를 기준으로 매칭, 하지만 결과는 구두점 포함
-                for i, orig_word in enumerate(original_words):
-                    if i < len(stt_timestamps):
-                        corrected_timestamps.append({
-                            "word": orig_word,  # 🎯 구두점 포함된 원본 단어 사용
-                            "start": stt_timestamps[i]["start"],
-                            "end": stt_timestamps[i]["end"],
-                            "confidence": stt_timestamps[i].get("confidence", 1.0)
-                        })
-                    else:
-                        # STT보다 원본 단어가 많은 경우 (구두점으로 인해)
-                        # 이전 타임스탬프를 연장하여 사용
-                        if corrected_timestamps:
-                            prev_end = corrected_timestamps[-1]["end"]
-                            corrected_timestamps.append({
-                                "word": orig_word,
-                                "start": prev_end,
-                                "end": prev_end + 0.2,  # 0.2초 추가
-                                "confidence": 0.8
-                            })
-            else:
-                # 원본 단어가 더 많은 경우: 시간 분할
-                corrected_timestamps = self._distribute_extra_words(
-                    original_words, stt_timestamps  # 구두점 포함 버전 사용
+            elif tag == 'delete':
+                # STT가 놓친 원본 단어들 - 시간 보간
+                self._interpolate_missing_words(
+                    original_words[i1:i2], aligned_results, current_stt_time
                 )
             
-            self.get_logger().info(f"✅ 덮어쓰기 완료: {len(corrected_timestamps)}개 단어 (구두점 포함)")
-            return corrected_timestamps
+            elif tag == 'insert':
+                # STT에만 있는 단어들 - 시간만 진행
+                if j2 <= len(stt_timestamps):
+                    current_stt_time = stt_timestamps[j2-1]["end"]
+            
+            elif tag == 'replace':
+                # 다른 단어들 - 음성학적 유사도로 매핑
+                self._map_mismatched_words(
+                    original_words[i1:i2], stt_timestamps[j1:j2], aligned_results
+                )
+        
+        return aligned_results
+
+    def _interpolate_missing_words(self, missing_words, aligned_results, start_time):
+        """
+        누락된 단어들의 타이밍 보간
+        """
+        base_duration = 0.4  # 기본 단어 지속시간
+        
+        for i, word in enumerate(missing_words):
+            # 단어 길이에 따른 지속시간 조정
+            word_length = len(re.sub(r'[^\w]', '', word))
+            duration = max(0.2, min(0.8, word_length * 0.1))
+            
+            word_start = start_time + (i * base_duration)
+            word_end = word_start + duration
+            
+            aligned_results.append({
+                "word": word,
+                "start": word_start,
+                "end": word_end,
+                "confidence": 0.3,  # 낮은 신뢰도
+                "match_type": "interpolated"
+            })
+
+    def _map_mismatched_words(self, orig_words, stt_words, aligned_results):
+        """
+        불일치 단어들의 음성학적 유사도 기반 매핑
+        """
+        if not stt_words:
+            return
+            
+        # 전체 STT 시간 범위
+        total_duration = stt_words[-1]["end"] - stt_words[0]["start"]
+        time_per_word = total_duration / len(orig_words)
+        
+        for i, orig_word in enumerate(orig_words):
+            word_start = stt_words[0]["start"] + (i * time_per_word)
+            word_end = word_start + time_per_word
+            
+            # 🆕 STT 단어와의 유사도 계산
+            best_confidence = 0.0
+            for stt_word in stt_words:
+                similarity = self._calculate_phonetic_similarity(
+                    orig_word, stt_word["word"]
+                )
+                best_confidence = max(best_confidence, similarity)
+            
+            aligned_results.append({
+                "word": orig_word,
+                "start": word_start,
+                "end": word_end,
+                "confidence": best_confidence,
+                "match_type": "phonetic_match"
+            })
+
+    def _calculate_phonetic_similarity(self, word1, word2):
+        """
+        음성학적 유사도 계산 (한글 특화)
+        """
+        from difflib import SequenceMatcher
+        
+        # 1. 편집 거리 기반 유사도
+        similarity = SequenceMatcher(None, word1.lower(), word2.lower()).ratio()
+        
+        # 2. 한글 자모 분해 유사도 (선택적)
+        # 여기서는 단순화하여 편집 거리만 사용
+        
+        return similarity * 0.8  # 신뢰도 조정
+    
+
+    def smooth_timestamps(self, timestamps):
+        """
+        타이밍 스무딩 및 겹침 해결
+        """
+        if not timestamps:
+            return timestamps
+        
+        smoothed = []
+        
+        for i, ts in enumerate(timestamps):
+            current = ts.copy()
+            
+            # 이전 단어와 겹침 방지
+            if i > 0:
+                prev_end = smoothed[-1]["end"]
+                if current["start"] < prev_end:
+                    current["start"] = prev_end + 0.05  # 50ms 간격
+            
+            # 너무 짧은 지속시간 조정
+            min_duration = 0.15  # 최소 150ms
+            if (current["end"] - current["start"]) < min_duration:
+                current["end"] = current["start"] + min_duration
+            
+            # 다음 단어와의 간격 조정
+            if i < len(timestamps) - 1:
+                next_start = timestamps[i + 1]["start"]
+                if current["end"] > next_start:
+                    # 시간을 균등 분할
+                    mid_time = (current["start"] + next_start) / 2
+                    current["end"] = mid_time
+            
+            smoothed.append(current)
+        
+        return smoothed
+
+
+
+
+
+
+    def merge_original_with_stt_timestamps(self, original_text, stt_timestamps):
+        """
+        🆕 개선된 단어 정렬 및 타이밍 매핑
+        """
+        try:
+            original_words = original_text.split()
+            
+            if not stt_timestamps:
+                return self._create_default_timestamps(original_words)
+            
+            # 🆕 지능적 정렬 수행
+            aligned_timestamps = self.align_words_with_dynamic_programming(
+                original_words, stt_timestamps
+            )
+            
+            # 🆕 타이밍 후처리
+            smoothed_timestamps = self.smooth_timestamps(aligned_timestamps)
+            
+            # 디버깅 로그
+            self.get_logger().info(f"🎯 정렬 결과: {len(original_words)}개 원본 → {len(smoothed_timestamps)}개 자막")
+            
+            for i, ts in enumerate(smoothed_timestamps[:5]):  # 처음 5개만 로깅
+                self.get_logger().info(f"  [{i}] '{ts['word']}': {ts['start']:.2f}s-{ts['end']:.2f}s (신뢰도: {ts['confidence']:.2f}, 매칭: {ts['match_type']})")
+            
+            return smoothed_timestamps
             
         except Exception as e:
-            self.get_logger().error(f"❌ 단어 덮어쓰기 실패: {e}")
+            self.get_logger().error(f"❌ 고급 정렬 실패: {e}")
             return stt_timestamps  # 실패시 원본 STT 결과 반환
+
+
+
+
+
 
 
     def _distribute_extra_words(self, original_words, stt_timestamps):
@@ -831,30 +830,6 @@ class Mp3Player(Node):
             self.get_logger().error(error_msg)
             self.save_log(error_msg)
             self.publish_tts_status("tts_error")
-
-    # def play_tts_audio(self):
-    #     """TTS 오디오 재생 (App.jsx에서 요청시)"""
-    #     try:
-    #         self.get_logger().info("🎵 TTS 오디오 재생 시작")
-    #         self.save_log("🎵 TTS 오디오 재생 시작")
-            
-    #         # 재생 시작 신호
-    #         self.publish_tts_status("tts_playing")
-            
-    #         # 실제 재생
-    #         self.play_mp3(self.reply_path)
-            
-    #         # 재생 완료 신호
-    #         self.publish_tts_status("tts_done")
-            
-    #         self.get_logger().info("🎵 TTS 오디오 재생 완료")
-    #         self.save_log("🎵 TTS 오디오 재생 완료")
-            
-    #     except Exception as e:
-    #         error_msg = f"❌ TTS 재생 중 오류: {e}"
-    #         self.get_logger().error(error_msg)
-    #         self.save_log(error_msg)
-    #         self.publish_tts_status("tts_error")
 
 
 
@@ -1014,13 +989,13 @@ class Mp3Player(Node):
         self.save_log(f"📡 TTS 상태: {status}")
 
 
-        # 🆕 TTS 완료 시 UserQuestion에게 STT 재시작 신호 전송
-        if status == "tts_done":
-            restart_msg = String()
-            restart_msg.data = "restart_stt_after_tts"
-            self.stt_restart_publisher.publish(restart_msg)
-            self.get_logger().info("📡 TTS 완료 - UserQuestion STT 재시작 신호 전송")
-            self.save_log("📡 TTS 완료 - UserQuestion STT 재시작 신호 전송")
+        # # 🆕 TTS 완료 시 UserQuestion에게 STT 재시작 신호 전송
+        # if status == "tts_done":
+        #     restart_msg = String()
+        #     restart_msg.data = "restart_stt_after_tts"
+        #     self.stt_restart_publisher.publish(restart_msg)
+        #     self.get_logger().info("📡 TTS 완료 - UserQuestion STT 재시작 신호 전송")
+        #     self.save_log("📡 TTS 완료 - UserQuestion STT 재시작 신호 전송")
 
             
 
