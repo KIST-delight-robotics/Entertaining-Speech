@@ -1,4 +1,7 @@
 
+
+//동적자막(google-stt 이용)
+
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
@@ -727,32 +730,32 @@ const requestTtsPlay = () => {
 
 
 
-// 🆕 TTS 상태 변화 감지 및 처리 (기존 useEffect 수정)
-useEffect(() => {
-  if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
-    console.log('🗣️ TTS 준비 완료 - 재생 시작');
-    setShowReply(false);
-    setIsTtsPlaying(true); // 🆕 TTS 재생 상태 활성화
-    requestTtsPlay();
-  } else if (ttsStatus === 'tts_playing') {
-    // 🆕 TTS 재생 중 상태 유지
-    setIsTtsPlaying(true);
-  } else if (ttsStatus === 'tts_done') {
-    console.log('🗣️ TTS 재생 완료 - 초기 상태로 복귀');
-    setCurrentVideo(null);
-    setCurrentReply('');
-    setVideoVisible(false);
-    setShowReply(false);
-    setIsTtsPlaying(false); // 🆕 TTS 재생 상태 비활성화
-    setTtsVolume(0); // 🆕 TTS 음량 초기화
-    previousTtsVolumeRef.current = 0; // 🆕 스무딩 상태 초기화
-    setRecommendStatus('done');
+// // 🆕 TTS 상태 변화 감지 및 처리 (기존 useEffect 수정)
+// useEffect(() => {
+//   if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
+//     console.log('🗣️ TTS 준비 완료 - 재생 시작');
+//     setShowReply(false);
+//     setIsTtsPlaying(true); // 🆕 TTS 재생 상태 활성화
+//     requestTtsPlay();
+//   } else if (ttsStatus === 'tts_playing') {
+//     // 🆕 TTS 재생 중 상태 유지
+//     setIsTtsPlaying(true);
+//   } else if (ttsStatus === 'tts_done') {
+//     console.log('🗣️ TTS 재생 완료 - 초기 상태로 복귀');
+//     setCurrentVideo(null);
+//     setCurrentReply('');
+//     setVideoVisible(false);
+//     setShowReply(false);
+//     setIsTtsPlaying(false); // 🆕 TTS 재생 상태 비활성화
+//     setTtsVolume(0); // 🆕 TTS 음량 초기화
+//     previousTtsVolumeRef.current = 0; // 🆕 스무딩 상태 초기화
+//     setRecommendStatus('done');
     
-    if (musicPlaying) {
-      setCanShowSpectrum(true);
-    }
-  }
-}, [ttsStatus, videoVisible, showReply, musicPlaying]);
+//     if (musicPlaying) {
+//       setCanShowSpectrum(true);
+//     }
+//   }
+// }, [ttsStatus, videoVisible, showReply, musicPlaying]);
 
 
 
@@ -1205,19 +1208,212 @@ const renderRealtimeWords = () => {
             setCanShowSpectrum(false);
             setIsMp3WaitingMode(false); // Mp3 waiting 모드 종료
             
-        } else if (message.data === 'music_done') {
-            setMusicPlaying(false);
-            setRecommendStatus('done');
-            setCanShowSpectrum(false);
-            setVideoVisible(false);
-            setIsMp3WaitingMode(false); // Mp3 waiting 모드 종료
-        }
+        } 
+        // else if (message.data === 'music_done') {
+        //     setMusicPlaying(false);
+        //     setRecommendStatus('done');
+        //     setCanShowSpectrum(false);
+        //     setVideoVisible(false);
+        //     setIsMp3WaitingMode(false); // Mp3 waiting 모드 종료
+        // }
     });
 
     return () => {
         statusListener.unsubscribe();
     };
   }, []);
+
+
+
+
+
+// // 🆕 TTS 상태 변화 감지 및 처리 (완전히 새로운 로직)
+// useEffect(() => {
+//   if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
+//     console.log('🗣️ TTS 준비 완료 - 재생 시작');
+//     setShowReply(false);
+//     setIsTtsPlaying(true);
+//     requestTtsPlay();
+//   } else if (ttsStatus === 'tts_playing') {
+//     setIsTtsPlaying(true);
+//   } else if (ttsStatus === 'tts_done') {
+//     console.log('🗣️ TTS 재생 완료 - 완전 초기화 및 새로운 질문 대기 모드로 전환');
+    
+//     // 🆕 모든 상태 완전 초기화 (기존 music_done보다 더 포괄적)
+//     setCurrentVideo(null);
+//     setCurrentReply('');
+//     setVideoVisible(false);
+//     setShowReply(false);
+//     setIsTtsPlaying(false);
+//     setTtsVolume(0);
+//     previousTtsVolumeRef.current = 0;
+//     setRecommendStatus('done');
+//     setCanShowSpectrum(false);
+//     setMusicPlaying(false);
+    
+//     // 🆕 대기 관련 상태들 완전 초기화
+//     setWaitingImage(null);
+//     setWaitingImageVisible(false);
+//     setIsWaitingImageMode(false);
+//     setIsWaitingAudioMode(false);
+//     setIsMp3WaitingMode(false);
+//     setIsTransitioning(false);
+    
+//     // 🆕 실시간 단어 상태 완전 초기화
+//     setRealtimeWords([]);
+//     setCurrentPhrase('');
+//     setIsShowingWords(false);
+//     setIsFinalPhrase(false);
+    
+//     // 🆕 TTS 자막 관련 완전 초기화
+//     setTtsSubtitle(null);
+//     setCurrentTtsTime(0);
+//     setCurrentWordIndex(-1);
+    
+//     // 🆕 방향 관련 상태 초기화 (새로운 질문을 위해)
+//     setIsDirectionFixed(false);
+//     setFixedDirection(null);
+    
+//     console.log('✅ TTS 완료 후 전체 상태 초기화 완료 - UserQuestion에서 STT 재시작됨');
+//   }
+// }, [ttsStatus, videoVisible, showReply]);
+
+
+
+// TTS 상태 변화 감지 및 처리 (수정된 버전)
+useEffect(() => {
+  if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
+    console.log('🗣️ TTS 준비 완료 - 재생 시작');
+    setShowReply(false);
+    setIsTtsPlaying(true);
+    requestTtsPlay();
+  } else if (ttsStatus === 'tts_playing') {
+    setIsTtsPlaying(true);
+  } else if (ttsStatus === 'tts_done') {
+    console.log('🗣️ TTS 재생 완료 - 제한적 초기화');
+    
+    // ✅ TTS 관련 상태만 초기화 (비디오 상태는 보존)
+    setShowReply(false);
+    setIsTtsPlaying(false);
+    setTtsVolume(0);
+    previousTtsVolumeRef.current = 0;
+    
+    // ✅ TTS 자막 관련만 초기화
+    setTtsSubtitle(null);
+    setCurrentTtsTime(0);
+    setCurrentWordIndex(-1);
+    
+    // ❌ 이 부분들을 제거 - Mp3Recommender가 관리하도록 함
+    // setCurrentVideo(null);
+    // setCurrentReply('');
+    // setVideoVisible(false);
+    // setRecommendStatus('done');
+    
+    // ✅ 새 질문을 위한 최소한의 초기화만
+    setCanShowSpectrum(false);
+    setMusicPlaying(false);
+    
+    // 기타 대기 상태들 초기화
+    setWaitingImage(null);
+    setWaitingImageVisible(false);
+    setIsWaitingImageMode(false);
+    setIsWaitingAudioMode(false);
+    setIsMp3WaitingMode(false);
+    setIsTransitioning(false);
+    
+    // 실시간 단어 상태 초기화
+    setRealtimeWords([]);
+    setCurrentPhrase('');
+    setIsShowingWords(false);
+    setIsFinalPhrase(false);
+    
+    // 방향 관련 상태 초기화
+    setIsDirectionFixed(false);
+    setFixedDirection(null);
+    
+    console.log('✅ TTS 완료 후 제한적 상태 초기화 - 비디오 상태 보존');
+  }
+}, [ttsStatus, videoVisible, showReply]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// 🆕 STT 재시작 신호 구독 추가 (선택적 - UI 동기화용)
+useEffect(() => {
+  const sttRestartListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/stt_restart',
+    messageType: 'std_msgs/String'
+  });
+  
+  sttRestartListener.subscribe((message) => {
+    if (message.data === 'restart_stt_after_tts') {
+      console.log('🔄 STT 재시작 신호 수신 - UI 새로운 질문 대기 모드');
+      
+      // 🆕 UI를 새로운 질문 대기 상태로 설정
+      setTriggerDetected(true); // 트리거 상태 활성화
+      
+      // 모든 시각적 요소 완전 초기화
+      setCurrentGif('');
+      setCurrentVideo(null);
+      setVideoVisible(false);
+    }
+  });
+  
+  return () => {
+    sttRestartListener.unsubscribe();
+  };
+}, []);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2201,7 +2397,6 @@ const getScreenTransform = () => {
 }
 
 export default SpectrumVisualizer;
-
 
 
 
