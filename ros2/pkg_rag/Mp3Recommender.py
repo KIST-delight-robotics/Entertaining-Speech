@@ -1,4 +1,5 @@
 
+
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -128,25 +129,25 @@ class Mp3Recommender(Node):
             self.get_logger().info(f"🗄️ Vector Store created: {vs.id}")
 
             
-            # # 여러 개 파일 한꺼번에 업로드
-            # file_objs = [open(p, "rb") for p in self.pdf_paths]
-            # batch = self.sync_client.vector_stores.file_batches.upload_and_poll(
-            #     vector_store_id=vs.id, files=file_objs
-            # )
-            # self.get_logger().info(f"📑 upload_and_poll → {batch.status} {batch.file_counts}")
+            # 여러 개 파일 한꺼번에 업로드
+            file_objs = [open(p, "rb") for p in self.pdf_paths]
+            batch = self.sync_client.vector_stores.file_batches.upload_and_poll(
+                vector_store_id=vs.id, files=file_objs
+            )
+            self.get_logger().info(f"📑 upload_and_poll → {batch.status} {batch.file_counts}")
 
 
-            # 2) 한 파일씩 업로드 후 poll
-            for pdf in self.pdf_paths:
-                with open(pdf, "rb") as f:
-                    self.get_logger().info(f"⬆️ '{os.path.basename(pdf)}' 업로드 시작")
-                    batch = self.sync_client.vector_stores.file_batches.upload_and_poll(
-                        vector_store_id=vs.id,
-                        files=[f],          # 리스트지만 한 파일만
-                        poll_interval=2.0,  # 초
-                        timeout=300         # 5 분까지 기다림
-                    )
-                    self.get_logger().info(f"✅ {pdf} → {batch.status}")
+            # # 2) 한 파일씩 업로드 후 poll
+            # for pdf in self.pdf_paths:
+            #     with open(pdf, "rb") as f:
+            #         self.get_logger().info(f"⬆️ '{os.path.basename(pdf)}' 업로드 시작")
+            #         batch = self.sync_client.vector_stores.file_batches.upload_and_poll(
+            #             vector_store_id=vs.id,
+            #             files=[f],          # 리스트지만 한 파일만
+            #             poll_interval=2.0,  # 초
+            #             timeout=300         # 5 분까지 기다림
+            #         )
+            #         self.get_logger().info(f"✅ {pdf} → {batch.status}")
 
 
             # 3) Assistant에 file_search + vector_store 연결
@@ -752,5 +753,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
 
