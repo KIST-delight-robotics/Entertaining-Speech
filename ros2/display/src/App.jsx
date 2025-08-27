@@ -1,5 +1,6 @@
 
 
+
 //동적자막(google-stt 이용)
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -688,6 +689,46 @@ useEffect(() => {
           console.log('🔍 파싱된 파일명:', fileName);
           console.log('🔍 파싱된 응답:', reply);
 
+          // 🆕 no_video 처리 수정
+          if (fileName === 'no_video') {
+            console.log('🚫 비디오 없이 TTS만 재생');
+            setCurrentVideo(null);
+            setVideoVisible(false);
+            setCurrentReply(reply);
+            
+            // 🔥 핵심 수정: 대기 모드 종료하지 않음
+            // waiting image와 spectrum이 계속 표시되도록 유지
+            
+            // searching 상태만 해제
+            if (recommendStatus === 'searching') {
+                setRecommendStatus('processing');
+            }
+
+            // TTS 상태에 따른 처리
+            if (ttsStatus === 'tts_ready') {
+                console.log('🗣️ TTS 준비 완료 - 즉시 재생 (비디오 없음)');
+                // 🆕 대기 이미지 종료 후 TTS 시작
+                setWaitingImage(null);
+                setWaitingImageVisible(false);
+                setIsWaitingImageMode(false);
+                setIsWaitingAudioMode(false);
+                setIsMp3WaitingMode(false);
+                requestTtsPlay();
+            } else {
+                console.log('🗣️ TTS 준비 대기 중... (비디오 없음)');
+                setShowReply(true);
+                // 🆕 대기 이미지는 TTS 준비될 때까지 유지
+            }
+            
+            return; // early return
+        }
+
+
+
+
+
+
+
           if (fileName && fileName !== 'unknown' && !fileName.includes('unknown')) {
           
               // mp4 파일 경로 생성 (Mp3Recommender의 mp4_dir 경로 사용)
@@ -1332,15 +1373,23 @@ const renderRealtimeWords = () => {
 useEffect(() => {
   if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
     console.log('🗣️ TTS 준비 완료 - 재생 시작');
+
+    // 🆕 no_video 모드에서 대기 이미지 정리
+    setWaitingImage(null);
+    setWaitingImageVisible(false);
+    setIsWaitingImageMode(false);
+    setIsWaitingAudioMode(false);
+    setIsMp3WaitingMode(false);
+
+
+
     setShowReply(false);
     setIsTtsPlaying(true);
-
     // 🆕 새로운 TTS 시작 시 단어별 최대 음량 초기화
     setWordMaxVolumes({});
-
-
-
     requestTtsPlay();
+
+    
   } else if (ttsStatus === 'tts_playing') {
     setIsTtsPlaying(true);
   } else if (ttsStatus === 'tts_done') {
