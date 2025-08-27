@@ -1,4 +1,7 @@
 
+
+//동적자막(google-stt 이용)
+
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
@@ -85,10 +88,8 @@ function SpectrumVisualizer() {
 
   // 기존 상태 변수들 다음에 추가
   const [waitingSpectrum, setWaitingSpectrum] = useState([]);
-  const [waitingImage, setWaitingImage] = useState(null);
-  const [waitingImageVisible, setWaitingImageVisible] = useState(false);
+
   const [isWaitingAudioMode, setIsWaitingAudioMode] = useState(false);
-  const [isWaitingImageMode, setIsWaitingImageMode] = useState(false);
 
 
   // Mp3Player waiting 전용 상태 추가
@@ -129,6 +130,162 @@ const [wordMaxVolumes, setWordMaxVolumes] = useState({}); // 🆕 각 단어별 
 // 🆕 UserQuestion 소리크기 비례 원형 스펙트럼 관련 상태 추가
 const [voiceVolume, setVoiceVolume] = useState(0);
 const [isVoiceActive, setIsVoiceActive] = useState(false);
+
+
+
+// 🆕 사용자 질문 표시용 상태 변수 추가
+const [userQuestionText, setUserQuestionText] = useState('');
+const [showUserQuestion, setShowUserQuestion] = useState(false);
+
+
+
+
+ // 🆕 사용자 질문 표시용 구독 추가
+ useEffect(() => {
+  const userQuestionDisplayListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/user_question_display',
+    messageType: 'std_msgs/String'
+  });
+  
+  userQuestionDisplayListener.subscribe((message) => {
+    console.log('🗨️ 사용자 질문 표시 데이터 수신:', message.data);
+    
+    if (message.data && message.data.trim() !== "") {
+      setUserQuestionText(message.data.trim());
+      setShowUserQuestion(true);
+      console.log('✅ 사용자 질문 말풍선 표시:', message.data);
+    } else {
+      setUserQuestionText('');
+      setShowUserQuestion(false);
+      console.log('❌ 사용자 질문 말풍선 숨김');
+    }
+  });
+  
+  return () => {
+    console.log('🗨️ 사용자 질문 표시 리스너 해제');
+    userQuestionDisplayListener.unsubscribe();
+  };
+}, []);
+
+// 🔧 수정된 renderUserQuestionBubble 함수
+const renderUserQuestionBubble = () => {
+  // 🆕 조건 완화: isWaitingAudioMode 조건 제거
+  if (!showUserQuestion || !userQuestionText) {
+    return null;
+  }
+
+  // TTS 재생 중이거나 비디오 재생 중일 때만 숨김
+  if (isTtsPlaying || videoVisible) {
+    return null;
+  }
+
+
+  return (
+    <div style={{
+      position: 'absolute',
+      top: '20%',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      zIndex: 40, // 🔧 z-index 상향 조정 (기존 35 → 40)
+      maxWidth: '80vw',
+      padding: '0',
+      pointerEvents: 'none'
+    }}>
+      {/* 기존 말풍선 UI 코드 동일 */}
+      <div style={{
+        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+        color: '#333',
+        padding: '20px 30px',
+        borderRadius: '25px',
+        fontSize: '1.8rem',
+        fontWeight: '600',
+        textAlign: 'center',
+        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+        border: '3px solid rgba(100, 200, 255, 0.8)',
+        position: 'relative',
+        maxWidth: '600px',
+        wordWrap: 'break-word',
+        lineHeight: '1.4',
+        animation: 'bubbleAppear 0.3s ease-out'
+      }}>
+        {/* 말풍선 꼬리들과 내용은 기존과 동일 */}
+        <div style={{
+          position: 'absolute',
+          bottom: '-15px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: '0',
+          height: '0',
+          borderLeft: '20px solid transparent',
+          borderRight: '20px solid transparent',
+          borderTop: '20px solid rgba(255, 255, 255, 0.95)'
+        }} />
+        
+        <div style={{
+          position: 'absolute',
+          bottom: '-18px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: '0',
+          height: '0',
+          borderLeft: '22px solid transparent',
+          borderRight: '22px solid transparent',
+          borderTop: '22px solid rgba(100, 200, 255, 0.8)',
+          zIndex: -1
+        }} />
+        
+        <div style={{
+          marginBottom: '8px'
+        }}>
+          "{userQuestionText}"
+        </div>
+        
+        <div style={{
+          fontSize: '1.2rem',
+          color: '#666',
+          fontWeight: '400'
+        }}>
+          이렇게 들었어요!
+        </div>
+      </div>
+
+      <style>
+        {`
+          @keyframes bubbleAppear {
+            0% { 
+              transform: translateX(-50%) translateY(-20px) scale(0.8);
+              opacity: 0;
+            }
+            100% { 
+              transform: translateX(-50%) translateY(0) scale(1);
+              opacity: 1;
+            }
+          }
+        `}
+      </style>
+    </div>
+  );
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -571,9 +728,9 @@ useEffect(() => {
             if (ttsStatus === 'tts_ready') {
                 console.log('🗣️ TTS 준비 완료 - 즉시 재생 (비디오 없음)');
                 // 🆕 대기 이미지 종료 후 TTS 시작
-                setWaitingImage(null);
-                setWaitingImageVisible(false);
-                setIsWaitingImageMode(false);
+            
+             
+              
                 setIsWaitingAudioMode(false);
                 setIsMp3WaitingMode(false);
                 requestTtsPlay();
@@ -605,9 +762,8 @@ useEffect(() => {
               setVideoVisible(true);
               
               // 🆕 대기 모드 종료 (Mp3Recommender 비디오가 왔으므로)
-              setWaitingImage(null);
-              setWaitingImageVisible(false);
-              setIsWaitingImageMode(false);
+       
+        
               setIsWaitingAudioMode(false);
               setIsMp3WaitingMode(false);
 
@@ -895,7 +1051,7 @@ const shouldShowVoiceSpectrum = () => {
          !musicPlaying && 
          recommendStatus !== 'searching' && 
          !isWaitingAudioMode && 
-         !isWaitingImageMode && 
+     
          !isMp3WaitingMode && 
          !videoVisible &&
          !isTtsPlaying &&
@@ -1129,10 +1285,11 @@ useEffect(() => {
   if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
     console.log('🗣️ TTS 준비 완료 - 재생 시작');
 
-    // 🆕 no_video 모드에서 대기 이미지 정리
-    setWaitingImage(null);
-    setWaitingImageVisible(false);
-    setIsWaitingImageMode(false);
+    // 🆕 TTS 시작 시 질문 말풍선 숨김
+    setShowUserQuestion(false);
+    setUserQuestionText('');
+
+
     setIsWaitingAudioMode(false);
     setIsMp3WaitingMode(false);
 
@@ -1155,6 +1312,12 @@ useEffect(() => {
     setIsTtsPlaying(false);
     setTtsVolume(0);
 
+    // 🆕 질문 말풍선도 초기화
+    setShowUserQuestion(false);
+    setUserQuestionText('');
+
+
+
     
     // ✅ TTS 자막 관련만 초기화
     setTtsSubtitle(null);
@@ -1169,9 +1332,9 @@ useEffect(() => {
     setMusicPlaying(false);
     
     // 기타 대기 상태들 초기화
-    setWaitingImage(null);
-    setWaitingImageVisible(false);
-    setIsWaitingImageMode(false);
+
+
+ 
     setIsWaitingAudioMode(false);
     setIsMp3WaitingMode(false);
     setIsTransitioning(false);
@@ -1326,59 +1489,7 @@ useEffect(() => {
   }, [musicPlaying]);
 
 
-  // 🆕 대기 이미지 구독 (/waiting_image)
-  useEffect(() => {
-    const waitingImageListener = new ROSLIB.Topic({
-      ros: ros,
-      name: '/waiting_image',
-      messageType: 'std_msgs/String'
-    });
-    
-    waitingImageListener.subscribe((message) => {
-      console.log('🖼️ 대기 이미지 메시지 수신:', message.data);
-      
-      if (message.data && message.data.trim() !== "") {
-        const imagePath = message.data;
-        console.log('🖼️ 대기 이미지 표시:', imagePath);
-        setWaitingImage(imagePath);
-        setWaitingImageVisible(true);
-        setIsWaitingAudioMode(false); // 오디오 모드 종료
-        setIsWaitingImageMode(true);  // 이미지 모드 시작
-        setRecommendStatus('waiting_image'); // 대기 이미지 상태
-      } else {
-        console.log('🖼️ 대기 이미지 숨김');
-        // 🆕 전환 상태 활성화
-        setIsTransitioning(true);
-        setWaitingImage(null);
-        setWaitingImageVisible(false);
-        setIsWaitingImageMode(false);
-        setIsWaitingAudioMode(false);
-        // 대기 시퀀스 완료 후 정상 상태로 복귀하지만 searching은 유지
-        // Mp3Recommender 이미지가 올 때까지 대기
-        // 🆕 Mp3Player waiting 모드를 미리 활성화
-        setIsMp3WaitingMode(true);
-
-
-        // // 🆕 Mp3Player waiting 모드를 미리 활성화하여 마이크 스펙트럼 방지
-        // setIsMp3WaitingMode(true);
-        // console.log('🔄 Mp3Player waiting 모드 예비 활성화 - 마이크 스펙트럼 차단');
-
-        // 🆕 잠시 후 전환 상태 해제 (Mp3 스펙트럼이 도착할 시간 확보)
-      setTimeout(() => {
-        setIsTransitioning(false);
-        console.log('🔄 전환 상태 해제 - Mp3Player waiting 준비 완료');
-      }, 100); // 100ms 딜레이
-    }
-
-      
-    });
-
-
-    return () => {
-      console.log('🖼️ 대기 이미지 리스너 해제');
-      waitingImageListener.unsubscribe();
-    };
-  }, []);
+ 
 
 
     
@@ -1405,7 +1516,7 @@ useEffect(() => {
             
             // 🆕 다른 모드들 완전히 비활성화
             setIsMp3WaitingMode(true);
-            setIsWaitingImageMode(false);
+     
             setIsWaitingAudioMode(false);
             setMusicPlaying(false);
   
@@ -1589,7 +1700,7 @@ useEffect(() => {
     
     // if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode) return;
     // 🆕 Mp3Player waiting 모드도 마이크 스펙트럼 비활성화 조건에 추가
-    if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode || isMp3WaitingMode  || isWaitingImageMode || isTransitioning|| videoVisible) return;
+    if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode || isMp3WaitingMode   || isTransitioning|| videoVisible) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     
@@ -1626,10 +1737,7 @@ useEffect(() => {
       return;
     }
 
-    if (isWaitingImageMode || waitingImageVisible) {
-      console.log('🎵 마이크 모드 - 대기 이미지 표시 중이므로 차단');
-      return;
-    }
+  
 
     if (isMp3WaitingMode) {
       console.log('🎵 마이크 모드 - Mp3Player 대기 스펙트럼 중이므로 차단');
@@ -1729,7 +1837,7 @@ const totalGaps = (numBars - 1);
 
 
     
-  }, [micSpectrum, musicPlaying, recommendStatus, canvasSize, triggerDetected, videoVisible, isWaitingImageMode, isTransitioning]);
+  }, [micSpectrum, musicPlaying, recommendStatus, canvasSize, triggerDetected, videoVisible, isTransitioning]);
 
  
 
@@ -1932,60 +2040,6 @@ for (let i = 0; i < numBars; i++) {
 
 
 
-// 🆕 renderImage 함수
-const renderWaitingImage = () => {
-  if (!waitingImage || !waitingImageVisible) {
-    return null;
-  }
-
-  const createSafeUrl = (path) => {
-    try {
-      const lastSlashIndex = path.lastIndexOf('/');
-      const directoryPath = path.substring(0, lastSlashIndex + 1);
-      const fileName = path.substring(lastSlashIndex + 1);
-      const encodedFileName = encodeURIComponent(fileName);
-      return directoryPath + encodedFileName;
-    } catch (e) {
-      console.error("대기 이미지 URL 생성 중 오류 발생:", e);
-      return path;
-    }
-  };
-
-  const safeImageUrl = createSafeUrl(waitingImage);
-
-  return (
-    <div style={{
-      position: 'absolute',
-      top: '0',
-      left: '0',
-      width: '100vw',
-      height: '100vh',
-      zIndex: 25, // 높은 우선순위
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center'
-    }}>
-      <img 
-        src={safeImageUrl} 
-        alt="대기 중..."
-        style={{
-          width: 'auto',
-          height: '100vh',
-          minWidth: '100vw',
-          objectFit: 'contain',
-          objectPosition: 'center',
-          borderRadius: '0px',
-          boxShadow: 'none'     
-        }}
-        onLoad={() => console.log('🖼️ 대기 이미지 로드 성공:', safeImageUrl)}
-        onError={() => console.error('🖼️ 대기 이미지 로드 실패:', safeImageUrl)}
-      />
-    </div>
-  );
-};
-
-
-
 
 
 
@@ -2064,7 +2118,7 @@ const getScreenTransform = () => {
 
 
    {/* 캔버스 표시 조건 수정 */}
-   {!videoVisible && !showReply && !waitingImageVisible && !shouldShowVoiceSpectrum() && !isTtsPlaying && (
+   {!videoVisible && !showReply  && !shouldShowVoiceSpectrum() && !isTtsPlaying && (
       <canvas 
         ref={canvasRef}
         style={{
@@ -2089,7 +2143,9 @@ const getScreenTransform = () => {
     {videoVisible && renderVideo()}
     {/* 🆕 TTS 대기 중 표시 */}
     {renderTtsWaiting()}
-    {renderWaitingImage()}
+
+    {/* 🆕 사용자 질문 말풍선 추가 - 대기 스펙트럼과 함께 표시 */}
+    {renderUserQuestionBubble()}
 
     {/* 🆕 TTS 노래방 자막 렌더링 추가 */}
     {renderTtsKaraokeSubtitle()}
