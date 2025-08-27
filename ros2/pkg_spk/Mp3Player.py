@@ -1,6 +1,4 @@
 
-#동적자막(google-stt 이용) + 원본 텍스트 기반 자막 생성
-
 
 import os
 import requests
@@ -108,6 +106,13 @@ class Mp3Player(Node):
         """
         Google Cloud Speech-to-Text API를 사용하여 단어별 타임스탬프 추출
         """
+
+        # 🆕 동적자막 생성 시간 측정
+        stt_start_time = time.time()
+        self.get_logger().info("⏳ Google STT API를 통한 동적자막 생성 시작")
+
+
+
         try:
             client = speech.SpeechClient()
             
@@ -125,7 +130,16 @@ class Mp3Player(Node):
             )
             
             self.get_logger().info("🗣️ Google STT API 요청 시작...")
+            # 🆕 실제 STT API 호출 시간 측정
+            stt_api_start = time.time()
+
             response = client.recognize(config=config, audio=audio)
+
+            stt_api_end = time.time()
+            stt_api_duration = stt_api_end - stt_api_start
+            self.get_logger().info(f"✅ Google STT API 응답 완료, API 호출시간: {stt_api_duration:.2f}초")
+
+
             
             word_timestamps = []
             
@@ -147,12 +161,35 @@ class Mp3Player(Node):
                         "end": round(end_time, 3),
                         "confidence": round(confidence, 3)
                     })
+
+            # 🆕 동적자막 생성 완료 시간 계산
+            stt_end_time = time.time()
+            stt_total_duration = stt_end_time - stt_start_time
+            
+            # 🆕 시간 정보를 클래스 변수에 저장 (전체 시간 분석용)
+            self._last_stt_duration = stt_total_duration
+            
+            self.get_logger().info(f"🎯 STT 타임스탬프 추출 완료: {len(word_timestamps)}개 단어")
+            self.get_logger().info(f"✅ 동적자막 생성 총 소요시간: {stt_total_duration:.2f}초")
+            self.get_logger().info(f"   - Google STT API 시간: {stt_api_duration:.2f}초")
+            self.get_logger().info(f"   - 전처리/후처리 시간: {stt_total_duration - stt_api_duration:.2f}초")
+
+
             
             self.get_logger().info(f"🎯 STT 타임스탬프 추출 완료: {len(word_timestamps)}개 단어")
             return word_timestamps
             
         except Exception as e:
+            stt_end_time = time.time()
+            stt_total_duration = stt_end_time - stt_start_time
+
+
             self.get_logger().error(f"❌ STT 타임스탬프 추출 실패: {e}")
+            self.get_logger().error(f"❌ 실패까지 소요시간: {stt_total_duration:.2f}초")
+        
+            # 실패시에도 시간 정보 저장
+            self._last_stt_duration = stt_total_duration
+            
             return []
 
 
@@ -402,6 +439,13 @@ class Mp3Player(Node):
         """
         ElevenLabs TTS 호출 → reply.mp3 저장 → 원본 텍스트 기반 자막 생성
         """
+
+        # 🆕 전체 소요시간 측정 시작
+        total_start_time = time.time()
+        self.get_logger().info("⏳ TTS 전체 프로세스 시작")
+        
+
+
         api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
         voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
@@ -432,11 +476,25 @@ class Mp3Player(Node):
         }
 
         try:
+
+            # 🆕 TTS API 호출 시간 측정
+            tts_api_start = time.time()
+            self.get_logger().info("⏳ ElevenLabs TTS API 호출 시작")
+
+
+
             response = requests.post(
                 url,
                 headers=headers,
                 data=json.dumps(data, ensure_ascii=False).encode('utf-8')
             )
+
+            tts_api_end = time.time()
+            tts_api_duration = tts_api_end - tts_api_start
+            self.get_logger().info(f"✅ TTS API 호출 완료, 소요시간: {tts_api_duration:.2f}초")
+
+
+
             
             if response.status_code == 200:
                 with open(self.reply_path, "wb") as f:
@@ -444,6 +502,12 @@ class Mp3Player(Node):
                 
                 file_size = os.path.getsize(self.reply_path)
                 self.get_logger().info(f"🟢 음성 변환 성공 → {self.reply_path} ({file_size} bytes)")
+
+                # 🆕 WAV 변환 시간 측정
+                wav_convert_start = time.time()
+                self.get_logger().info("⏳ WAV 변환 시작")
+
+
                 
                 # 🆕 WAV 변환 (STT API용)
                 sound = AudioSegment.from_file(self.reply_path, format="mp3")
@@ -451,14 +515,33 @@ class Mp3Player(Node):
                 sound = sound.set_frame_rate(16000).set_channels(1)
                 sound.export(wav_path, format="wav")
                 
+                wav_convert_end = time.time()
+                wav_convert_duration = wav_convert_end - wav_convert_start
+                self.get_logger().info(f"✅ WAV 변환 완료, 소요시간: {wav_convert_duration:.2f}초")
+
+                
                 # 🆕 STT 타임스탬프 추출
                 stt_timestamps = self.extract_word_timestamps(wav_path, cleaned_text)
+
+                # 🆕 자막 처리 시간 측정
+                subtitle_process_start = time.time()
+                self.get_logger().info("⏳ 자막 정렬 및 처리 시작")
+
                 
                 # 🔑 핵심: 원본 텍스트로 덮어쓰기
                 corrected_timestamps = self.merge_original_with_stt_timestamps(
                     original_text=cleaned_text,
                     stt_timestamps=stt_timestamps
                 )
+
+                subtitle_process_end = time.time()
+                subtitle_process_duration = subtitle_process_end - subtitle_process_start
+                self.get_logger().info(f"✅ 자막 정렬 및 처리 완료, 소요시간: {subtitle_process_duration:.2f}초")
+                
+                # 🆕 자막 퍼블리시 시간 측정
+                publish_start = time.time()
+
+
                 
                 # 🆕 수정된 자막 데이터 퍼블리시
                 if corrected_timestamps:
@@ -475,6 +558,25 @@ class Mp3Player(Node):
                 else:
                     self.get_logger().warning("⚠️ 자막 수정 실패 - 기본 자막 사용")
                     self._publish_fallback_subtitle(cleaned_text)
+                publish_end = time.time()
+                publish_duration = publish_end - publish_start
+                self.get_logger().info(f"✅ 자막 퍼블리시 완료, 소요시간: {publish_duration:.2f}초")
+                
+                # 🆕 전체 소요시간 계산 및 로그
+                total_end_time = time.time()
+                total_duration = total_end_time - total_start_time
+                
+                self.get_logger().info("="*60)
+                self.get_logger().info("📊 TTS 전체 프로세스 시간 분석")
+                self.get_logger().info(f"  🎤 TTS API 호출:        {tts_api_duration:.2f}초 ({tts_api_duration/total_duration*100:.1f}%)")
+                self.get_logger().info(f"  🔄 WAV 변환:            {wav_convert_duration:.2f}초 ({wav_convert_duration/total_duration*100:.1f}%)")
+                self.get_logger().info(f"  📝 동적자막 생성:        {getattr(self, '_last_stt_duration', 0):.2f}초 ({getattr(self, '_last_stt_duration', 0)/total_duration*100:.1f}%)")
+                self.get_logger().info(f"  ⚙️ 자막 처리:           {subtitle_process_duration:.2f}초 ({subtitle_process_duration/total_duration*100:.1f}%)")
+                self.get_logger().info(f"  📡 퍼블리시:            {publish_duration:.2f}초 ({publish_duration/total_duration*100:.1f}%)")
+                self.get_logger().info(f"  🏁 전체 소요시간:        {total_duration:.2f}초")
+                self.get_logger().info("="*60)
+
+
                     
             else:
                 self.get_logger().error(f"🔴 TTS 오류: {response.status_code}")
@@ -815,6 +917,11 @@ class Mp3Player(Node):
             reply_text = msg.data
             self.get_logger().info(f"🗣️ TTS 요청 수신: {reply_text}")
             self.save_log(f"🗣️ TTS 요청 수신: {reply_text}")
+
+            # 🆕 전체 TTS 처리 시간 측정 시작
+            process_start_time = time.time()
+
+
             
             # TTS 생성 시작 신호
             self.publish_tts_status("tts_generating")
@@ -824,6 +931,19 @@ class Mp3Player(Node):
             
             # TTS 준비 완료 신호
             self.publish_tts_status("tts_ready")
+
+
+
+            # 🆕 전체 처리 시간 계산
+            process_end_time = time.time()
+            total_process_time = process_end_time - process_start_time
+            
+            self.get_logger().info("🎊 TTS 요청 처리 완료!")
+            self.get_logger().info(f"📈 요청 수신부터 준비완료까지 총 소요시간: {total_process_time:.2f}초")
+            self.save_log(f"📈 TTS 총 처리시간: {total_process_time:.2f}초")
+
+
+
             
         except Exception as e:
             error_msg = f"❌ TTS 생성 중 오류: {e}"
