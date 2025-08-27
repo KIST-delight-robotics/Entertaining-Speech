@@ -1,8 +1,4 @@
 
-
-
-//동적자막(google-stt 이용)
-
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
@@ -108,15 +104,6 @@ function SpectrumVisualizer() {
 
 
 
-  // SpectrumVisualizer 컴포넌트에 상태 추가
-  const [realtimeWords, setRealtimeWords] = useState([]);
-  const [currentPhrase, setCurrentPhrase] = useState('');
-  const [isShowingWords, setIsShowingWords] = useState(false);
-
-  
-  const [isFinalPhrase, setIsFinalPhrase]   = useState(false);
-
-
  // 🆕 TTS 관련 상태 추가
  const [ttsStatus, setTtsStatus] = useState('idle'); // idle, generating, ready, playing, done, error
  const [showReply, setShowReply] = useState(false);
@@ -137,6 +124,12 @@ const [currentWordIndex, setCurrentWordIndex] = useState(-1); // 현재 재생 �
 const [currentTtsVolume, setCurrentTtsVolume] = useState(0); // 🆕 실시간 음량 상태
 
 const [wordMaxVolumes, setWordMaxVolumes] = useState({}); // 🆕 각 단어별 최대 음량 저장
+
+
+// 🆕 UserQuestion 소리크기 비례 원형 스펙트럼 관련 상태 추가
+const [voiceVolume, setVoiceVolume] = useState(0);
+const [isVoiceActive, setIsVoiceActive] = useState(false);
+
 
 
 
@@ -166,136 +159,6 @@ useEffect(() => {
 }, []);
 
 
-
-// // 🆕 TTS 노래방 자막 렌더링 함수
-// const renderTtsKaraokeSubtitle = () => {
-//   if (!isTtsPlaying || !ttsSubtitle || !ttsSubtitle.words || ttsSubtitle.words.length === 0) {
-//     return null;
-//   }
-
-//   return (
-//     <div style={{
-//       position: 'absolute',
-//       top: '0',
-//       left: '0',
-//       width: '100vw',
-//       height: '100vh',
-//       zIndex: 30,
-//       display: 'flex',
-//       flexDirection: 'column',
-//       justifyContent: 'center',
-//       alignItems: 'center',
-//       backgroundColor: 'rgba(26, 26, 26, 0.95)'
-//     }}>
-//       {/* 🆕 메인 자막 영역 */}
-//       <div style={{
-//         maxWidth: '90vw',
-//         textAlign: 'center',
-//         padding: '40px 20px'
-//       }}>
-//         {/* 🆕 단어별 노래방 스타일 렌더링 */}
-//         <div style={{
-//           fontSize: '3.5rem',
-//           fontWeight: 'bold',
-//           lineHeight: '1.4',
-//           letterSpacing: '0.05em',
-//           display: 'flex',
-//           flexWrap: 'wrap',
-//           justifyContent: 'center',
-//           alignItems: 'center',
-//           gap: '0.3em'
-//         }}>
-//           {ttsSubtitle.words.map((wordInfo, index) => {
-//             const isActive = index === currentWordIndex;
-//             const isPast = index < currentWordIndex;
-//             const isFuture = index > currentWordIndex;
-            
-//             return (
-//               <span
-//                 key={index}
-//                 style={{
-//                   color: isActive ? '#FFD700' : isPast ? '#FFFFFF' : '#888888',
-//                   textShadow: isActive 
-//                     ? '0 0 30px rgba(255, 215, 0, 0.9), 3px 3px 8px rgba(0,0,0,0.8)' 
-//                     : isPast 
-//                       ? '2px 2px 6px rgba(0,0,0,0.8)' 
-//                       : '2px 2px 6px rgba(0,0,0,0.6)',
-//                   fontSize: isActive ? '4rem' : '3.5rem',
-//                   transform: isActive ? 'scale(1.1) translateY(-10px)' : 'scale(1) translateY(0px)',
-//                   transition: 'all 0.3s cubic-bezier(0.4, 0.0, 0.2, 1)',
-//                   display: 'inline-block',
-//                   marginRight: '0.2em',
-//                   marginBottom: '0.1em',
-//                   // 🆕 활성 단어 추가 효과
-//                   ...(isActive && {
-//                     animation: 'pulse 0.8s infinite ease-in-out',
-//                     background: 'linear-gradient(45deg, rgba(255, 215, 0, 0.1), rgba(255, 165, 0, 0.1))',
-//                     padding: '5px 10px',
-//                     borderRadius: '8px',
-//                     border: '2px solid rgba(255, 215, 0, 0.3)'
-//                   }),
-//                   // 🆕 신뢰도가 낮은 단어 표시
-//                   ...(wordInfo.confidence < 0.8 && {
-//                     borderBottom: '2px dotted rgba(255, 255, 255, 0.5)'
-//                   })
-//                 }}
-//               >
-//                 {wordInfo.word}
-//               </span>
-//             );
-//           })}
-//         </div>
-        
-//         {/* 🆕 진행률 바 */}
-//         <div style={{
-//           width: '80%',
-//           height: '6px',
-//           backgroundColor: 'rgba(255, 255, 255, 0.2)',
-//           margin: '30px auto 20px',
-//           borderRadius: '3px',
-//           overflow: 'hidden',
-//           boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.3)'
-//         }}>
-//           <div style={{
-//             width: `${ttsSubtitle.total_duration > 0 ? (currentTtsTime / ttsSubtitle.total_duration) * 100 : 0}%`,
-//             height: '100%',
-//             background: 'linear-gradient(90deg, #FFD700, #FFA500)',
-//             transition: 'width 0.1s linear',
-//             borderRadius: '3px'
-//           }} />
-//         </div>
-
-//         {/* 🆕 시간 및 단어 정보 (선택적) */}
-//         <div style={{
-//           color: '#CCCCCC',
-//           fontSize: '1rem',
-//           marginTop: '15px',
-//           opacity: 0.8
-//         }}>
-//           <div>
-//             {currentTtsTime.toFixed(1)}s / {ttsSubtitle.total_duration?.toFixed(1) || '0.0'}s
-//           </div>
-//           {currentWordIndex >= 0 && (
-//             <div style={{ marginTop: '5px', fontSize: '0.9rem' }}>
-//               현재: "{ttsSubtitle.words[currentWordIndex]?.word}" 
-//               ({currentWordIndex + 1}/{ttsSubtitle.words.length})
-//             </div>
-//           )}
-//         </div>
-//       </div>
-
-//       {/* 🆕 CSS 애니메이션 정의 */}
-//       <style>
-//         {`
-//           @keyframes pulse {
-//             0%, 100% { opacity: 1; }
-//             50% { opacity: 0.8; }
-//           }
-//         `}
-//       </style>
-//     </div>
-//   );
-// };
 
 const renderTtsKaraokeSubtitle = () => {
   if (!isTtsPlaying || !ttsSubtitle || !ttsSubtitle.words || ttsSubtitle.words.length === 0) {
@@ -987,254 +850,146 @@ const renderTtsWaiting = () => {
 
 
 
-  
-//글자 길이별 속도 조절
-const AnimatedWord = ({ word, index, totalWords }) => {
-  const animationName = `float-${index % 5}`;
-  
-  // 🆕 단어별 지연 시간 증가 (0.3초 → 0.5초)
-  const animationDelay = `0s`;
-  
-  // 🆕 단어 길이에 따른 애니메이션 속도 조정
-  const wordLength = word.length;
-  const baseDuration = 5 + Math.random() * 2;
-  const animationDuration = `${baseDuration + (wordLength * 0.1)}s`;
 
-  return (
-    <span
-      style={{
-        position: 'absolute',
-        fontSize: '4rem',
-        fontWeight: 'bold',
-        color: '#FFD700',
-        textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
-        animation: `${animationName} ${animationDuration} ${animationDelay} infinite ease-in-out`,
-        zIndex: 30,
-        whiteSpace: 'nowrap',
-        letterSpacing: '0.05em'
-      }}
-    >
-      {word}
-    </span>
-  );
+
+
+
+
+
+
+// 🚀 음성 원형 스펙트럼 구독 (더 빠른 반응)
+useEffect(() => {
+  const voiceSpectrumListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/voice_spectrum',
+    messageType: 'std_msgs/String'
+  });
+
+  voiceSpectrumListener.subscribe((message) => {
+    try {
+      const data = JSON.parse(message.data);
+      if (data.type === 'voice_spectrum') {
+        // 🚀 더 민감한 스케일링
+        const scaledVolume = data.volume * 0.0003; // 0.00015 → 0.0003
+        const clampedVolume = Math.min(1.0, scaledVolume);
+        
+        console.log(`🔊 원본 Peak: ${data.volume.toFixed(1)}, 스케일된값: ${clampedVolume.toFixed(3)}`);
+        
+        setVoiceVolume(clampedVolume);
+        setIsVoiceActive(data.volume > 100); // 🚀 임계값 낮춤 (200 → 100)
+      }
+    } catch (e) {
+      console.error('음성 스펙트럼 JSON 파싱 오류:', e);
+    }
+  });
+
+  return () => voiceSpectrumListener.unsubscribe();
+}, []);
+
+
+
+
+// 🆕 음성 원형 스펙트럼 표시 조건 함수 (수정된 버전)
+const shouldShowVoiceSpectrum = () => {
+  return triggerDetected && 
+         !musicPlaying && 
+         recommendStatus !== 'searching' && 
+         !isWaitingAudioMode && 
+         !isWaitingImageMode && 
+         !isMp3WaitingMode && 
+         !videoVisible &&
+         !isTtsPlaying &&
+         isVoiceActive;
 };
 
-
-
-
-
-
-
-// 2. CSS 애니메이션 정의
-const createAnimationStyles = () => {
-  return `
-    @keyframes float-0 {
-      0%, 100% { 
-        transform: translate(10vw, 20vh) rotate(0deg);
-      }
-      25% { 
-        transform: translate(80vw, 10vh) rotate(90deg);
-      }
-      50% { 
-        transform: translate(70vw, 80vh) rotate(180deg);
-      }
-      75% { 
-        transform: translate(20vw, 70vh) rotate(270deg);
-      }
-    }
-
-    @keyframes float-1 {
-      0%, 100% { 
-        transform: translate(90vw, 30vh) scale(1);
-      }
-      33% { 
-        transform: translate(10vw, 60vh) scale(1.2);
-      }
-      66% { 
-        transform: translate(50vw, 10vh) scale(0.8);
-      }
-    }
-
-    @keyframes float-2 {
-      0%, 100% { 
-        transform: translate(50vw, 90vh);
-        opacity: 1;
-      }
-      25% { 
-        transform: translate(10vw, 30vh);
-        opacity: 0.7;
-      }
-      50% { 
-        transform: translate(90vw, 50vh);
-        opacity: 1;
-      }
-      75% { 
-        transform: translate(30vw, 10vh);
-        opacity: 0.9;
-      }
-    }
-
-    @keyframes float-3 {
-      0% { transform: translate(20vw, 50vh) rotate(0deg); }
-      20% { transform: translate(60vw, 20vh) rotate(72deg); }
-      40% { transform: translate(80vw, 70vh) rotate(144deg); }
-      60% { transform: translate(40vw, 85vh) rotate(216deg); }
-      80% { transform: translate(15vw, 65vh) rotate(288deg); }
-      100% { transform: translate(20vw, 50vh) rotate(360deg); }
-    }
-
-    @keyframes float-4 {
-      0%, 100% { 
-        transform: translate(50vw, 50vh);
-        filter: blur(0px);
-      }
-      25% { 
-        transform: translate(85vw, 15vh);
-        filter: blur(1px);
-      }
-      50% { 
-        transform: translate(15vw, 85vh);
-        filter: blur(0px);
-      }
-      75% { 
-        transform: translate(75vw, 75vh);
-        filter: blur(0.5px);
-      }
-    }
-  `;
-};
-
-
-
-
-
-
-
-
-  // 실시간 단어 구독 useEffect 추가
-  useEffect(() => {
-    const realtimeWordsListener = new ROSLIB.Topic({
-      ros: ros,
-      name: '/realtime_words',
-      messageType: 'std_msgs/String'
-    });
-
-    realtimeWordsListener.subscribe((message) => {
-      try {
-        const data = JSON.parse(message.data);
-        if (data.type === 'word_phrase') {
-          console.log('📝 실시간 단어 수신:', data.phrase);
-          
-          // 새로운 구문으로 교체
-          setCurrentPhrase(data.phrase);
-          setIsFinalPhrase(!!data.is_final);   // ★ 추가
-          setIsShowingWords(true);
-          
-          // 선택적: 단어 히스토리 관리 (필요시)
-          setRealtimeWords(prev => [...prev.slice(-4), {
-            phrase: data.phrase,
-            timestamp: data.timestamp,
-            id: Date.now()
-          }]);
-        }
-      } catch (e) {
-        console.error('실시간 단어 JSON 파싱 오류:', e);
-      }
-    });
-
-    return () => realtimeWordsListener.unsubscribe();
-  }, []);
-
-
-    // 단어 표시 여부 결정 함수
-  const shouldShowRealtimeWords = () => {
-    // trigger_detected이고, 음악이 재생 중이 아니며, 검색 상태가 아닐 때
-    return triggerDetected && 
-          !musicPlaying && 
-          recommendStatus !== 'searching' && 
-          !isWaitingAudioMode && 
-          !isWaitingImageMode && 
-          !isMp3WaitingMode && 
-          !videoVisible && 
-          isShowingWords;
-  };
-
-
-
-
-
-const renderRealtimeWords = () => {
-  if (!shouldShowRealtimeWords() || !currentPhrase) {
+// 🚀 더 즉각적인 렌더링
+const renderVoiceSpectrum = () => {
+  if (!shouldShowVoiceSpectrum()) {
     return null;
   }
 
-  // 최종 문장일 때만 단어별 애니메이션
-  if (isFinalPhrase) {
-    // 🔥 핵심 수정: 띄어쓰기 단위로 분리
-    const words = currentPhrase.split(' ').filter(word => word.trim()); // 빈 문자열 제거
-    
-    return (
-      <>
-        {/* CSS 애니메이션 스타일 추가 */}
-        <style>{createAnimationStyles()}</style>
-        
-        {/* 각 단어별 애니메이션 */}
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: '100vw',
-          height: '100vh',
-          zIndex: 20,
-          pointerEvents: 'none'
-        }}>
-          {words.map((word, index) => (
-            <AnimatedWord 
-              key={`${word}-${index}`}
-              word={word}
-              index={index}
-              totalWords={words.length}
-            />
-          ))}
-        </div>
-      </>
-    );
-  }
+  // 🚀 더 역동적인 크기 변화
+  const minRadius = 40;   // 🚀 60 → 40 (더 작은 최소값)
+  const maxRadius = 400;  // 🚀 350 → 400 (더 큰 최대값)
+  const radius = minRadius + (voiceVolume * (maxRadius - minRadius));
+  
+  // 🚀 더 강한 투명도 변화
+  const minOpacity = 0.2; // 🚀 0.3 → 0.2
+  const maxOpacity = 1.0; // 🚀 0.95 → 1.0 (완전 불투명)
+  const opacity = minOpacity + (voiceVolume * (maxOpacity - minOpacity));
 
-  // 일반 문장은 기존 방식 유지
   return (
     <div style={{
       position: 'fixed',
       top: '50%',
       left: '50%',
       transform: 'translate(-50%, -50%)',
-      zIndex: 20,
-      textAlign: 'center',
-      animation: 'fadeInScale 0.3s ease-out'
+      zIndex: 25,
+      pointerEvents: 'none'
     }}>
+      {/* 메인 원 */}
       <div style={{
-        fontSize: '5rem',
-        fontWeight: 'bold',
-        color: '#ffffff',
-        textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
-        maxWidth: '90vw',
-        wordBreak: 'keep-all',
-        whiteSpace: 'nowrap',
-        letterSpacing: '0.05em'
-      }}>
-        {currentPhrase}
-      </div>
+        width: `${radius * 2}px`,
+        height: `${radius * 2}px`,
+        borderRadius: '50%',
+        background: `radial-gradient(circle, rgba(100, 200, 255, ${opacity}) 0%, rgba(50, 150, 255, ${opacity * 0.5}) 70%, rgba(0, 100, 255, 0) 100%)`,
+        border: `4px solid rgba(100, 200, 255, ${opacity})`,
+        transition: 'all 0.02s linear', // 🚀 0.05s → 0.02s (더 빠른 전환)
+        animation: voiceVolume > 0.05 ? 'voicePulse 0.15s infinite alternate' : 'none' // 🚀 더 빠른 애니메이션
+      }} />
+      
+      {/* 🚀 더 역동적인 중앙 점 */}
+      <div style={{
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        width: `${8 + (voiceVolume * 20)}px`,  // 🚀 더 큰 변화폭
+        height: `${8 + (voiceVolume * 20)}px`,
+        borderRadius: '50%',
+        backgroundColor: `rgba(100, 200, 255, ${opacity})`,
+        boxShadow: `0 0 ${10 + (voiceVolume * 40)}px rgba(100, 200, 255, ${opacity})`, // 🚀 더 큰 그림자
+        transition: 'all 0.01s linear' // 🚀 매우 빠른 반응
+      }} />
+      
+      {/* 🚀 더 민감한 외곽 링 */}
+      {voiceVolume > 0.05 && ( // 🚀 0.1 → 0.05 (더 민감)
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: `${radius * 3.0}px`, // 🚀 더 큰 링
+          height: `${radius * 3.0}px`,
+          borderRadius: '50%',
+          border: `3px solid rgba(100, 200, 255, ${opacity * 0.4})`,
+          animation: 'voiceRipple 0.4s infinite' // 🚀 더 빠른 리플
+        }} />
+      )}
+      
+      {/* CSS 애니메이션도 더 빠르게 */}
+      <style>
+        {`
+          @keyframes voicePulse {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.12); }
+          }
+          
+          @keyframes voiceRipple {
+            0% { 
+              transform: translate(-50%, -50%) scale(0.6);
+              opacity: 1;
+            }
+            100% { 
+              transform: translate(-50%, -50%) scale(1.6);
+              opacity: 0;
+            }
+          }
+        `}
+      </style>
     </div>
   );
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -1389,7 +1144,7 @@ useEffect(() => {
     setWordMaxVolumes({});
     requestTtsPlay();
 
-    
+
   } else if (ttsStatus === 'tts_playing') {
     setIsTtsPlaying(true);
   } else if (ttsStatus === 'tts_done') {
@@ -1421,12 +1176,11 @@ useEffect(() => {
     setIsMp3WaitingMode(false);
     setIsTransitioning(false);
     
-    // 실시간 단어 상태 초기화
-    setRealtimeWords([]);
-    setCurrentPhrase('');
-    setIsShowingWords(false);
-    setIsFinalPhrase(false);
-    
+    // 🆕 음성 원형 스펙트럼 상태 초기화
+    setVoiceVolume(0);
+    setIsVoiceActive(false);
+
+
     // 방향 관련 상태 초기화
     setIsDirectionFixed(false);
     setFixedDirection(null);
@@ -2310,7 +2064,7 @@ const getScreenTransform = () => {
 
 
    {/* 캔버스 표시 조건 수정 */}
-   {!videoVisible && !showReply && !waitingImageVisible && !shouldShowRealtimeWords() && !isTtsPlaying && (
+   {!videoVisible && !showReply && !waitingImageVisible && !shouldShowVoiceSpectrum() && !isTtsPlaying && (
       <canvas 
         ref={canvasRef}
         style={{
@@ -2328,8 +2082,8 @@ const getScreenTransform = () => {
       />
     )}
 
-    {/* 실시간 단어 표시 */}
-    {renderRealtimeWords()}
+    {/* 🆕 음성 원형 스펙트럼 표시 추가 */}
+    {renderVoiceSpectrum()}
 
     {/* 기존 이미지 표시 */}
     {videoVisible && renderVideo()}
