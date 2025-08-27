@@ -403,7 +403,7 @@ class Mp3Player(Node):
         ElevenLabs TTS 호출 → reply.mp3 저장 → 원본 텍스트 기반 자막 생성
         """
         api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        voice_id = "2oCsvoTtWZkaDZUSExSz"
+        voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
         headers = {
@@ -423,10 +423,10 @@ class Mp3Player(Node):
             "text": cleaned_text,
             "model_id": "eleven_multilingual_v2",
             "voice_settings": {
-                "stability": 0.95,
-                "similarity_boost": 0.6,
-                "style": 0.4,
-                "speed": 0.8
+                "stability": 0.5,
+                "similarity_boost": 0.75,
+                "style": 0.25,
+                "speed": 0.9
             },
             "apply_text_normalization": "on"
         }
@@ -928,50 +928,134 @@ class Mp3Player(Node):
 
 
 
+    # def tts_publish_and_play(self, wav_path):
+    #     """TTS 재생 시간 정보 퍼블리시 및 재생"""
+    #     wf = wave.open(wav_path, 'rb')
+    #     chunk_size = 2024
+    #     frame_rate = wf.getframerate()
+    #     start_time = time.time()
+
+    #     def publish_tts_time():
+    #         data = wf.readframes(chunk_size)
+    #         while data:
+    #             # 🆕 현재 재생 시간 계산
+    #             current_time = round(time.time() - start_time, 3)
+                
+    #             # 🆕 재생 시간 정보 전송 (RMS 대신)
+    #             time_data = {
+    #                 "current_time": current_time,
+    #                 "status": "playing",
+    #                 "timestamp": time.time()
+    #             }
+
+    #             msg = String()
+    #             msg.data = json.dumps(time_data)
+    #             self.tts_spectrum_publisher.publish(msg)  # 기존 퍼블리셔 재활용
+                
+    #             data = wf.readframes(chunk_size)
+    #             time.sleep(chunk_size / frame_rate)
+            
+    #         # 🆕 재생 완료 신호
+    #         final_data = {
+    #             "current_time": current_time,
+    #             "status": "finished",
+    #             "timestamp": time.time()
+    #         }
+    #         msg = String()
+    #         msg.data = json.dumps(final_data)
+    #         self.tts_spectrum_publisher.publish(msg)
+
+    #     time_thread = threading.Thread(target=publish_tts_time)
+    #     time_thread.start()
+
+    #     # 시스템 명령어로 재생
+    #     os.system(f"aplay {wav_path}")
+    #     time_thread.join()
+    #     wf.close()
+
+
+
+
+
+    #원본 RMS 값 기반 상대적 스케일링
     def tts_publish_and_play(self, wav_path):
-        """TTS 재생 시간 정보 퍼블리시 및 재생"""
+        """TTS 재생 시간 + 원본 RMS 기반 음량 정보 퍼블리시"""
         wf = wave.open(wav_path, 'rb')
-        chunk_size = 2024
+        chunk_size = 1024
         frame_rate = wf.getframerate()
         start_time = time.time()
+        
+        # 🆕 전체 오디오의 RMS 값들을 저장할 리스트
+        all_rms_values = []
 
-        def publish_tts_time():
+        def publish_tts_time_and_volume():
+            nonlocal all_rms_values
             data = wf.readframes(chunk_size)
+            
             while data:
-                # 🆕 현재 재생 시간 계산
                 current_time = round(time.time() - start_time, 3)
                 
-                # 🆕 재생 시간 정보 전송 (RMS 대신)
-                time_data = {
+                # 실시간 음량 계산
+                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+                if wf.getnchannels() == 2:
+                    samples = samples.reshape((-1, 2)).mean(axis=1)
+                
+                # 🔑 핵심: 원본 RMS 값 사용 (정규화 없음)
+                raw_rms = np.sqrt(np.mean(samples**2)) if len(samples) > 0 else 0
+                all_rms_values.append(raw_rms)
+                
+                # 🆕 로그 스케일 적용 (선택적, 더 자연스러운 음량 차이)
+                if raw_rms > 0:
+                    log_scaled_rms = np.log1p(raw_rms) / np.log1p(10000)  # log(1+x) 스케일링
+                else:
+                    log_scaled_rms = 0
+                
+                # 🆕 단순 스케일링 (정규화 대신)
+                scaled_volume = min(1.0, raw_rms / 5000.0)  # 5000으로 나누되 1.0으로 제한하지 않음
+                
+                time_volume_data = {
                     "current_time": current_time,
                     "status": "playing",
+                    "raw_rms": float(raw_rms),           # 🔑 원본 RMS 값 추가
+                    "volume": float(scaled_volume),       # 기존 호환성용
+                    "log_volume": float(log_scaled_rms),  # 로그 스케일 버전
                     "timestamp": time.time()
                 }
 
                 msg = String()
-                msg.data = json.dumps(time_data)
-                self.tts_spectrum_publisher.publish(msg)  # 기존 퍼블리셔 재활용
+                msg.data = json.dumps(time_volume_data)
+                self.tts_spectrum_publisher.publish(msg)
                 
                 data = wf.readframes(chunk_size)
                 time.sleep(chunk_size / frame_rate)
             
-            # 🆕 재생 완료 신호
+            # 🆕 재생 완료 시 통계 정보 로깅
+            if all_rms_values:
+                min_rms = min(all_rms_values)
+                max_rms = max(all_rms_values)
+                avg_rms = sum(all_rms_values) / len(all_rms_values)
+                self.get_logger().info(f"🔊 RMS 통계 - 최소: {min_rms:.1f}, 최대: {max_rms:.1f}, 평균: {avg_rms:.1f}")
+            
+            # 재생 완료 신호
             final_data = {
                 "current_time": current_time,
                 "status": "finished",
+                "raw_rms": 0.0,
+                "volume": 0.0,
+                "log_volume": 0.0,
                 "timestamp": time.time()
             }
             msg = String()
             msg.data = json.dumps(final_data)
             self.tts_spectrum_publisher.publish(msg)
 
-        time_thread = threading.Thread(target=publish_tts_time)
+        time_thread = threading.Thread(target=publish_tts_time_and_volume)
         time_thread.start()
-
-        # 시스템 명령어로 재생
         os.system(f"aplay {wav_path}")
         time_thread.join()
         wf.close()
+
+
 
 
 
