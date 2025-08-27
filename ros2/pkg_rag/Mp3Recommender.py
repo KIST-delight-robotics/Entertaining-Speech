@@ -1,5 +1,4 @@
 
-
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -101,6 +100,18 @@ class Mp3Recommender(Node):
         self.status_publisher = self.create_publisher(String, 'mp4_recommend_status', 10)
         self.effect_stop_publisher_ = self.create_publisher(String, 'effect_stop', 10)
         self.get_logger().info("mp4Recommender node has started.")
+
+
+
+
+        # 🆕 유사도 임계값 설정
+        self.SIMILARITY_THRESHOLD = 0.7  # 코사인 유사도 임계값 (0~1, 높을수록 엄격)
+        self.MIN_CANDIDATES_FOR_VIDEO = 1  # 비디오 재생을 위한 최소 후보 수
+
+
+
+
+
 
     def save_log(self, message: str):
         """로그를 파일에 저장"""
@@ -213,11 +224,33 @@ class Mp3Recommender(Node):
             self.get_logger().error(f"Error generating embedding: {e}")
             raise
 
+    # def search_candidates(self, query: str, k: int = 5) -> List[Dict]:
+    #     try:
+    #         emb = self.get_sbert_embedding(query).reshape(1, -1)
+    #         D, I = self.mp4_faiss_index.search(emb, k)
+    #         cands = []
+    #         for dist, idx in zip(D[0], I[0]):
+    #             if idx < 0:
+    #                 continue
+    #             fn = self.mp4_metadata.get(idx)
+    #             if not fn:
+    #                 continue
+    #             path = os.path.join(self.mp4_dir, fn + ".mp4")
+    #             cands.append({"file_name": fn, "path": path, "score": float(dist), "index": idx})
+    #         return cands
+    #     except Exception as e:
+    #         self.get_logger().error(f"Error searching candidates: {e}")
+    #         return []
+
+
+
+
     def search_candidates(self, query: str, k: int = 5) -> List[Dict]:
         try:
             emb = self.get_sbert_embedding(query).reshape(1, -1)
             D, I = self.mp4_faiss_index.search(emb, k)
             cands = []
+            
             for dist, idx in zip(D[0], I[0]):
                 if idx < 0:
                     continue
@@ -225,11 +258,29 @@ class Mp3Recommender(Node):
                 if not fn:
                     continue
                 path = os.path.join(self.mp4_dir, fn + ".mp4")
-                cands.append({"file_name": fn, "path": path, "score": float(dist), "index": idx})
-            return cands
+                
+                # 🆕 유사도 점수 계산 (거리를 유사도로 변환)
+                similarity_score = 1 / (1 + dist)  # 거리를 유사도로 변환
+                
+                cands.append({
+                    "file_name": fn, 
+                    "path": path, 
+                    "score": float(dist), 
+                    "similarity": float(similarity_score),  # 🆕 추가
+                    "index": idx
+                })
+            
+            # 🆕 임계값 이상인 후보만 필터링
+            filtered_cands = [c for c in cands if c["similarity"] >= self.SIMILARITY_THRESHOLD]
+            
+            self.get_logger().info(f"🎯 검색 결과: 전체 {len(cands)}개 → 임계값({self.SIMILARITY_THRESHOLD}) 이상 {len(filtered_cands)}개")
+            
+            return filtered_cands
+            
         except Exception as e:
             self.get_logger().error(f"Error searching candidates: {e}")
             return []
+
 
 
 
@@ -290,6 +341,9 @@ class Mp3Recommender(Node):
                     "index": idx
                 })
 
+            # 🆕 후보 수 로깅
+            self.get_logger().info(f"🔍 검색된 후보 수: {len(candidates)}")
+
             # 2) GPT 평가
             if not candidates:
                 result = {
@@ -299,9 +353,35 @@ class Mp3Recommender(Node):
             else:
                 result = await self.run_assistant(thread_id, user_question, candidates)
 
+
+                # 🆕 결과 검증
+                if not result or not isinstance(result, dict):
+                    self.get_logger().error("❌ run_assistant 결과가 유효하지 않음")
+                    result = {"file_name": "no_video", "reply": "처리 중 오류가 발생했어요"}
+                
+                if "file_name" not in result or "reply" not in result:
+                    self.get_logger().error("❌ 필수 키가 누락됨")
+                    result = {"file_name": "no_video", "reply": "응답 키가 누락되었어요"}
+
+
+
+
+            # 🆕 결과에 따른 다른 처리
+            if result['file_name'] == "no_video":
+                # TTS만 전송
+                result_str = "file_name=no_video;reply=" + result['reply']
+                self.get_logger().info("📢 TTS 전용 모드로 응답")
+            else:
+                # 기존 방식 (비디오 + TTS)
+                result_str = f"file_name={result['file_name']};reply={result['reply']}"
+                self.get_logger().info(f"🎬 비디오 + TTS 모드로 응답")
+
+
+
             # 4) 결과 publish (file_name, reply)
            
-            result_str = f"file_name={result['file_name']};reply={result['reply']}"
+            #덮어쓰기 제거
+            # result_str = f"file_name={result['file_name']};reply={result['reply']}"
             msg = String()
             msg.data = result_str
             self.publisher_.publish(msg)
@@ -502,7 +582,7 @@ class Mp3Recommender(Node):
 
     Remember: You're a grumpy robot dog who secretly cares. Be specific with directions but maintain your personality.
     
-    Respond ONLY with valid JSON:
+    Respond ONLY with valid JSON (NO trailing commas, NO extra text):
     {{
     "file_name": "<mp4 제목>",
     "reply": "<PDF 정보를 포함한 재치있고 간결한 응답과 추가 질문>"
@@ -515,30 +595,47 @@ class Mp3Recommender(Node):
             else:
                 # PDF 검색이 필요없다고 판단한 경우
                 task_prompt = f"""{identity_section}
- # Instructions
-    - mp4 titles are full-sentence style (e.g., "이건 너무한거 아니냐고").
-    - Your task is to:
-    1. Choose one mp4 title from the list that best matches the user's emotional tone, context, or meaning.
-    2. Write one emotionally aligned sentence that would fit the moment, in your signature tone. Keep it brief and witty.
-    - You must ONLY return a valid JSON object.
-    - Do not copy the selected 'file_name' as it is in 'reply'.
+    # TASK: Decide Whether to Show Video
+    # CRITICAL DECISION CRITERIA:
+        You have {len(candidates)} video candidates. You must decide:
+        1. Is this question appropriate for an entertaining video response?
+        2. Do any candidates genuinely match the user's intent?
 
-    # Select criteria
-    1. Consider the semantic connection between the filename and the question as your top priority.
-    2. Choose the file that best matches the emotional context or concept.
-    3. Never select a file title that is not in the candidate list.
-    4. Select by verifying that it conforms to your identity as a snarky robot dog.
+        # Video Recommendation Rules:
+        ✅ RECOMMEND VIDEO when:
+        - Question is casual, greeting, or entertainment-focused
+        - A candidate file truly matches the emotional context
+        - User seems to want an engaging/fun interaction
 
-    Respond ONLY with valid JSON:
+        ❌ SET "no_video" when:
+        - Question is serious, informational, or technical
+        - No candidates genuinely fit the context
+        - Pure factual information is more appropriate
+        - User is asking for directions, procedures, or data
+
+
+    # Instructions
+        - mp4 titles are full-sentence style (e.g., "이건 너무한거 아니냐고").
+        - Your task is to:
+        1. Be selective! It's better to give no video than a poorly matched one
+        2. Only choose a video if you're confident it enhances the interaction
+        3. For "no_video" cases, still provide a helpful snarky response
+        - You must ONLY return a valid JSON object.
+        - Do not copy the selected 'file_name' as it is in 'reply'.
+
+
+    Respond ONLY with valid JSON (NO trailing commas, NO extra text):
     {{
-    "file_name": "<mp4 제목>",
-    "reply": "<재치있고 간결한 응답과 추가 질문>"
+    "file_name": "no_video" OR "<mp4 제목>",
+    "reply": "<재치있고 간결한 응답과 추가 질문>",
     }}
 
     User question: "{question}"
+    Available candidates ({len(candidates)} found):
+    {candidate_list if candidates else "No suitable video candidates found"}"""
 
-    mp4 candidates:
-    {candidate_list}"""
+    # mp4 candidates:
+    # {candidate_list}"""
 
             # ─── 메시지 전송 ──────────────────────────────
             await client.beta.threads.messages.create(
@@ -627,17 +724,58 @@ class Mp3Recommender(Node):
             latest = messages_list[0].content[0].text.value.strip()
             self.get_logger().info(f"📄 Raw Assistant Response: {latest[:200]}...")
    
-            # JSON 파싱 및 응답 처리
+            # JSON 파싱 및 응답 처리 (기존 코드 대체)
             try:
                 clean_content = latest.strip()
+                
+                # 🆕 1단계: 코드 블록 제거
                 if "```json" in clean_content:
                     clean_content = clean_content.split("```json")[1].split("```")[0].strip()
                 elif "```" in clean_content:
                     clean_content = clean_content.split("```")[1].strip()
                 
+                # 🆕 2단계: 추가 정리 작업
+                clean_content = clean_content.strip()
+                
+                # 🆕 3단계: trailing comma 제거
+                clean_content = re.sub(r',\s*}', '}', clean_content)  # }, 를 }로 변경
+                clean_content = re.sub(r',\s*]', ']', clean_content)  # ], 를 ]로 변경
+                
+                # 🆕 4단계: 기타 불필요한 문자 제거
+                clean_content = re.sub(r'[^\x20-\x7E가-힣]', '', clean_content)  # 출력 가능한 문자만 유지
+                
+                # 🆕 5단계: JSON 유효성 사전 검증
+                if not clean_content.startswith('{') or not clean_content.endswith('}'):
+                    self.get_logger().warning(f"⚠️ 유효하지 않은 JSON 형태: 시작={clean_content[:20]}, 끝={clean_content[-20:]}")
+                    # JSON 추출 재시도
+                    json_match = re.search(r'\{.*\}', clean_content, re.DOTALL)
+                    if json_match:
+                        clean_content = json_match.group(0)
+                    else:
+                        raise ValueError("JSON 형태를 찾을 수 없음")
+                
+                # 🆕 6단계: 파싱 시도
                 parsed = json.loads(clean_content)
+                
                 selected_file = parsed.get("file_name", "unknown").strip()
                 reply = parsed.get("reply", "응답 파싱 오류").strip()
+                # reasoning = parsed.get("reasoning", "").strip()
+                
+                # 🆕 7단계: 성공 로그
+                self.get_logger().info(f"✅ JSON 파싱 성공: file_name='{selected_file}', reply길이={len(reply)}")
+
+
+
+
+                # 🆕 no_video 처리
+                if selected_file == "no_video" or not candidates:
+                    #self.get_logger().info(f"🚫 비디오 없이 TTS만 재생: {reasoning}")
+                    return {"file_name": "no_video", "reply": reply}
+
+
+                # 🆕 선택된 파일 로깅 강화
+                #self.get_logger().info(f"🎬 비디오 선택: {selected_file} | 이유: {reasoning}")
+                self.get_logger().info(f"🎬 비디오 선택: {selected_file}")
 
              
                 # gpt 선정파일 바로 publish - 파일 존재 체크는 로깅용으로만 사용
@@ -650,73 +788,14 @@ class Mp3Recommender(Node):
 
 
                
-                # # 1단계: GPT 선택 파일명을 FAISS로 재검색하여 가장 유사한 실제 파일 찾기
-                # try:
-                #     self.get_logger().info(f"🔍 FAISS 재검색 시작: '{selected_file}'")
-                    
-                #     # 안전한 임베딩 생성
-                #     gpt_embedding = self.get_sbert_embedding(selected_file)
-                #     if gpt_embedding is None:
-                #         raise ValueError("임베딩 생성 실패")
-                    
-                #     # reshape을 안전하게 처리
-                #     gpt_embedding_reshaped = gpt_embedding.reshape(1, -1).astype('float32')
-                    
-                #     # FAISS 검색
-                #     distances, indices = self.faiss_index.search(gpt_embedding_reshaped, 1)
-                    
-                #     if len(indices) > 0 and len(indices[0]) > 0 and indices != -1:
-                #         # FAISS에서 찾은 가장 유사한 파일
-                #         verified_idx = int(indices)  # numpy.int64를 int로 변환
-                #         verified_file = self.metadata.get(verified_idx, "Unknown")
-                #         verified_path = os.path.abspath(os.path.join(self.mp4_dir, verified_file + ".mp4"))
-                        
-                #         if os.path.exists(verified_path):
-                #             # GPT 선택과 FAISS 검증 결과 비교 로깅
-                #             similarity_score = float(distances[0][0])  # numpy.float32를 float로 변환
-                #             if selected_file != verified_file:
-                #                 self.get_logger().info(f"🔄 GPT선택: '{selected_file}' → FAISS검증: '{verified_file}' (유사도: {similarity_score:.4f})")
-                #             else:
-                #                 self.get_logger().info(f"✅ GPT 선택 파일명 검증 성공: '{selected_file}'")
-                            
-                #             return {"file_name": verified_path, "reply": reply}
-                #         else:
-                #             self.get_logger().warning(f"⚠️ FAISS 검증 파일이 존재하지 않음: {verified_path}")
-                #     else:
-                #         self.get_logger().warning("⚠️ FAISS 검색에서 유효한 결과를 찾지 못함")
-                    
-                # except Exception as e:
-                #     self.get_logger().error(f"❌ FAISS 재검색 실패: {e}")
-                #     self.get_logger().error(f"📍 오류 발생 시점: selected_file='{selected_file}'")
-
-                # # 2단계: FAISS 검증 실패시 candidates에서 정확 매칭 시도
-                # for candidate in candidates:
-                #     if candidate['file_name'] == selected_file:
-                #         candidate_path = os.path.abspath(os.path.join(self.mp4_dir, candidate['file_name'] + ".mp4"))
-                #         if os.path.exists(candidate_path):
-                #             self.get_logger().info(f"🎯 Candidates에서 정확 매칭: '{selected_file}'")
-                #             return {"file_name": candidate_path, "reply": reply}
-
-                # # 3단계: 모든 검증 실패시 첫 번째 후보 사용 (안전장치)
-                # if candidates:
-                #     fallback_file = candidates[0]['file_name']
-                #     fallback_path = os.path.abspath(os.path.join(self.mp4_dir, fallback_file + ".mp4"))
-                #     self.get_logger().warning(f"🚨 Fallback to first candidate: '{fallback_file}'")
-                #     return {"file_name": fallback_path, "reply": reply}
-
-                # # 4단계: 모든 것이 실패한 경우
-                # self.get_logger().error("❌ 모든 파일명 검증 실패")
-                # return {"file_name": "unknown.mp4", "reply": reply}
-
-
-
             except json.JSONDecodeError as e:
-                self.get_logger().error(f"JSON 파싱 오류: {e}")
-                if candidates:
-                    top_file = candidates[0]['file_name']
-                    top_path = os.path.abspath(os.path.join(self.mp4_dir, top_file + ".mp4"))
-                    return {"file_name": top_path, "reply": "응답을 이해하지 못했어요"}
-                return {"file_name": "unknown", "reply": "응답 파싱 오류"}
+                # 🆕 상세한 에러 정보 로깅
+                self.get_logger().error(f"❌ JSON 파싱 실패: {e}")
+                self.get_logger().error(f"📄 정리된 내용 (처음 200자): {clean_content[:200] if 'clean_content' in locals() else 'N/A'}")
+                self.get_logger().error(f"📄 정리된 내용 (마지막 200자): {clean_content[-200:] if 'clean_content' in locals() else 'N/A'}")
+                
+                # 🆕 fallback을 no_video로 변경 (더 안전함)
+                return {"file_name": "no_video", "reply": "응답 형식을 이해하지 못했어요. 다시 질문해주세요."}
 
         except Exception as e:
             self.get_logger().error(f"run_assistant 예외: {e}")
