@@ -279,8 +279,7 @@ class UserQuestion(Node):
         ElevenLabs TTS 호출하여 질문 확인 음성 생성
         """
         api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        # voice_id = "59zWnTQLbwyr94bFbcUe"
-        voice_id = "2oCsvoTtWZkaDZUSExSz"
+        voice_id = "59zWnTQLbwyr94bFbcUe"
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
         headers = {
