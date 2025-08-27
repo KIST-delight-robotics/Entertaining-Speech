@@ -1,4 +1,5 @@
 
+
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -46,71 +47,50 @@ import requests  # TTS API 호출용
 
 load_dotenv("/home/nvidia/ros2_ws/src/.env")
 
-
-
 # ──────────────────────────────────────────────────────────────────────────────
-# 실시간 단어 전송
+# 🆕 시간 도메인 최대 소리크기 기반 원형 스펙트럼 처리
 # ──────────────────────────────────────────────────────────────────────────────
-class RealtimeWordProcessor:
+class VoiceCircularSpectrum:
     def __init__(self):
-        self.master_transcript = ""  # 전체 문장 누적
-        self.sent_phrases = []  # 이미 전송된 구문들
-        self.last_sent_word_count = 0  # 마지막으로 전송한 단어 개수
-        self.debounce_time = 0.05  # 300ms 디바운싱
-        self.last_process_time = 0
+        self.volume_history = []
+        self.history_size = 1  # 🔧 5프레임에서 3프레임으로 줄여서 더 빠른 반응
+        self.peak_decay_rate = 0.85  # 🆕 피크 감쇠율 추가
+        self.current_peak = 0.0  # 🆕 현재 피크값 추적
         
-    def process_transcript(self, transcript, is_final=False):
-        """새로운 방식: 전체 문장 기준으로 증분 처리"""
-        current_time = time.time()
+    def calculate_volume(self, audio_data):
+        """시간 도메인에서 최대 소리크기 계산 - 원본 최대값 반환"""
+        samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+        if len(samples) == 0:
+            return 0.0
         
-        # 디바운싱
-        if current_time - self.last_process_time < self.debounce_time and not is_final:
-            return []
+        # 🔑 핵심 변경: RMS 대신 Peak Amplitude (최대 절댓값) 계산
+        peak_amplitude = np.max(np.abs(samples))
         
-        self.last_process_time = current_time
+        # 🆕 현재 피크와 비교하여 더 큰 값 선택
+        if peak_amplitude > self.current_peak*0.8:
+            self.current_peak = peak_amplitude
+        else:
+            # 🆕 피크 감쇠 적용 (자연스러운 감소)
+            self.current_peak *= self.peak_decay_rate
         
-        # 전체 문장 업데이트 (더 긴 문장으로 대체)
-        if len(transcript) > len(self.master_transcript):
-            self.master_transcript = transcript
+        # # 🆕 최근 최대값들을 히스토리에 저장
+        # self.volume_history.append(peak_amplitude)
+        # if len(self.volume_history) > self.history_size:
+        #     self.volume_history.pop(0)
         
-        # 단어 분할
-        words = self.master_transcript.strip().split()
-        new_phrases = []
-        
-        # 새로운 단어들만 처리
-        if len(words) > self.last_sent_word_count:
-            start_idx = self.last_sent_word_count
-            new_words = words[start_idx:]
-            
-            # 두 단어씩 묶어서 구문 생성
-            for i in range(0, len(new_words), 2):
-                if i + 1 < len(new_words):
-                    phrase = f"{new_words[i]} {new_words[i+1]}"
-                else:
-                    phrase = new_words[i]  # 마지막 단어
-                
-                new_phrases.append(phrase)
-                self.last_sent_word_count += 2 if i + 1 < len(new_words) else 1
-        
-        # Final 결과일 때 남은 단어 처리
-        if is_final and len(words) > self.last_sent_word_count:
-            remaining_words = words[self.last_sent_word_count:]
-            if remaining_words:
-                new_phrases.append(' '.join(remaining_words))
-        
-        return new_phrases
+        # # 🆕 현재 피크와 최근 최대값 중 더 큰 값 반환
+        # recent_max = np.max(self.volume_history) if self.volume_history else 0.0
+        # final_volume = max(self.current_peak, recent_max)
+        # 🚀 히스토리 최소화 (1프레임만)
+        self.volume_history = [peak_amplitude]  # 현재값만 저장
+
+        # 🚀 현재 피크와 즉시값 중 더 큰 값
+        return float(max(self.current_peak, peak_amplitude))
     
     def reset(self):
-        """새 문장 시작시 초기화"""
-        self.master_transcript = ""
-        self.sent_phrases = []
-        self.last_sent_word_count = 0
-
-
-
-
-
-
+        """새 세션 시작시 초기화"""
+        self.volume_history = []
+        self.current_peak = 0.0  # 🆕 피크값도 초기화
 
 
 
@@ -128,7 +108,7 @@ class UserQuestion(Node):
         self.client = speech.SpeechClient()
 
 
-        # 🆕 신뢰성 높은 QoS 설정
+        # 신뢰성 높은 QoS 설정
         reliable_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
@@ -140,7 +120,7 @@ class UserQuestion(Node):
         # ROS 2 인터페이스
         stt_group = ReentrantCallbackGroup()
         self.publisher_ = self.create_publisher(String, "user_question", 10)
-        # 🆕 트리거 상태 퍼블리시용 추가
+        # 트리거 상태 퍼블리시용 추가
         self.trigger_status_pub = self.create_publisher(String, "/trigger_status", 10)
         self.gif_status_pub = self.create_publisher(String, "/gif_status", 10)
         #self.gif_status_pub = self.create_publisher(String, "/gif_status", reliable_qos)
@@ -253,9 +233,10 @@ class UserQuestion(Node):
 
 
 
-        # 🆕 실시간 단어 처리 추가
-        self.word_processor = RealtimeWordProcessor()
-        self.realtime_words_pub = self.create_publisher(String, "/realtime_words", 10)
+        # 🆕 실시간 음성 원형 스펙트럼 퍼블리셔 (기존 realtime_words_pub 대신)
+        self.voice_spectrum_pub = self.create_publisher(String, "/voice_spectrum", 10)
+        # 🆕 실시간 음성 스펙트럼 처리 추가 (기존 word_processor 대신)
+        self.voice_spectrum = VoiceCircularSpectrum()
 
 
         # 🆕 질문 확인 TTS 파일 저장 경로 추가
@@ -420,8 +401,9 @@ class UserQuestion(Node):
             
             # ✅ 상태 초기화 (speaker_id는 변경하지 않음)
             self.music_playing = False
-            self.word_processor.reset() 
-            self.publish_realtime_phrase("")
+            # 🆕 원형 스펙트럼 초기화 (기존 word_processor.reset() 대신)
+            self.voice_spectrum.reset()
+         
             
             # 기본 상태 초기화
             self.processing = False
@@ -524,8 +506,8 @@ class UserQuestion(Node):
             
             # 🆕 상태 완전 초기화 (기존 music_done 로직과 유사하지만 더 포괄적)
             self.music_playing = False
-            self.word_processor.reset() 
-            self.publish_realtime_phrase("")
+            # 🆕 원형 스펙트럼 초기화 (기존 word_processor.reset() 대신)
+            self.voice_spectrum.reset()
             
             # 모든 상태 초기화
             self.processing = False
@@ -711,6 +693,13 @@ class UserQuestion(Node):
                 self.visualizer_queue.put_nowait(in_data)
             except queue.Empty:
                 pass
+
+        # 🆕 2. 원형 스펙트럼용 음량 계산 및 전송 (trigger_detected 상태에서만)
+        if self.trigger_detected and not self.music_playing and not self.ignore_stt:
+            volume = self.voice_spectrum.calculate_volume(in_data)
+            self.publish_voice_spectrum(volume)
+
+
         
         # 2. STT 데이터 처리 - 더 엄격한 조건
         should_process_stt = (
@@ -745,68 +734,29 @@ class UserQuestion(Node):
 
 
   
-
-
-
-    # def publish_audio_visualizer(self, in_data):
-
-    #     samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
+    def publish_voice_spectrum(self, volume):
+        """실시간 음성 원형 스펙트럼 데이터를 프론트엔드로 전송"""
+        spectrum_data = {
+            "type": "voice_spectrum",
+            "volume": float(volume),  # 원본 Peak Amplitude 값 전송
+            "timestamp": time.time(),
+            "speaker_id": self.current_speaker_id
+        }
         
- 
-    #     # 1. 기본 FFT 계산
-    #     fft = np.fft.fft(samples)
-    #     spectrum = np.abs(fft[:len(fft)//2])
-  
-
-    #     # Mp3Player.py와 동일한 정규화
-    #     spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+        msg = String()
+        msg.data = json.dumps(spectrum_data)
+        self.voice_spectrum_pub.publish(msg)
         
-    #     # Mp3Player.py와 동일한 JSON 구조로 발송
-    #     msg = String()
-    #     msg.data = json.dumps({"spectrum": spectrum.tolist()})
-    #     self.visualizer_pub.publish(msg)
-
-
-    # # DC 오프셋 제거
-    # def publish_audio_visualizer(self, in_data):
-    #     # 🆕 0.5초 간격 출력 제어
-    #     current_time = time.time()
-    #     if not hasattr(self, 'last_print_time'):
-    #         self.last_print_time = 0
+        # 🔧 디버깅 로그 수정 (Peak Amplitude 표시)
+        current_time = time.time()
+        if not hasattr(self, 'last_spectrum_log_time'):
+            self.last_spectrum_log_time = 0
         
-    #     should_print = current_time - self.last_print_time >= 0.5
-
-    #     samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
-    #     # 🆕 DC 오프셋 제거 - 평균값 빼기
-    #     samples = samples - np.mean(samples)
-
-  
-    #     window = np.hanning(len(samples))
-    #     windowed_data = samples * window
-
-    #     # 1. 기본 FFT 계산
-    #     fft = np.fft.fft(windowed_data)
-
-    #     spectrum = np.abs(fft[:len(fft)//2])
-
-    #     # Mp3Player.py와 동일한 정규화
-    #     # spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-        
+        if current_time - self.last_spectrum_log_time >= 0.5:
+            self.last_spectrum_log_time = current_time
+            self.get_logger().info(f"🔊 원본 Peak Amplitude: {volume:.1f}")  # Peak 값으로 로그 변경
 
 
-
-    #     # 🆕 0.5초에 한 번씩만 스펙트럼 값 10개 출력
-    #     if should_print:
-    #         self.last_print_time = current_time
-    #         print("=== 스펙트럼 값 (처음 10개) ===")
-    #         for i in range(min(10, len(spectrum))):
-    #             print(f"[{i}] {spectrum[i]:.6f}")
-    #         print("==============================")
-            
-    #     # Mp3Player.py와 동일한 JSON 구조로 발송
-    #     msg = String()
-    #     msg.data = json.dumps({"spectrum": spectrum.tolist()})
-    #     self.visualizer_pub.publish(msg)
 
 
 
@@ -904,16 +854,9 @@ class UserQuestion(Node):
                     self.silence_seconds = 0
 
 
-                    # 🆕 실시간 단어 처리 (is_final 플래그 추가)
-                    if self.trigger_detected:
-                        new_phrases = self.word_processor.process_transcript(txt, is_final)
-                        for phrase in new_phrases:
-                            self.publish_realtime_phrase(phrase)
+                 
                     
                         
-
-
-
 
                     # 음악 종료 후 최초 음성 입력이 들어왔을 때만 무음 감지 시작
                     if self.waiting_for_input_after_music:
@@ -933,15 +876,15 @@ class UserQuestion(Node):
                             self.partial_transcript = split_text[1].strip()
                             self.get_logger().info(f"Trigger detected. Capturing transcript: {self.partial_transcript}")
 
+                            # 🆕 원형 스펙트럼 초기화 (기존 word_processor.reset() 대신)
+                            self.voice_spectrum.reset()
 
-                            # 🆕 단어 처리기 초기화
-                            self.word_processor.reset()
-
+                           
 
 
                             self.play_effect_sound_trigger()
                             self.trigger_detected = True
-                            self.publish_realtime_phrase("")   # ← True 플래그
+                        
                             # 🆕 트리거 감지 상태 전송
                             self.publish_trigger_status()
                             self.audio_buffer = []  # 본 질문 음성 버퍼링 시작
@@ -979,21 +922,7 @@ class UserQuestion(Node):
                 self.start_silence_monitoring()
 
 
-    def publish_realtime_phrase(self, phrase, is_final=False):
-        """실시간 단어 구문을 프론트엔드로 전송"""
-        phrase_data = {
-            "type": "word_phrase",
-            "phrase": phrase,
-            "timestamp": time.time(),
-            "speaker_id": self.current_speaker_id,
-            "is_final": is_final          # ★ 추가
-        }
-        
-        msg = String()
-        msg.data = json.dumps(phrase_data)
-        self.realtime_words_pub.publish(msg)
-        
-        self.get_logger().info(f"📝 실시간 구문 전송: '{phrase}'")
+    
 
 
 
@@ -1476,9 +1405,7 @@ class UserQuestion(Node):
             self.partial_transcript = ""  # ✅ 퍼블리시 후 즉시 초기화
             self.trigger_detected = False  # ✅ 퍼블리시 후 trigger 상태 초기화
             self.waiting_for_input_after_music = False  # ✅ 입력 대기 상태 해제
-            self.publish_realtime_phrase(text, is_final=True)
-            # time.sleep(2)
-            #self.play_effect_sound_rag()
+     
 
 
 
