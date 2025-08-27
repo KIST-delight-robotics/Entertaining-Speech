@@ -132,8 +132,10 @@ const [ttsSubtitle, setTtsSubtitle] = useState(null); // 자막 데이터
 const [currentTtsTime, setCurrentTtsTime] = useState(0); // 현재 재생 시간
 const [currentWordIndex, setCurrentWordIndex] = useState(-1); // 현재 재생 중인 단어 인덱스
 
+// 기존 TTS 상태들 다음에 추가
+const [currentTtsVolume, setCurrentTtsVolume] = useState(0); // 🆕 실시간 음량 상태
 
-
+const [wordMaxVolumes, setWordMaxVolumes] = useState({}); // 🆕 각 단어별 최대 음량 저장
 
 
 
@@ -164,7 +166,136 @@ useEffect(() => {
 
 
 
-// 🆕 TTS 노래방 자막 렌더링 함수
+// // 🆕 TTS 노래방 자막 렌더링 함수
+// const renderTtsKaraokeSubtitle = () => {
+//   if (!isTtsPlaying || !ttsSubtitle || !ttsSubtitle.words || ttsSubtitle.words.length === 0) {
+//     return null;
+//   }
+
+//   return (
+//     <div style={{
+//       position: 'absolute',
+//       top: '0',
+//       left: '0',
+//       width: '100vw',
+//       height: '100vh',
+//       zIndex: 30,
+//       display: 'flex',
+//       flexDirection: 'column',
+//       justifyContent: 'center',
+//       alignItems: 'center',
+//       backgroundColor: 'rgba(26, 26, 26, 0.95)'
+//     }}>
+//       {/* 🆕 메인 자막 영역 */}
+//       <div style={{
+//         maxWidth: '90vw',
+//         textAlign: 'center',
+//         padding: '40px 20px'
+//       }}>
+//         {/* 🆕 단어별 노래방 스타일 렌더링 */}
+//         <div style={{
+//           fontSize: '3.5rem',
+//           fontWeight: 'bold',
+//           lineHeight: '1.4',
+//           letterSpacing: '0.05em',
+//           display: 'flex',
+//           flexWrap: 'wrap',
+//           justifyContent: 'center',
+//           alignItems: 'center',
+//           gap: '0.3em'
+//         }}>
+//           {ttsSubtitle.words.map((wordInfo, index) => {
+//             const isActive = index === currentWordIndex;
+//             const isPast = index < currentWordIndex;
+//             const isFuture = index > currentWordIndex;
+            
+//             return (
+//               <span
+//                 key={index}
+//                 style={{
+//                   color: isActive ? '#FFD700' : isPast ? '#FFFFFF' : '#888888',
+//                   textShadow: isActive 
+//                     ? '0 0 30px rgba(255, 215, 0, 0.9), 3px 3px 8px rgba(0,0,0,0.8)' 
+//                     : isPast 
+//                       ? '2px 2px 6px rgba(0,0,0,0.8)' 
+//                       : '2px 2px 6px rgba(0,0,0,0.6)',
+//                   fontSize: isActive ? '4rem' : '3.5rem',
+//                   transform: isActive ? 'scale(1.1) translateY(-10px)' : 'scale(1) translateY(0px)',
+//                   transition: 'all 0.3s cubic-bezier(0.4, 0.0, 0.2, 1)',
+//                   display: 'inline-block',
+//                   marginRight: '0.2em',
+//                   marginBottom: '0.1em',
+//                   // 🆕 활성 단어 추가 효과
+//                   ...(isActive && {
+//                     animation: 'pulse 0.8s infinite ease-in-out',
+//                     background: 'linear-gradient(45deg, rgba(255, 215, 0, 0.1), rgba(255, 165, 0, 0.1))',
+//                     padding: '5px 10px',
+//                     borderRadius: '8px',
+//                     border: '2px solid rgba(255, 215, 0, 0.3)'
+//                   }),
+//                   // 🆕 신뢰도가 낮은 단어 표시
+//                   ...(wordInfo.confidence < 0.8 && {
+//                     borderBottom: '2px dotted rgba(255, 255, 255, 0.5)'
+//                   })
+//                 }}
+//               >
+//                 {wordInfo.word}
+//               </span>
+//             );
+//           })}
+//         </div>
+        
+//         {/* 🆕 진행률 바 */}
+//         <div style={{
+//           width: '80%',
+//           height: '6px',
+//           backgroundColor: 'rgba(255, 255, 255, 0.2)',
+//           margin: '30px auto 20px',
+//           borderRadius: '3px',
+//           overflow: 'hidden',
+//           boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.3)'
+//         }}>
+//           <div style={{
+//             width: `${ttsSubtitle.total_duration > 0 ? (currentTtsTime / ttsSubtitle.total_duration) * 100 : 0}%`,
+//             height: '100%',
+//             background: 'linear-gradient(90deg, #FFD700, #FFA500)',
+//             transition: 'width 0.1s linear',
+//             borderRadius: '3px'
+//           }} />
+//         </div>
+
+//         {/* 🆕 시간 및 단어 정보 (선택적) */}
+//         <div style={{
+//           color: '#CCCCCC',
+//           fontSize: '1rem',
+//           marginTop: '15px',
+//           opacity: 0.8
+//         }}>
+//           <div>
+//             {currentTtsTime.toFixed(1)}s / {ttsSubtitle.total_duration?.toFixed(1) || '0.0'}s
+//           </div>
+//           {currentWordIndex >= 0 && (
+//             <div style={{ marginTop: '5px', fontSize: '0.9rem' }}>
+//               현재: "{ttsSubtitle.words[currentWordIndex]?.word}" 
+//               ({currentWordIndex + 1}/{ttsSubtitle.words.length})
+//             </div>
+//           )}
+//         </div>
+//       </div>
+
+//       {/* 🆕 CSS 애니메이션 정의 */}
+//       <style>
+//         {`
+//           @keyframes pulse {
+//             0%, 100% { opacity: 1; }
+//             50% { opacity: 0.8; }
+//           }
+//         `}
+//       </style>
+//     </div>
+//   );
+// };
+
 const renderTtsKaraokeSubtitle = () => {
   if (!isTtsPlaying || !ttsSubtitle || !ttsSubtitle.words || ttsSubtitle.words.length === 0) {
     return null;
@@ -184,16 +315,12 @@ const renderTtsKaraokeSubtitle = () => {
       alignItems: 'center',
       backgroundColor: 'rgba(26, 26, 26, 0.95)'
     }}>
-      {/* 🆕 메인 자막 영역 */}
       <div style={{
         maxWidth: '90vw',
         textAlign: 'center',
         padding: '40px 20px'
       }}>
-        {/* 🆕 단어별 노래방 스타일 렌더링 */}
         <div style={{
-          fontSize: '3.5rem',
-          fontWeight: 'bold',
           lineHeight: '1.4',
           letterSpacing: '0.05em',
           display: 'flex',
@@ -204,36 +331,37 @@ const renderTtsKaraokeSubtitle = () => {
         }}>
           {ttsSubtitle.words.map((wordInfo, index) => {
             const isActive = index === currentWordIndex;
-            const isPast = index < currentWordIndex;
-            const isFuture = index > currentWordIndex;
+            
+            // 🔑 핵심: isActive 조건 제거하고 모든 단어에 최대 음량 기반 크기 적용
+            const baseFontSize = '3.5rem';
+            const fixedFontSize = calculateFontSizeFromMaxVolume(baseFontSize, index);
             
             return (
               <span
                 key={index}
                 style={{
-                  color: isActive ? '#FFD700' : isPast ? '#FFFFFF' : '#888888',
-                  textShadow: isActive 
-                    ? '0 0 30px rgba(255, 215, 0, 0.9), 3px 3px 8px rgba(0,0,0,0.8)' 
-                    : isPast 
-                      ? '2px 2px 6px rgba(0,0,0,0.8)' 
-                      : '2px 2px 6px rgba(0,0,0,0.6)',
-                  fontSize: isActive ? '4rem' : '3.5rem',
-                  transform: isActive ? 'scale(1.1) translateY(-10px)' : 'scale(1) translateY(0px)',
-                  transition: 'all 0.3s cubic-bezier(0.4, 0.0, 0.2, 1)',
+                  // 🔑 핵심: 모든 단어 동일한 색상
+                  color: '#FFFFFF', // 모든 단어 흰색으로 통일
+                  textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
+                  
+                  // 🔑 핵심: 모든 단어에 고정 크기 적용
+                  fontSize: fixedFontSize,
+                  fontWeight: isActive ? 'bold' : 'normal', // 현재 단어만 굵게 (선택사항)
+                  
+                  // 🆕 크기 변화 제거 - transition 없음
                   display: 'inline-block',
                   marginRight: '0.2em',
                   marginBottom: '0.1em',
-                  // 🆕 활성 단어 추가 효과
+                  
+                  // 🆕 현재 단어만 강조 (색상 대신 그림자로)
                   ...(isActive && {
-                    animation: 'pulse 0.8s infinite ease-in-out',
-                    background: 'linear-gradient(45deg, rgba(255, 215, 0, 0.1), rgba(255, 165, 0, 0.1))',
-                    padding: '5px 10px',
-                    borderRadius: '8px',
-                    border: '2px solid rgba(255, 215, 0, 0.3)'
+                    textShadow: '0 0 15px rgba(255, 255, 255, 0.8), 3px 3px 6px rgba(0,0,0,0.8)',
+                    transform: 'translateY(-2px)', // 살짝 위로 올리기
                   }),
-                  // 🆕 신뢰도가 낮은 단어 표시
+                  
+                  // 신뢰도 표시 (기존 유지)
                   ...(wordInfo.confidence < 0.8 && {
-                    borderBottom: '2px dotted rgba(255, 255, 255, 0.5)'
+                    borderBottom: '2px dotted rgba(255, 255, 255, 0.3)'
                   })
                 }}
               >
@@ -243,15 +371,37 @@ const renderTtsKaraokeSubtitle = () => {
           })}
         </div>
         
-        {/* 🆕 진행률 바 */}
+        {/* 🆕 단어별 최대 음량 디버깅 정보 강화 */}
+        <div style={{
+          width: '90%',
+          margin: '30px auto',
+          fontSize: '0.9rem',
+          color: '#CCCCCC',
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+          gap: '10px'
+        }}>
+          {ttsSubtitle.words.map((word, index) => (
+            <div key={index} style={{
+              padding: '4px 8px',
+              backgroundColor: index === currentWordIndex ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)',
+              borderRadius: '4px',
+              fontSize: '0.8rem'
+            }}>
+              "{word.word}": {((wordMaxVolumes[index] || 0) * 100).toFixed(0)}%
+            </div>
+          ))}
+        </div>
+        
+        {/* 기존 진행률 바 유지 */}
         <div style={{
           width: '80%',
           height: '6px',
           backgroundColor: 'rgba(255, 255, 255, 0.2)',
-          margin: '30px auto 20px',
+          margin: '20px auto',
           borderRadius: '3px',
-          overflow: 'hidden',
-          boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.3)'
+          overflow: 'hidden'
         }}>
           <div style={{
             width: `${ttsSubtitle.total_duration > 0 ? (currentTtsTime / ttsSubtitle.total_duration) * 100 : 0}%`,
@@ -261,38 +411,21 @@ const renderTtsKaraokeSubtitle = () => {
             borderRadius: '3px'
           }} />
         </div>
-
-        {/* 🆕 시간 및 단어 정보 (선택적) */}
-        <div style={{
-          color: '#CCCCCC',
-          fontSize: '1rem',
-          marginTop: '15px',
-          opacity: 0.8
-        }}>
-          <div>
-            {currentTtsTime.toFixed(1)}s / {ttsSubtitle.total_duration?.toFixed(1) || '0.0'}s
-          </div>
-          {currentWordIndex >= 0 && (
-            <div style={{ marginTop: '5px', fontSize: '0.9rem' }}>
-              현재: "{ttsSubtitle.words[currentWordIndex]?.word}" 
-              ({currentWordIndex + 1}/{ttsSubtitle.words.length})
-            </div>
-          )}
-        </div>
       </div>
-
-      {/* 🆕 CSS 애니메이션 정의 */}
-      <style>
-        {`
-          @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.8; }
-          }
-        `}
-      </style>
     </div>
   );
 };
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -347,7 +480,8 @@ const findActiveWordWithTolerance = (currentTime, words) => {
   return bestMatch.index;
 };
 
-// TTS 시간 구독에서 사용
+
+// TTS 시간 구독에서 원본 RMS 값 활용
 useEffect(() => {
   const ttsTimeListener = new ROSLIB.Topic({
     ros: ros,
@@ -361,9 +495,9 @@ useEffect(() => {
       
       if (data.current_time !== undefined && data.status === 'playing') {
         setCurrentTtsTime(data.current_time);
-        
+        setCurrentTtsVolume(data.volume || 0);
+
         if (ttsSubtitle && ttsSubtitle.words) {
-          // 🆕 개선된 단어 찾기 사용
           const activeWordIndex = findActiveWordWithTolerance(
             data.current_time,
             ttsSubtitle.words
@@ -371,14 +505,26 @@ useEffect(() => {
           
           if (activeWordIndex !== currentWordIndex) {
             setCurrentWordIndex(activeWordIndex);
-            
-            // 🆕 디버깅 정보
-            if (activeWordIndex >= 0) {
-              const word = ttsSubtitle.words[activeWordIndex];
-              console.log(`🎯 단어 활성화: "${word.word}" (${word.start}s-${word.end}s, 신뢰도: ${word.confidence?.toFixed(2) || 'N/A'}, 매칭: ${word.match_type || 'unknown'})`);
-            }
           }
-        }
+
+          // 🔑 핵심: 원본 RMS 값 사용
+          if (activeWordIndex >= 0 && data.raw_rms !== undefined) {
+            setWordMaxVolumes(prev => {
+              const currentMax = prev[activeWordIndex] || 0;
+              const newMax = Math.max(currentMax, data.raw_rms); // 🔑 raw_rms 사용
+              
+              // 🆕 원본 값으로 디버깅 로그
+              if (newMax > currentMax) {
+                console.log(`🔊 단어 "${ttsSubtitle.words[activeWordIndex].word}" 최대RMS 업데이트: ${currentMax.toFixed(1)} → ${newMax.toFixed(1)}`);
+              }
+              
+              return {
+                ...prev,
+                [activeWordIndex]: newMax
+              };
+            });
+          }
+        } 
       }
     } catch (e) {
       console.error('TTS time JSON parse error:', e);
@@ -394,8 +540,41 @@ useEffect(() => {
 
 
 
+// // 🔑 핵심: 원본 RMS 기반 글자 크기 계산
+// const calculateFontSizeFromMaxVolume = (baseSize, wordIndex) => {
+//   const maxRms = wordMaxVolumes[wordIndex] || 0;
+  
+//   if (maxRms === 0) return baseSize;
+  
+//   // 🆕 RMS 값 기반 로그 스케일링 (더 자연스러운 크기 차이)
+//   const logScale = Math.log1p(maxRms) / Math.log1p(5000); // 5000을 기준으로 로그 스케일
+  
+//   // 🆕 크기 스케일링 (1.0 ~ 3.0배)
+//   const volumeScale = 1.0 + (logScale * 2.0);
+//   const scaledSize = parseFloat(baseSize.replace('rem', '')) * volumeScale;
+  
+//   // 크기 범위 설정
+//   const minSize = 3.0;
+//   const maxSize = 8.0;
+//   const finalSize = Math.min(maxSize, Math.max(minSize, scaledSize));
+  
+//   return `${finalSize}rem`;
+// };
 
-
+// 🆕 차이 극대화 버전
+const calculateFontSizeFromMaxVolume = (baseSize, wordIndex) => {
+  const maxRms = wordMaxVolumes[wordIndex] || 0;
+  
+  // if (maxRms === 0) return baseSize;
+  
+  // const baseSizeNum = parseFloat(baseSize.replace('rem', ''));
+  
+  // // 🔑 핵심: 차이를 극대화하는 공식
+  // const amplified = maxRms / 2000; // RMS를 1000으로 나눔
+  // const finalSize = baseSizeNum + amplified; // 직접 더하기
+  
+  return `${Math.max(1.0, maxRms*0.0005)}rem`;
+};
 
 
 
@@ -1155,6 +1334,12 @@ useEffect(() => {
     console.log('🗣️ TTS 준비 완료 - 재생 시작');
     setShowReply(false);
     setIsTtsPlaying(true);
+
+    // 🆕 새로운 TTS 시작 시 단어별 최대 음량 초기화
+    setWordMaxVolumes({});
+
+
+
     requestTtsPlay();
   } else if (ttsStatus === 'tts_playing') {
     setIsTtsPlaying(true);
@@ -1165,18 +1350,15 @@ useEffect(() => {
     setShowReply(false);
     setIsTtsPlaying(false);
     setTtsVolume(0);
-    previousTtsVolumeRef.current = 0;
+
     
     // ✅ TTS 자막 관련만 초기화
     setTtsSubtitle(null);
     setCurrentTtsTime(0);
     setCurrentWordIndex(-1);
-    
-    // ❌ 이 부분들을 제거 - Mp3Recommender가 관리하도록 함
-    // setCurrentVideo(null);
-    // setCurrentReply('');
-    // setVideoVisible(false);
-    // setRecommendStatus('done');
+
+    // 🆕 단어별 최대 음량도 초기화 (다음 TTS를 위해)
+    setWordMaxVolumes({});
     
     // ✅ 새 질문을 위한 최소한의 초기화만
     setCanShowSpectrum(false);
