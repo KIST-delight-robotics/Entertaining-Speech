@@ -140,6 +140,53 @@ const [showUserQuestion, setShowUserQuestion] = useState(false);
 
 
 
+// 🔧 Realtime 관련 상태 제거하고 질문 확인 TTS 상태로 교체
+const [questionConfirmStatus, setQuestionConfirmStatus] = useState('idle'); // 'idle', 'playing', 'completed'
+const [pendingVideo, setPendingVideo] = useState(null);
+const [pendingReply, setPendingReply] = useState('');
+
+
+// 대기 상태 통합 관리
+const [pendingContent, setPendingContent] = useState(null); // { type: 'video'|'tts_only', videoPath?, reply }
+const [waitingForQuestionConfirm, setWaitingForQuestionConfirm] = useState(false);
+
+
+// 🔧 수정된 질문확인 상태 구독
+useEffect(() => {
+  const questionConfirmStatusListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/question_confirm_status',
+    messageType: 'std_msgs/String'
+  });
+  
+  questionConfirmStatusListener.subscribe((message) => {
+    const newStatus = message.data;
+    
+    if (questionConfirmStatus !== newStatus) {
+      console.log(`🎙️ 질문확인 TTS 상태 전환: ${questionConfirmStatus} → ${newStatus}`);
+      setQuestionConfirmStatus(newStatus);
+      
+      // 🆕 질문확인 완료 시 대기 중인 컨텐츠 처리
+      if (newStatus === 'completed') {
+        console.log('✅ 질문확인 TTS 완료');
+        
+        if (waitingForQuestionConfirm && pendingContent) {
+          console.log('🎬 대기 중인 컨텐츠 처리 시작');
+          processPendingContent(pendingContent);
+          
+          // 대기 상태 초기화
+          setPendingContent(null);
+          setWaitingForQuestionConfirm(false);
+        }
+      }
+    }
+  });
+  
+  return () => {
+    questionConfirmStatusListener.unsubscribe();
+  };
+}, [questionConfirmStatus, waitingForQuestionConfirm, pendingContent]);
+
 
  // 🆕 사용자 질문 표시용 구독 추가
  useEffect(() => {
@@ -176,8 +223,8 @@ const renderUserQuestionBubble = () => {
     return null;
   }
 
-  // TTS 재생 중이거나 비디오 재생 중일 때만 숨김
-  if (isTtsPlaying || videoVisible) {
+  // 🆕 대기 상태 추가 고려
+  if (isTtsPlaying || videoVisible || waitingForQuestionConfirm) {
     return null;
   }
 
@@ -677,125 +724,280 @@ useEffect(() => {
 
 
 
-
-
+// 🆕 대기 중인 비디오 재생 함수
+const playPendingVideo = () => {
+  if (!pendingVideo) return;
   
+  console.log('🎬 대기 비디오 재생:', pendingVideo);
+  setCurrentVideo(pendingVideo);
+  setCurrentReply(pendingReply);
+  setVideoVisible(true);
+  
+  // 대기 모드 종료
+  setIsWaitingAudioMode(false);
+  setIsMp3WaitingMode(false);
+  
+  if (recommendStatus === 'searching') {
+    setRecommendStatus('processing');
+  }
+  
+  // 대기 상태 초기화
+  setPendingVideo(null);
+  setPendingReply('');
+};
 
-// 🆕 Mp3Recommender에서 오는 mp4 정보 구독
+
+// // 🔧 Mp3Recommender 구독 수정
+// useEffect(() => {
+//   const mp4Listener = new ROSLIB.Topic({
+//       ros: ros,
+//       name: '/recommended_mp4',
+//       messageType: 'std_msgs/String'
+//   });
+
+//   mp4Listener.subscribe((message) => {
+//       console.log('🎬 MP4 메시지 수신:', message.data);
+      
+//       if (message.data && message.data.trim() !== "") {
+//           const parts = message.data.split(';');
+//           let fileName = '';
+//           let reply = '';
+          
+//           parts.forEach(part => {
+//               if (part.startsWith('file_name=')) {
+//                   fileName = part.substring('file_name='.length);
+//               } else if (part.startsWith('reply=')) {
+//                   reply = part.substring('reply='.length);
+//               }
+//           });
+
+//           // 🆕 no_video 케이스 명시적 처리
+//           if (fileName === 'no_video') {
+//             console.log('📢 TTS 전용 모드 - 비디오 없이 음성만 재생');
+
+//             // 🔑 핵심: 상태 설정 순서 보장 및 강화
+//             setVideoVisible(false);  // 🆕 명시적으로 비디오 숨김
+//             setCurrentVideo(null);   // 🆕 비디오 데이터 클리어
+
+//             setCurrentReply(reply);
+//             setShowReply(true); // 🔑 핵심: TTS 대기 상태 활성화
+        
+            
+//             // 대기 모드들 종료
+//             setIsWaitingAudioMode(false);
+//             setIsMp3WaitingMode(false);
+
+//             // 🆕 추가: 다른 상태들도 명시적 초기화
+//             setIsTtsPlaying(false);  // 🔑 중요
+      
+            
+//             if (recommendStatus === 'searching') {
+//               setRecommendStatus('processing');
+//             }
+
+
+//             console.log('✅ TTS 전용 모드 상태 설정 완료:', {
+//               videoVisible: false,
+//               showReply: true,
+//               currentReply: reply,
+//               isTtsPlaying: false
+//             });
+
+
+//             return; // 🔑 early return으로 비디오 처리 로직 건너뛰기
+//           }
+
+
+
+
+
+
+
+
+//           if (fileName && fileName !== 'no_video' && fileName !== 'unknown') {
+//             const videoPath = `/videos/${fileName}`;
+            
+//             console.log('🎬 비디오 수신:', videoPath);
+//             console.log('🎙️ 현재 질문 확인 TTS 상태:', questionConfirmStatus);
+
+//             // 🔧 TTS 재생 중이면 대기, 아니면 즉시 재생
+//             if (questionConfirmStatus === 'playing') {
+//               console.log('⏳ 질문 확인 TTS 재생 중 - 비디오 대기');
+//               setPendingVideo(videoPath);
+//               setPendingReply(reply);
+              
+//               if (recommendStatus === 'searching') {
+//                 setRecommendStatus('processing');
+//               }
+//             } else {
+//               console.log('🎬 즉시 비디오 재생 가능');
+//               playVideoImmediately(videoPath, reply);
+//             }
+//           }
+//       }
+//   });
+
+//   return () => {
+//       mp4Listener.unsubscribe();
+//   };
+// }, [questionConfirmStatus, recommendStatus]);
+
+
+
+// 🔧 수정된 Mp3Recommender 구독 부분
 useEffect(() => {
   const mp4Listener = new ROSLIB.Topic({
-      ros: ros,
-      name: '/recommended_mp4', // Mp3Recommender에서 publish하는 토픽
-      messageType: 'std_msgs/String'
+    ros: ros,
+    name: '/recommended_mp4',
+    messageType: 'std_msgs/String'
   });
 
   mp4Listener.subscribe((message) => {
-      console.log('🎬 MP4 추천 메시지 수신:', message.data);
+    console.log('🎬 MP4 메시지 수신:', message.data);
+    
+    if (message.data && message.data.trim() !== "") {
+      const parts = message.data.split(';');
+      let fileName = '';
+      let reply = '';
       
-      if (message.data && message.data.trim() !== "") {
-          // Mp3Recommender에서 "file_name=xxx.mp4;reply=yyy" 형식으로 전송
-          const parts = message.data.split(';');
-          let fileName = '';
-          let reply = '';
-          
-          parts.forEach(part => {
-              if (part.startsWith('file_name=')) {
-                  fileName = part.substring('file_name='.length);
-              } else if (part.startsWith('reply=')) {
-                  reply = part.substring('reply='.length);
-              }
-          });
-
-
-          console.log('🔍 파싱된 파일명:', fileName);
-          console.log('🔍 파싱된 응답:', reply);
-
-          // 🆕 no_video 처리 수정
-          if (fileName === 'no_video') {
-            console.log('🚫 비디오 없이 TTS만 재생');
-            setCurrentVideo(null);
-            setVideoVisible(false);
-            setCurrentReply(reply);
-            
-            // 🔥 핵심 수정: 대기 모드 종료하지 않음
-            // waiting image와 spectrum이 계속 표시되도록 유지
-            
-            // searching 상태만 해제
-            if (recommendStatus === 'searching') {
-                setRecommendStatus('processing');
-            }
-
-            // TTS 상태에 따른 처리
-            if (ttsStatus === 'tts_ready') {
-                console.log('🗣️ TTS 준비 완료 - 즉시 재생 (비디오 없음)');
-                // 🆕 대기 이미지 종료 후 TTS 시작
-            
-             
-              
-                setIsWaitingAudioMode(false);
-                setIsMp3WaitingMode(false);
-                requestTtsPlay();
-            } else {
-                console.log('🗣️ TTS 준비 대기 중... (비디오 없음)');
-                setShowReply(true);
-                // 🆕 대기 이미지는 TTS 준비될 때까지 유지
-            }
-            
-            return; // early return
+      parts.forEach(part => {
+        if (part.startsWith('file_name=')) {
+          fileName = part.substring('file_name='.length);
+        } else if (part.startsWith('reply=')) {
+          reply = part.substring('reply='.length);
         }
+      });
 
-
-
-
-
-
-
-          if (fileName && fileName !== 'unknown' && !fileName.includes('unknown')) {
-          
-              // mp4 파일 경로 생성 (Mp3Recommender의 mp4_dir 경로 사용)
-              const videoPath = `/videos/${fileName}`;
-              
-              console.log('🎬 비디오 표시:', videoPath);
-              console.log('🗣️ Reply 텍스트:', reply);
-              
-              setCurrentVideo(videoPath);
-              setCurrentReply(reply);
-              setVideoVisible(true);
-              
-              // 🆕 대기 모드 종료 (Mp3Recommender 비디오가 왔으므로)
-       
+      // 🆕 질문확인 상태 확인 후 처리 방식 결정
+      if (questionConfirmStatus === 'playing') {
+        console.log('⏳ 질문확인 TTS 재생 중 - 컨텐츠 대기');
         
-              setIsWaitingAudioMode(false);
-              setIsMp3WaitingMode(false);
-
-              // searching 상태도 해제
-              if (recommendStatus === 'searching') {
-                  setRecommendStatus('processing');
-              }
-              console.log('✅ 비디오 상태 업데이트 완료');
-          } else {
-              console.log('🎬 유효하지 않은 파일명 또는 unknown:', fileName);
-          }
+        if (fileName === 'no_video') {
+          // TTS 전용 모드도 대기 처리
+          setPendingContent({ 
+            type: 'tts_only', 
+            reply: reply 
+          });
+          setWaitingForQuestionConfirm(true);
+        } else if (fileName && fileName !== 'unknown') {
+          // 비디오 모드 대기 처리
+          setPendingContent({ 
+            type: 'video', 
+            videoPath: `/videos/${fileName}`, 
+            reply: reply 
+          });
+          setWaitingForQuestionConfirm(true);
+        }
+        
+        if (recommendStatus === 'searching') {
+          setRecommendStatus('processing');
+        }
       } else {
-          console.log('🎬 비디오 숨김');
-          setCurrentVideo(null);
-          setVideoVisible(false);
-          setCurrentReply('');
-
-          // 비디오가 숨김 상태가 되면 스펙트럼 시각화 시작
-          if (musicPlaying) {
-              console.log('🎵 비디오 숨김 완료 - 스펙트럼 시각화 시작');
-              setCanShowSpectrum(true);
-              setRecommendStatus('done');
-          }
+        // 질문확인이 완료된 상태면 즉시 처리
+        processPendingContent({ 
+          type: fileName === 'no_video' ? 'tts_only' : 'video',
+          videoPath: fileName !== 'no_video' ? `/videos/${fileName}` : null,
+          reply: reply 
+        });
       }
+    }
   });
 
   return () => {
-      console.log('🎬 MP4 리스너 해제');
-      mp4Listener.unsubscribe();
+    mp4Listener.unsubscribe();
   };
-}, [musicPlaying, recommendStatus]);
+}, [questionConfirmStatus, recommendStatus]);
+
+
+
+
+
+// 🆕 질문확인 완료 처리 함수
+const processPendingContent = (content) => {
+  if (!content) return;
+  
+  console.log('🎬 컨텐츠 처리:', content);
+  
+  if (content.type === 'video') {
+    // 비디오가 있는 경우: tts_ready까지 기다림
+    console.log('🎬 비디오 모드 - TTS 준비 대기');
+    setCurrentVideo(content.videoPath);
+    setCurrentReply(content.reply);
+    // 비디오는 tts_ready 상태에서 재생됨
+    
+  } else if (content.type === 'tts_only') {
+    // 비디오가 없는 경우: 즉시 TTS 대기 상태로
+    console.log('🗣️ TTS 전용 모드 - 즉시 TTS 대기');
+    setVideoVisible(false);
+    setCurrentVideo(null);
+    setCurrentReply(content.reply);
+    setShowReply(true);
+  }
+  
+  // 공통 처리
+  setIsWaitingAudioMode(false);
+  setIsMp3WaitingMode(false);
+  
+  if (recommendStatus === 'searching') {
+    setRecommendStatus('processing');
+  }
+};
+
+
+
+
+
+// 🆕 즉시 비디오 재생 함수 추가
+const playVideoImmediately = (videoPath, reply) => {
+  console.log('🎬 즉시 비디오 재생:', videoPath);
+  setCurrentVideo(videoPath);
+  setCurrentReply(reply);
+  setVideoVisible(true);
+  
+  setIsWaitingAudioMode(false);
+  setIsMp3WaitingMode(false);
+  
+  if (recommendStatus === 'searching') {
+    setRecommendStatus('processing');
+  }
+};
+
+
+
+
+
+ // 🔧 비디오 대기 표시 수정
+ const renderVideoPending = () => {
+  if (!pendingVideo || questionConfirmStatus !== 'playing') {
+    return null;
+  }
+
+  return (
+    <div style={{
+      position: 'absolute',
+      bottom: '20px',
+      right: '20px',
+      backgroundColor: 'rgba(0, 0, 0, 0.85)',
+      color: '#fff',
+      padding: '15px 20px',
+      borderRadius: '12px',
+      fontSize: '0.9rem',
+      zIndex: 50,
+      border: '2px solid #ff6b6b'
+    }}>
+      <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>
+        🎬 비디오 대기 중...
+      </div>
+      <div style={{ fontSize: '0.8rem', opacity: 0.8 }}>
+        질문 확인 TTS 재생 완료 대기 중
+      </div>
+    </div>
+  );
+};
+
+
+
+
 
 // 🆕 비디오 렌더링 함수
 const renderVideo = () => {
@@ -892,7 +1094,7 @@ const createSafeUrl = (path) => {
          onEnded={() => {
           console.log('🎬 비디오 재생 완료 - TTS 대기');
           setVideoVisible(false);
-          
+          setCurrentVideo(null); // ⭐ 핵심 추가
           // TTS가 준비된 경우 즉시 재생, 아니면 대기
           if (ttsStatus === 'tts_ready') {
             console.log('🗣️ TTS 준비 완료 - 즉시 재생');
@@ -958,7 +1160,7 @@ const requestTtsPlay = () => {
 
 // 🆕 TTS 대기 중 표시 함수
 const renderTtsWaiting = () => {
-  if (!showReply || !currentReply) {
+  if (!showReply || !currentReply|| isTtsPlaying) {
     return null;
   }
 
@@ -1284,24 +1486,43 @@ const renderVoiceSpectrum = () => {
 
 // TTS 상태 변화 감지 및 처리 (수정된 버전)
 useEffect(() => {
-  if (ttsStatus === 'tts_ready' && !videoVisible && showReply) {
-    console.log('🗣️ TTS 준비 완료 - 재생 시작');
 
-    // 🆕 TTS 시작 시 질문 말풍선 숨김
-    setShowUserQuestion(false);
-    setUserQuestionText('');
-
-
-    setIsWaitingAudioMode(false);
-    setIsMp3WaitingMode(false);
+  console.log('🔄 TTS 상태 변화 감지:', {
+    ttsStatus,
+    videoVisible,
+    showReply,
+    currentReply,
+    isTtsPlaying
+  });
 
 
+  if (ttsStatus === 'tts_ready') {
+    if (currentVideo && !videoVisible) {
+      // 비디오가 있는 경우: 비디오 재생 시작
+      console.log('🎬 TTS 준비 완료 - 비디오 재생 시작');
+      setVideoVisible(true);
+      setShowReply(false);
+      setIsWaitingAudioMode(false);
+      setIsMp3WaitingMode(false);
+      
+    } else if (!currentVideo && showReply) {
+      // 비디오가 없는 경우: TTS 재생 시작
+      console.log('🗣️ TTS 준비 완료 - TTS 전용 재생 시작');
+      
+      if (!currentReply || currentReply.trim() === '') {
+        console.warn('⚠️ currentReply가 비어있음 - TTS 재생 중단');
+        return;
+      }
 
-    setShowReply(false);
-    setIsTtsPlaying(true);
-    // 🆕 새로운 TTS 시작 시 단어별 최대 음량 초기화
-    setWordMaxVolumes({});
-    requestTtsPlay();
+      setShowUserQuestion(false);
+      setUserQuestionText('');
+      setIsWaitingAudioMode(false);
+      setIsMp3WaitingMode(false);
+      setShowReply(false);
+      setIsTtsPlaying(true);
+      setWordMaxVolumes({});
+      requestTtsPlay();
+    }
 
 
   } else if (ttsStatus === 'tts_playing') {
@@ -1328,6 +1549,14 @@ useEffect(() => {
 
     // 🆕 단어별 최대 음량도 초기화 (다음 TTS를 위해)
     setWordMaxVolumes({});
+
+
+    // 🆕 TTS 전용 모드 완료 후 상태 초기화
+    setCurrentReply('');  // 🔑 추가
+
+    // 🆕 다음 TTS 대기를 위한 플래그 초기화
+    setVideoVisible(false);  // 🔑 추가
+
     
     // ✅ 새 질문을 위한 최소한의 초기화만
     setCanShowSpectrum(false);
@@ -1352,7 +1581,7 @@ useEffect(() => {
     
     console.log('✅ TTS 완료 후 제한적 상태 초기화 - 비디오 상태 보존');
   }
-}, [ttsStatus, videoVisible, showReply]);
+},[ttsStatus, videoVisible, showReply, currentReply, currentVideo, isTtsPlaying]);
 
 
 
@@ -2120,7 +2349,7 @@ const getScreenTransform = () => {
 
 
    {/* 캔버스 표시 조건 수정 */}
-   {!videoVisible && !showReply  && !shouldShowVoiceSpectrum() && !isTtsPlaying && (
+   {!videoVisible && !showReply  && !shouldShowVoiceSpectrum() && !isTtsPlaying &&!waitingForQuestionConfirm && (
       <canvas 
         ref={canvasRef}
         style={{
@@ -2140,6 +2369,11 @@ const getScreenTransform = () => {
 
     {/* 🆕 음성 원형 스펙트럼 표시 추가 */}
     {renderVoiceSpectrum()}
+
+    {/* 🆕 비디오 대기 중 표시 */}
+    {renderVideoPending()}
+
+
 
     {/* 기존 이미지 표시 */}
     {videoVisible && renderVideo()}
