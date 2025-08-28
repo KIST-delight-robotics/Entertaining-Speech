@@ -1,7 +1,4 @@
 
-#동적자막(google-stt 이용) + 원본 텍스트 기반 자막 생성
-
-
 import os
 import requests
 import threading
