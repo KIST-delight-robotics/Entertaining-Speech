@@ -1205,6 +1205,16 @@ class UserQuestion(Node):
                 temp_wav = "/tmp/question_confirm_audio.wav"
                 sound.export(temp_wav, format="wav")
 
+
+                # 🆕 핵심 추가: 오디오 재생 직전에 사용자 질문 말풍선 발행
+                question_display_msg = String()
+                question_display_msg.data = question_text.strip()  # 순수 질문 텍스트
+                self.user_question_display_pub.publish(question_display_msg)
+                self.get_logger().info(f"🗨️ TTS 재생과 동시에 사용자 질문 말풍선 표시: {question_text.strip()}")
+
+
+
+
                 # 기존과 동일한 방식으로 스펙트럼과 재생 병렬 처리
                 self.waiting_publish_and_play(temp_wav)
                 # time.sleep(1)
@@ -1225,6 +1235,15 @@ class UserQuestion(Node):
         TTS 생성 실패 시 기본 대기음 재생 (백업용)
         """
         try:
+            # 🆕 기본 대기음 재생 시에도 말풍선 표시
+            if hasattr(self, 'last_published_text') and self.last_published_text:
+                question_text = self.extract_question_from_published_text(self.last_published_text)
+                question_display_msg = String()
+                question_display_msg.data = question_text.strip()
+                self.user_question_display_pub.publish(question_display_msg)
+                self.get_logger().info(f"🗨️ 기본 대기음과 함께 사용자 질문 말풍선 표시: {question_text.strip()}")
+
+
             effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting1"
             
             if not os.path.exists(effects_dir):
@@ -1311,11 +1330,11 @@ class UserQuestion(Node):
             self.last_published_text = msg.data
 
 
-            # 🆕 순수 질문 텍스트만 별도로 발행 (말풍선 표시용)
-            question_display_msg = String()
-            question_display_msg.data = text.strip()  # speaker ID 없이 순수 질문만
-            self.user_question_display_pub.publish(question_display_msg)
-            self.get_logger().info(f"🗨️ 사용자 질문 표시용 발행: {text.strip()}")
+            # # 🆕 순수 질문 텍스트만 별도로 발행 (말풍선 표시용)
+            # question_display_msg = String()
+            # question_display_msg.data = text.strip()  # speaker ID 없이 순수 질문만
+            # self.user_question_display_pub.publish(question_display_msg)
+            # self.get_logger().info(f"🗨️ 사용자 질문 표시용 발행: {text.strip()}")
 
 
 
