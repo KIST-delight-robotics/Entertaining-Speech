@@ -1,4 +1,6 @@
 
+#동적자막(google-stt 이용) + 원본 텍스트 기반 자막 생성
+
 
 import os
 import requests
@@ -95,6 +97,8 @@ class Mp3Player(Node):
         self.stt_restart_publisher = self.create_publisher(String, "stt_restart", 10)
 
 
+     
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 단어별 타임스탬프 추출 함수 추가
@@ -119,6 +123,17 @@ class Mp3Player(Node):
             with io.open(audio_path, "rb") as audio_file:
                 content = audio_file.read()
             
+            # audio = speech.RecognitionAudio(content=content)
+            # config = speech.RecognitionConfig(
+            #     encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            #     sample_rate_hertz=16000,
+            #     language_code="ko-KR",
+            #     enable_word_time_offsets=True,
+            #     enable_word_confidence=True,
+            #     model="default",
+            # )
+
+
             audio = speech.RecognitionAudio(content=content)
             config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
@@ -126,8 +141,12 @@ class Mp3Player(Node):
                 language_code="ko-KR",
                 enable_word_time_offsets=True,
                 enable_word_confidence=True,
-                model="default",
+                model="latest_short",  # 🔑 더 빠른 모델 사용
+                use_enhanced=False,    # 🔑 향상된 모델 비활성화로 속도 증가
+                # audio_channel_count=1, # 🔑 명시적 채널 수 설정
             )
+
+            
             
             self.get_logger().info("🗣️ Google STT API 요청 시작...")
             # 🆕 실제 STT API 호출 시간 측정
@@ -472,7 +491,8 @@ class Mp3Player(Node):
                 "style": 0.25,
                 "speed": 0.9
             },
-            "apply_text_normalization": "on"
+            "apply_text_normalization": "off",
+            "output_format": "mp3_22050_32"
         }
 
         try:
