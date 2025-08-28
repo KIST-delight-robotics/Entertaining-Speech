@@ -1,5 +1,6 @@
 
 
+
 //동적자막(google-stt 이용)
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -1055,6 +1056,7 @@ const shouldShowVoiceSpectrum = () => {
          !isMp3WaitingMode && 
          !videoVisible &&
          !isTtsPlaying &&
+         !showUserQuestion && 
          isVoiceActive;
 };
 
