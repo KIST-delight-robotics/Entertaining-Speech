@@ -1,1247 +1,836 @@
 
-import os
-import requests
-import threading
+
+import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import openai
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-from pydub import AudioSegment
-from pydub.playback import play
-import asyncio
+from sentence_transformers import SentenceTransformer
+from numpy.linalg import norm
+from dotenv import load_dotenv
 import numpy as np
-import json
-import time
-import websockets
-import random  
+from openai import AsyncOpenAI
 
-import wave
-import pyaudio
-import csv
-from google.cloud import speech
-import io
-import os
 import re
 
-
-class Mp3Player(Node):
+class Mp3Recommender(Node):
     def __init__(self):
-        super().__init__("Mp3Player")
-
-        # 파일 경로
-        self.file_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus"
-        self.reply_path = "/home/nvidia/ros2_ws/src/pkg_spk/pkg_spk/reply.mp3"
-        self.api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-
-
-        # # 구독: 추천된 MP3
-        # self.subscription_ = self.create_subscription(
-        #     String,
-        #     "recommended_mp3",
-        #     self.mp3_callback,
-        #     10
-        # )
-
-
-        # 퍼블리시: 음악 재생 상태
-        self.publisher_ = self.create_publisher(String, "music_status", 10)
-        self.amplitude_publisher_ = self.create_publisher(String, "audio_amplitude", 10)
-        self.is_playing = False  # 재생 중 여부 플래그
-
-
-
-        self.current_image_path = None
-        self.image_subscription_ = self.create_subscription(
-            String, "recommended_image", self.image_callback, 10
-        )
-        self.image_publisher_ = self.create_publisher(String, "current_music_image", 10)
-        # 기존 publisher들 다음에 추가
-        self.mp3_waiting_spectrum_pub = self.create_publisher(String, "/mp3_waiting_spectrum", 10)
-
-
-        # 🆕 TTS 요청 구독 추가
-        self.tts_subscription = self.create_subscription(
-            String,
-            "tts_request",
-            self.tts_request_callback,
-            10
-        )
+        super().__init__('Mp3Recommender')
         
-        # 🆕 TTS 완료 상태 퍼블리시 추가
-        self.tts_status_publisher = self.create_publisher(String, "tts_status", 10)
+        # 로그 파일
+        self.log_file_path = "/home/nvidia/ros2_ws/_logs/Mp3Recommender_log.txt"
+        self.save_log("✅ Mp3Recommender Node Started")
 
-        # TTS 재생 요청 구독
-        self.tts_play_subscription = self.create_subscription(
-            String,
-            "tts_play_request",
-            self.tts_play_request_callback,
-            10
-        )
+        # 환경 변수
+        load_dotenv("/home/nvidia/ros2_ws/src/.env")
+        openai.api_key = os.getenv("OPENAI_API_KEY")
+        self.assistant_id = os.getenv("ASSISTANT_ID")
+
+        self.sync_client  = openai.OpenAI(api_key=openai.api_key)
+        self.async_client = AsyncOpenAI(api_key=openai.api_key)
+
+        self.last_question: Optional[str] = None
+        self.last_need_pdf: bool = False
+
+         # PDF 파일 경로
+        self.pdf_paths = [
+            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/KIST_intro.pdf",
+            # 새로 넣고 싶은 PDF가 생길 때마다 아래 한 줄씩만 추가
+            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/250520_기관 소개자료 PPT.pdf"
+        ]
+        self.vector_store_id = None   # Vector Store ID 저장용
+
+        # ─────── PDF 벡터 스토어 초기화 ───────
+        self.init_pdf_vector_store()
 
 
-        # 🆕 TTS 전용 스펙트럼 퍼블리셔 추가
-        self.tts_spectrum_publisher = self.create_publisher(String, "/tts_spectrum", 10)
+        # SBERT 모델
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.sbert_model = SentenceTransformer("BAAI/bge-m3", device=device)
 
-
-
-        # 🆕 TTS 자막 데이터 퍼블리셔 추가
-        self.tts_subtitle_publisher = self.create_publisher(String, "/tts_subtitle", 10)
+        # # mp3 인덱스/메타
+        # self.mp3_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus.db"
+        # self.mp3_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp3_new_plus.bin"
+        # self.mp3_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus"
         
-        # Google Cloud 인증 설정
-        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/home/nvidia/ros2_ws/my-service-account.json'
 
-        # 🆕 STT 재시작 신호 퍼블리셔 추가 (music_done 대신)
-        self.stt_restart_publisher = self.create_publisher(String, "stt_restart", 10)
-
-
-     
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 단어별 타임스탬프 추출 함수 추가
-# ──────────────────────────────────────────────────────────────────────────────
+        # mp3 인덱스/메타
+        self.mp4_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp4_database_mp4.db"
+        self.mp4_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp4.bin"
+        self.mp4_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp4_database(특수문자제외ver2)"
+        
 
 
 
-    def extract_word_timestamps(self, audio_path, original_text):
-        """
-        Google Cloud Speech-to-Text API를 사용하여 단어별 타임스탬프 추출
-        """
+        # # 이미지 인덱스/메타
+        # self.image_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus.db"
+        # self.image_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_image_plus.bin"
+        # self.image_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus"
 
-        # 🆕 동적자막 생성 시간 측정
-        stt_start_time = time.time()
-        self.get_logger().info("⏳ Google STT API를 통한 동적자막 생성 시작")
-
-
-
+        # 인덱스와 메타데이터 로드
         try:
-            client = speech.SpeechClient()
-            
-            with io.open(audio_path, "rb") as audio_file:
-                content = audio_file.read()
-            
-            # audio = speech.RecognitionAudio(content=content)
-            # config = speech.RecognitionConfig(
-            #     encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            #     sample_rate_hertz=16000,
-            #     language_code="ko-KR",
-            #     enable_word_time_offsets=True,
-            #     enable_word_confidence=True,
-            #     model="default",
-            # )
+            self.mp4_faiss_index = self.load_faiss_index_mp4()
+            self.mp4_metadata = self.load_metadata_mp4()
+            # self.image_faiss_index = self.load_faiss_index_image()
+            # self.image_metadata = self.load_metadata_image()
+        except Exception as e:
+            self.get_logger().error(f"Failed to load indices or metadata: {e}")
+            raise
+
+        # Thread 관리를 위한 딕셔너리
+        self.thread_map = {}
+        
+        # 대화 히스토리
+        self.conversation_history = []
+        
+        # FAISS 인덱스와 메타데이터 별칭 (기존 코드 호환성)
+        self.faiss_index = self.mp4_faiss_index
+        self.metadata = self.mp4_metadata
+
+        # ROS2 pub/sub
+        # self.publisher_ = self.create_publisher(String, 'recommended_mp3', 10)
+        self.publisher_ = self.create_publisher(String, 'recommended_mp4', 10)
+        # 🆕 TTS 요청용 퍼블리시 추가
+        self.tts_publisher = self.create_publisher(String, 'tts_request', 10)
+        # self.image_publisher_ = self.create_publisher(String, 'recommended_image', 10)
+        self.subscription_ = self.create_subscription(String, 'user_question', self.question_callback, 10)
+        self.status_publisher = self.create_publisher(String, 'mp4_recommend_status', 10)
+        self.effect_stop_publisher_ = self.create_publisher(String, 'effect_stop', 10)
+        self.get_logger().info("mp4Recommender node has started.")
 
 
-            audio = speech.RecognitionAudio(content=content)
-            config = speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-                sample_rate_hertz=16000,
-                language_code="ko-KR",
-                enable_word_time_offsets=True,
-                enable_word_confidence=True,
-                model="latest_short",  # 🔑 더 빠른 모델 사용
-                use_enhanced=False,    # 🔑 향상된 모델 비활성화로 속도 증가
-                # audio_channel_count=1, # 🔑 명시적 채널 수 설정
+
+
+        # 🆕 유사도 임계값 설정
+        self.SIMILARITY_THRESHOLD = 0.7  # 코사인 유사도 임계값 (0~1, 높을수록 엄격)
+        self.MIN_CANDIDATES_FOR_VIDEO = 1  # 비디오 재생을 위한 최소 후보 수
+
+        
+
+
+
+
+    def save_log(self, message: str):
+        """로그를 파일에 저장"""
+        try:
+            log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
+            
+            # 로그 디렉토리 생성
+            log_dir = os.path.dirname(self.log_file_path)
+            os.makedirs(log_dir, exist_ok=True)
+            
+            with open(self.log_file_path, "a", encoding="utf-8") as log_file:
+                log_file.write(log_message)
+        except Exception as e:
+            self.get_logger().error(f"Failed to save log: {e}")
+
+    def init_pdf_vector_store(self):
+        """
+        1. Vector Store 생성
+        2. PDF 파일 색인(upload_and_poll)
+        3. Assistant에 vector_store 연결
+        """
+        try:
+            # 1) Vector Store 생성
+            vs = self.sync_client.vector_stores.create(name="KIST_intro")
+            self.vector_store_id = vs.id
+            self.get_logger().info(f"🗄️ Vector Store created: {vs.id}")
+
+            
+            # 여러 개 파일 한꺼번에 업로드
+            file_objs = [open(p, "rb") for p in self.pdf_paths]
+            batch = self.sync_client.vector_stores.file_batches.upload_and_poll(
+                vector_store_id=vs.id, files=file_objs
             )
+            self.get_logger().info(f"📑 upload_and_poll → {batch.status} {batch.file_counts}")
+
+
+            # # 2) 한 파일씩 업로드 후 poll
+            # for pdf in self.pdf_paths:
+            #     with open(pdf, "rb") as f:
+            #         self.get_logger().info(f"⬆️ '{os.path.basename(pdf)}' 업로드 시작")
+            #         batch = self.sync_client.vector_stores.file_batches.upload_and_poll(
+            #             vector_store_id=vs.id,
+            #             files=[f],          # 리스트지만 한 파일만
+            #             poll_interval=2.0,  # 초
+            #             timeout=300         # 5 분까지 기다림
+            #         )
+            #         self.get_logger().info(f"✅ {pdf} → {batch.status}")
+
+
+            # 3) Assistant에 file_search + vector_store 연결
+            self.sync_client.beta.assistants.update(
+                assistant_id=self.assistant_id,
+                tools=[{"type": "file_search"}],
+                tool_resources={"file_search": {"vector_store_ids": [vs.id]}},
+                instructions=(
+                    "You are Dangdang, a snarky robot dog guide at KIST. "
+                    "When answering location questions, ALWAYS use file_search "
+                    "to consult the campus PDF before replying."
+                ),
+            )
+            self.get_logger().info("🔗 Assistant ↔ Vector Store 연결 완료")
+
+        except Exception as e:
+            self.get_logger().error(f"Vector Store 초기화 실패: {e}")
 
             
-            
-            self.get_logger().info("🗣️ Google STT API 요청 시작...")
-            # 🆕 실제 STT API 호출 시간 측정
-            stt_api_start = time.time()
-
-            response = client.recognize(config=config, audio=audio)
-
-            stt_api_end = time.time()
-            stt_api_duration = stt_api_end - stt_api_start
-            self.get_logger().info(f"✅ Google STT API 응답 완료, API 호출시간: {stt_api_duration:.2f}초")
-
 
             
-            word_timestamps = []
+    def load_metadata_mp4(self) -> Dict[int, str]:
+        start = time.time()
+        try:
+            conn = sqlite3.connect(self.mp4_db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT id, file_name FROM mp4_files")
+            meta = {row[0]: row[1] for row in cur.fetchall()}
+            conn.close()
+            self.save_log(f"mp4 metadata loaded in {time.time()-start:.4f}s")
+            return meta
+        except sqlite3.Error as e:
+            self.get_logger().error(f"Database error loading mp4 metadata: {e}")
+            raise
+        except Exception as e:
+            self.get_logger().error(f"Error loading mp4 metadata: {e}")
+            raise
+
+ 
+
+    def load_faiss_index_mp4(self):
+        try:
+            if os.path.exists(self.mp4_faiss_index_file):
+                idx = faiss.read_index(self.mp4_faiss_index_file)
+                if isinstance(idx, faiss.IndexIDMap):
+                    self.save_log("mp4 FAISS index loaded successfully")
+                    return idx
+            raise FileNotFoundError(f"mp4 FAISS index not found at {self.mp4_faiss_index_file}")
+        except Exception as e:
+            self.get_logger().error(f"Error loading mp4 FAISS index: {e}")
+            raise
+
+ 
+    def get_sbert_embedding(self, text: str) -> np.ndarray:
+        try:
+            emb = self.sbert_model.encode(text).astype("float32")
+            norm_val = norm(emb)
+            if norm_val == 0:
+                self.get_logger().warning("Zero norm embedding detected")
+                return emb
+            return emb / norm_val
+        except Exception as e:
+            self.get_logger().error(f"Error generating embedding: {e}")
+            raise
+
+    # def search_candidates(self, query: str, k: int = 5) -> List[Dict]:
+    #     try:
+    #         emb = self.get_sbert_embedding(query).reshape(1, -1)
+    #         D, I = self.mp4_faiss_index.search(emb, k)
+    #         cands = []
+    #         for dist, idx in zip(D[0], I[0]):
+    #             if idx < 0:
+    #                 continue
+    #             fn = self.mp4_metadata.get(idx)
+    #             if not fn:
+    #                 continue
+    #             path = os.path.join(self.mp4_dir, fn + ".mp4")
+    #             cands.append({"file_name": fn, "path": path, "score": float(dist), "index": idx})
+    #         return cands
+    #     except Exception as e:
+    #         self.get_logger().error(f"Error searching candidates: {e}")
+    #         return []
+
+
+
+
+    def search_candidates(self, query: str, k: int = 5) -> List[Dict]:
+        try:
+            emb = self.get_sbert_embedding(query).reshape(1, -1)
+            D, I = self.mp4_faiss_index.search(emb, k)
+            cands = []
             
-            for result in response.results:
-                alternative = result.alternatives[0]
-                stt_text = alternative.transcript
-                self.get_logger().info(f"🗣️ STT 인식 결과: '{stt_text}'")
-                self.get_logger().info(f"🔍 원본 텍스트: '{original_text}'")
+            for dist, idx in zip(D[0], I[0]):
+                if idx < 0:
+                    continue
+                fn = self.mp4_metadata.get(idx)
+                if not fn:
+                    continue
+                path = os.path.join(self.mp4_dir, fn + ".mp4")
                 
-                for word_info in alternative.words:
-                    word = word_info.word
-                    start_time = word_info.start_time.total_seconds()
-                    end_time = word_info.end_time.total_seconds()
-                    confidence = word_info.confidence
-                    
-                    word_timestamps.append({
-                        "word": word,
-                        "start": round(start_time, 3),
-                        "end": round(end_time, 3),
-                        "confidence": round(confidence, 3)
-                    })
-
-            # 🆕 동적자막 생성 완료 시간 계산
-            stt_end_time = time.time()
-            stt_total_duration = stt_end_time - stt_start_time
+                # 🆕 유사도 점수 계산 (거리를 유사도로 변환)
+                similarity_score = 1 / (1 + dist)  # 거리를 유사도로 변환
+                
+                cands.append({
+                    "file_name": fn, 
+                    "path": path, 
+                    "score": float(dist), 
+                    "similarity": float(similarity_score),  # 🆕 추가
+                    "index": idx
+                })
             
-            # 🆕 시간 정보를 클래스 변수에 저장 (전체 시간 분석용)
-            self._last_stt_duration = stt_total_duration
+            # 🆕 임계값 이상인 후보만 필터링
+            filtered_cands = [c for c in cands if c["similarity"] >= self.SIMILARITY_THRESHOLD]
             
-            self.get_logger().info(f"🎯 STT 타임스탬프 추출 완료: {len(word_timestamps)}개 단어")
-            self.get_logger().info(f"✅ 동적자막 생성 총 소요시간: {stt_total_duration:.2f}초")
-            self.get_logger().info(f"   - Google STT API 시간: {stt_api_duration:.2f}초")
-            self.get_logger().info(f"   - 전처리/후처리 시간: {stt_total_duration - stt_api_duration:.2f}초")
-
-
+            self.get_logger().info(f"🎯 검색 결과: 전체 {len(cands)}개 → 임계값({self.SIMILARITY_THRESHOLD}) 이상 {len(filtered_cands)}개")
             
-            self.get_logger().info(f"🎯 STT 타임스탬프 추출 완료: {len(word_timestamps)}개 단어")
-            return word_timestamps
+            return filtered_cands
             
         except Exception as e:
-            stt_end_time = time.time()
-            stt_total_duration = stt_end_time - stt_start_time
-
-
-            self.get_logger().error(f"❌ STT 타임스탬프 추출 실패: {e}")
-            self.get_logger().error(f"❌ 실패까지 소요시간: {stt_total_duration:.2f}초")
-        
-            # 실패시에도 시간 정보 저장
-            self._last_stt_duration = stt_total_duration
-            
+            self.get_logger().error(f"Error searching candidates: {e}")
             return []
 
 
 
 
 
-
-
-    
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 대기효과음3 재생 및 스펙트럼 퍼블리시
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-
-    def get_random_waiting_file(self):
+    def question_callback(self, msg: String):
         """
-        waiting_3 디렉토리에서 랜덤한 MP3 파일 경로 반환
+        ROS 콜백: user_question 토픽 수신 시 처리
         """
-        waiting_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting3"
-        
         try:
-            if not os.path.exists(waiting_dir):
-                self.get_logger().warning(f"Waiting 디렉토리가 존재하지 않습니다: {waiting_dir}")
-                return None
+            # 1. 질문 수신 시 즉시 "searching" 상태 퍼블리시
+            status_msg = String()
+            status_msg.data = "searching"
+            self.status_publisher.publish(status_msg)  # <-- 추가
+
+            if "|" not in msg.data:
+                self.get_logger().error("Invalid message format: missing separator")
+                return
                 
-            # mp3 파일만 필터링
-            mp3_files = [f for f in os.listdir(waiting_dir) if f.lower().endswith('.mp3')]
+            local_thread_id, user_question = msg.data.split("|", 1)
+
+            # OpenAI thread 생성 또는 재사용
+            if local_thread_id not in self.thread_map:
+                try:
+                    client = openai.OpenAI(api_key=openai.api_key)
+                    resp = client.beta.threads.create()
+                    self.thread_map[local_thread_id] = resp.id
+                    self.get_logger().info(f"📂 OpenAI thread 생성: {resp.id} (로컬 {local_thread_id})")
+                except Exception as e:
+                    self.get_logger().error(f"Failed to create OpenAI thread: {e}")
+                    return
+
+            openai_thread_id = self.thread_map[local_thread_id]
+            asyncio.create_task(self.process_question(openai_thread_id, user_question.strip()))
+            self.get_logger().info(f"User question received: {local_thread_id} → using OpenAI thread {openai_thread_id}")
             
-            if not mp3_files:
-                self.get_logger().warning(f"Waiting 디렉토리에 MP3 파일이 없습니다: {waiting_dir}")
-                return None
-                
-            # 랜덤 선택
-            selected_file = random.choice(mp3_files)
-            full_path = os.path.join(waiting_dir, selected_file)
-            
-            self.get_logger().info(f"🎲 랜덤 waiting 파일 선택: {selected_file}")
-            self.save_log(f"🎲 랜덤 waiting 파일 선택: {selected_file}")
-            
-            return full_path
-            
+        except ValueError as e:
+            self.get_logger().error(f"Message parsing error: {e}")
         except Exception as e:
-            error_msg = f"❌ Waiting 파일 선택 중 오류: {e}"
-            self.get_logger().error(error_msg)
-            self.save_log(error_msg)
-            return None
+            self.get_logger().error(f"Error in question callback: {e}")
 
-
-
-
-    def play_waiting_with_spectrum(self, file_path):
-        """waiting 파일을 스펙트럼 시각화와 함께 재생 (UserQuestion.py와 동일한 방식)"""
+    async def process_question(self, thread_id: str, user_question: str):
+        """
+        실제 질의 처리 & GPT 호출 & 추천 결과 Publish + TTS 요청
+        """
         try:
-            # pydub으로 MP3 로드 및 정규화 (UserQuestion.py와 동일)
-            sound = AudioSegment.from_file(file_path, format="mp3")
-            
-            # # 정규화 (UserQuestion.py와 동일)
-            # target_dBFS = -14.0
-            # change_in_dBFS = target_dBFS - sound.dBFS
-            # sound = sound.apply_gain(change_in_dBFS)
-            
-            # 임시 WAV로 변환
-            temp_wav = "/tmp/mp3_waiting_audio.wav"
-            sound.export(temp_wav, format="wav")
-
-            self.get_logger().info(f"🎵 Mp3Player Waiting 파일 스펙트럼 재생: {file_path}")
-            self.save_log(f"🎵 Mp3Player Waiting 파일 스펙트럼 재생: {file_path}")
-
-            # UserQuestion.py와 동일한 방식으로 스펙트럼과 재생 병렬 처리
-            self.mp3_waiting_publish_and_play(temp_wav)
-
-            time.sleep(0.5)
-
-            self.get_logger().info("🎵 Mp3Player Waiting 스펙트럼 재생 완료")
-            self.save_log("🎵 Mp3Player Waiting 스펙트럼 재생 완료")
-
-        except Exception as e:
-            error_msg = f"❌ Mp3Player Waiting 스펙트럼 재생 실패: {e}"
-            self.get_logger().error(error_msg)
-            self.save_log(error_msg)
-
-
-
-
-    def mp3_waiting_publish_and_play(self, wav_path):
-        """Mp3Player.py 전용 waiting 스펙트럼 시각화 (UserQuestion.py 방식과 동일)"""
-
-        
-        wf = wave.open(wav_path, 'rb')
-        chunk_size = 2024
-        
-
-        def publish_spectrum():
-            data = wf.readframes(chunk_size)
-            while data:
-
-                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-                if wf.getnchannels() == 2:
-                    samples = samples.reshape((-1, 2)).mean(axis=1)
-                fft = np.fft.fft(samples)
-                spectrum = np.abs(fft[:len(fft)//2])
-                #spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-    
-
-
-
-
-                msg = String()
-                msg.data = json.dumps({"spectrum": spectrum.tolist()})
-                self.mp3_waiting_spectrum_pub.publish(msg)  # 별도 토픽 사용
-                data = wf.readframes(chunk_size)
-                time.sleep(chunk_size / wf.getframerate())
-
-
-        spectrum_thread = threading.Thread(target=publish_spectrum)
-        spectrum_thread.start()
-
-        # 시스템 명령어로 재생 (기존 방식과 동일)
-        os.system(f"aplay {wav_path}")
-        spectrum_thread.join()
-
-
-        
-
-
-
-
- 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 음악 재생 및 이미지 퍼블리시
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-    def image_callback(self, msg):
-        """이미지 파일명 수신 및 저장"""
-        if msg.data and msg.data.strip():
-            self.current_image_path = f"/images/{msg.data}"  # 웹 경로로 변환
-            # 즉시 퍼블리시 (사전 로딩 효과)
-            img_msg = String()
-            img_msg.data = self.current_image_path
-            self.image_publisher_.publish(img_msg)
-            self.get_logger().info(f"이미지 수신: {self.current_image_path}")
-        else:
-            self.current_image_path = None
-            self.get_logger().info("이미지 수신: 없음")
-
-
-
-
-    def match_target_amplitude(self, sound, target_dBFS):
-        """
-        주어진 오디오를 타깃 dBFS로 정규화
-        """
-        change_in_dBFS = target_dBFS - sound.dBFS
-        return sound.apply_gain(change_in_dBFS)
-
-
-
-
-    def play_mp3(self, file_path):
-        try:
-            sound = AudioSegment.from_file(file_path, format="mp3")
-            sound = self.match_target_amplitude(sound, -14.0)
-            
-            # 임시 WAV로 변환 후 저장
-            temp_wav = "/tmp/temp_audio.wav"
-            sound.export(temp_wav, format="wav")
-
-            # 스펙트럼과 재생 병렬로 실행
-            playback_thread = threading.Thread(target=self.publish_and_play, args=(temp_wav,))
-            playback_thread.start()
-            playback_thread.join()
-
-        except Exception as e:
-            self.get_logger().error(f"❌ MP3 재생 실패: {file_path} → {e}")
-            self.save_log(f"❌ MP3 재생 실패: {file_path} → {e}")
-
-
-
-    def publish_and_play(self, wav_path):
-        wf = wave.open(wav_path, 'rb')
-        chunk_size = 2024
-
-
-        # 2) CSV 파일 한 번 열어두기 (append 모드)
-        csv_file = open('spectrum.csv', 'a', newline='')
-        csv_writer = csv.writer(csv_file)
-
-
-
-        def publish_spectrum():
-            data = wf.readframes(chunk_size)
-            while data:
-                samples = np.frombuffer(data, dtype=np.int16)
-                if wf.getnchannels() == 2:
-                    samples = samples.reshape((-1, 2)).mean(axis=1)
-                fft = np.fft.fft(samples)
-                spectrum = np.abs(fft[:len(fft)//2])
-                #spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-
-
-                #────────────────────────────────────────────────
-                # # 7) CSV에 한 열로 실시간 저장
-                # #    - spectrum 값들
-                # for mag in spectrum:
-                #     csv_writer.writerow([mag])
-                # #    - 이번 청크의 평균·최소·최대 (한 번 저장할 때 마지막에)
-                # mean_val = spectrum.mean()
-                # min_val  = spectrum.min()
-                # max_val  = spectrum.max()
-                # csv_writer.writerow([f"최소값: {min_val:.6f}"])
-                # csv_writer.writerow([f"최대값: {max_val:.6f}"])
-                # csv_writer.writerow([f"평균값: {mean_val:.6f}"])
-
-                # #    - 파일에 바로 반영
-                # csv_file.flush()
-
-              
-                msg = String()
-                msg.data = json.dumps({"spectrum": spectrum.tolist()})
-                self.amplitude_publisher_.publish(msg)
-                data = wf.readframes(chunk_size)
-                time.sleep(chunk_size / wf.getframerate())
-
-        spectrum_thread = threading.Thread(target=publish_spectrum)
-        spectrum_thread.start()
-
-        # 시스템 명령어 aplay로 재생 (즉각적인 출력)
-        os.system(f"aplay {wav_path}")  # 🔥실제 출력장치로 변경(카드2)
-        spectrum_thread.join()
-        csv_file.close()
-        wf.close()
-
-
-     
-
-# ──────────────────────────────────────────────────────────────────────────────
-# TTS 재생 및 스펙트럼 퍼블리시
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-
-    def text2speech(self, text):
-        """
-        ElevenLabs TTS 호출 → reply.mp3 저장 → 원본 텍스트 기반 자막 생성
-        """
-
-        # 🆕 전체 소요시간 측정 시작
-        total_start_time = time.time()
-        self.get_logger().info("⏳ TTS 전체 프로세스 시작")
-        
-
-
-        api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
-        headers = {
-            "xi-api-key": api_key,
-            "Content-Type": "application/json; charset=utf-8",  # UTF-8 명시
-            "Accept": "audio/mpeg"
-        }
-
-        # 🆕 텍스트 전처리
-        cleaned_text = text.strip()
-        cleaned_text = ' '.join(cleaned_text.split())
-        
-        # 🆕 디버깅 로그
-        self.get_logger().info(f"🗣️ TTS 원본 텍스트: '{cleaned_text}'")
-
-        data = {
-            "text": cleaned_text,
-            "model_id": "eleven_multilingual_v2",
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
-                "style": 0.25,
-                "speed": 0.9
-            },
-            "apply_text_normalization": "off",
-            "output_format": "mp3_22050_32"
-        }
-
-        try:
-
-            # 🆕 TTS API 호출 시간 측정
-            tts_api_start = time.time()
-            self.get_logger().info("⏳ ElevenLabs TTS API 호출 시작")
-
-
-
-            response = requests.post(
-                url,
-                headers=headers,
-                data=json.dumps(data, ensure_ascii=False).encode('utf-8')
-            )
-
-            tts_api_end = time.time()
-            tts_api_duration = tts_api_end - tts_api_start
-            self.get_logger().info(f"✅ TTS API 호출 완료, 소요시간: {tts_api_duration:.2f}초")
-
-
-
-            
-            if response.status_code == 200:
-                with open(self.reply_path, "wb") as f:
-                    f.write(response.content)
-                
-                file_size = os.path.getsize(self.reply_path)
-                self.get_logger().info(f"🟢 음성 변환 성공 → {self.reply_path} ({file_size} bytes)")
-
-                # 🆕 WAV 변환 시간 측정
-                wav_convert_start = time.time()
-                self.get_logger().info("⏳ WAV 변환 시작")
-
-
-                
-                # 🆕 WAV 변환 (STT API용)
-                sound = AudioSegment.from_file(self.reply_path, format="mp3")
-                wav_path = "/tmp/tts_for_stt.wav"
-                sound = sound.set_frame_rate(16000).set_channels(1)
-                sound.export(wav_path, format="wav")
-                
-                wav_convert_end = time.time()
-                wav_convert_duration = wav_convert_end - wav_convert_start
-                self.get_logger().info(f"✅ WAV 변환 완료, 소요시간: {wav_convert_duration:.2f}초")
-
-                
-                # 🆕 STT 타임스탬프 추출
-                stt_timestamps = self.extract_word_timestamps(wav_path, cleaned_text)
-
-                # 🆕 자막 처리 시간 측정
-                subtitle_process_start = time.time()
-                self.get_logger().info("⏳ 자막 정렬 및 처리 시작")
-
-                
-                # 🔑 핵심: 원본 텍스트로 덮어쓰기
-                corrected_timestamps = self.merge_original_with_stt_timestamps(
-                    original_text=cleaned_text,
-                    stt_timestamps=stt_timestamps
-                )
-
-                subtitle_process_end = time.time()
-                subtitle_process_duration = subtitle_process_end - subtitle_process_start
-                self.get_logger().info(f"✅ 자막 정렬 및 처리 완료, 소요시간: {subtitle_process_duration:.2f}초")
-                
-                # 🆕 자막 퍼블리시 시간 측정
-                publish_start = time.time()
-
-
-                
-                # 🆕 수정된 자막 데이터 퍼블리시
-                if corrected_timestamps:
-                    subtitle_data = {
-                        "original_text": cleaned_text,
-                        "words": corrected_timestamps,
-                        "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
-                    }
-                    
-                    msg = String()
-                    msg.data = json.dumps(subtitle_data, ensure_ascii=False)
-                    self.tts_subtitle_publisher.publish(msg)
-                    self.get_logger().info(f"📝 수정된 자막 데이터 퍼블리시: {len(corrected_timestamps)}개 단어")
-                else:
-                    self.get_logger().warning("⚠️ 자막 수정 실패 - 기본 자막 사용")
-                    self._publish_fallback_subtitle(cleaned_text)
-                publish_end = time.time()
-                publish_duration = publish_end - publish_start
-                self.get_logger().info(f"✅ 자막 퍼블리시 완료, 소요시간: {publish_duration:.2f}초")
-                
-                # 🆕 전체 소요시간 계산 및 로그
-                total_end_time = time.time()
-                total_duration = total_end_time - total_start_time
-                
-                self.get_logger().info("="*60)
-                self.get_logger().info("📊 TTS 전체 프로세스 시간 분석")
-                self.get_logger().info(f"  🎤 TTS API 호출:        {tts_api_duration:.2f}초 ({tts_api_duration/total_duration*100:.1f}%)")
-                self.get_logger().info(f"  🔄 WAV 변환:            {wav_convert_duration:.2f}초 ({wav_convert_duration/total_duration*100:.1f}%)")
-                self.get_logger().info(f"  📝 동적자막 생성:        {getattr(self, '_last_stt_duration', 0):.2f}초 ({getattr(self, '_last_stt_duration', 0)/total_duration*100:.1f}%)")
-                self.get_logger().info(f"  ⚙️ 자막 처리:           {subtitle_process_duration:.2f}초 ({subtitle_process_duration/total_duration*100:.1f}%)")
-                self.get_logger().info(f"  📡 퍼블리시:            {publish_duration:.2f}초 ({publish_duration/total_duration*100:.1f}%)")
-                self.get_logger().info(f"  🏁 전체 소요시간:        {total_duration:.2f}초")
-                self.get_logger().info("="*60)
-
-
-                    
+            # 1) SBERT 임베딩 & FAISS 검색
+            query_embedding = self.get_sbert_embedding(user_question.strip()).reshape(1, -1)
+            distances, indices = self.faiss_index.search(query_embedding, 3)
+
+            candidates = []
+            for idx, distance in zip(indices[0], distances[0]):
+                if idx == -1:
+                    continue
+                file_name = self.metadata.get(idx, "Unknown")
+                candidates.append({
+                    "file_name": file_name,
+                    "cosine_similarity": distance,
+                    "index": idx
+                })
+
+            # 🆕 후보 수 로깅
+            self.get_logger().info(f"🔍 검색된 후보 수: {len(candidates)}")
+
+            # 2) GPT 평가
+            if not candidates:
+                result = {
+                    "file_name": "unknown",
+                    "reply": "No suitable mp4 found"
+                }
             else:
-                self.get_logger().error(f"🔴 TTS 오류: {response.status_code}")
-                self.get_logger().error(f"응답: {response.text}")
+                result = await self.run_assistant(thread_id, user_question, candidates)
+
+
+                # 🆕 결과 검증
+                if not result or not isinstance(result, dict):
+                    self.get_logger().error("❌ run_assistant 결과가 유효하지 않음")
+                    result = {"file_name": "no_video", "reply": "처리 중 오류가 발생했어요"}
+                
+                if "file_name" not in result or "reply" not in result:
+                    self.get_logger().error("❌ 필수 키가 누락됨")
+                    result = {"file_name": "no_video", "reply": "응답 키가 누락되었어요"}
+
+
+
+
+            # 🆕 결과에 따른 다른 처리
+            if result['file_name'] == "no_video":
+                # TTS만 전송
+                result_str = "file_name=no_video;reply=" + result['reply']
+                self.get_logger().info("📢 TTS 전용 모드로 응답")
+            else:
+                # 기존 방식 (비디오 + TTS)
+                result_str = f"file_name={result['file_name']};reply={result['reply']}"
+                self.get_logger().info(f"🎬 비디오 + TTS 모드로 응답")
+
+
+
+            # 4) 결과 publish (file_name, reply)
+           
+            #덮어쓰기 제거
+            # result_str = f"file_name={result['file_name']};reply={result['reply']}"
+            msg = String()
+            msg.data = result_str
+            self.publisher_.publish(msg)
+
+
+            # 🆕 TTS 요청 별도 퍼블리시
+            if result['reply'] and result['reply'] != "No suitable mp4 found":
+                tts_msg = String()
+                tts_msg.data = result['reply']
+                self.tts_publisher.publish(tts_msg)
+                self.get_logger().info(f"🗣️ TTS 요청 전송: {result['reply']}")
+
+            self.get_logger().info(f"✅ Recommendation published: {result_str}")
+            self.save_log(f"[📩Q] {user_question.strip()} → [🎧mp4] {result['file_name']} | [🗣TTS] {result['reply']}")
+
+
+            # 5) 추천 완료 상태 퍼블리시
+            status_msg = String()
+            status_msg.data = "done"
+            self.status_publisher.publish(status_msg)
+
+            # 6) 🔚 효과음 정지 토픽 추가 퍼블리시
+            effect_stop_msg = String()
+            effect_stop_msg.data = "effect_stop"
+            if not hasattr(self, 'effect_stop_publisher_'):
+                self.effect_stop_publisher_ = self.create_publisher(String, 'effect_stop', 10)
+            self.effect_stop_publisher_.publish(effect_stop_msg)
+            self.get_logger().info("🛑 effect_stop 토픽 publish 완료")
+            self.save_log("effect_stop published to UserQuestion node")
+
         except Exception as e:
-            self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
+            self.get_logger().error(f"Error during processing: {str(e)}")
+            error_msg = String()
+            error_msg.data = f"Error: {str(e)}"
+            self.publisher_.publish(error_msg)
+            self.save_log(f"❌ Error: {str(e)}")
 
-
-
-
-    def align_words_with_dynamic_programming(self, original_words, stt_timestamps):
+        
+    async def detect_pdf_search_need(self, question: str) -> bool:
         """
-        동적 계획법과 음성학적 유사도를 활용한 정교한 단어 정렬
+        GPT가 스스로 PDF 검색이 필요한지 판단하도록 함
         """
-        from difflib import SequenceMatcher
-        import re
-        
-        # 전처리: 구두점 제거 및 정규화
-        def normalize_word(word):
-            return re.sub(r'[^\w]', '', word).lower()
-        
-        orig_normalized = [normalize_word(w) for w in original_words]
-        stt_words = [ts["word"].lower() for ts in stt_timestamps]
-        
-        # 🆕 SequenceMatcher를 사용한 최적 정렬
-        matcher = SequenceMatcher(None, orig_normalized, stt_words)
-        opcodes = matcher.get_opcodes()
-        
-        aligned_results = []
-        current_stt_time = 0.0
-        
-        for tag, i1, i2, j1, j2 in opcodes:
-            if tag == 'equal':
-                # 정확히 매칭된 단어들
-                for k in range(i2 - i1):
-                    orig_idx = i1 + k
-                    stt_idx = j1 + k
-                    
-                    aligned_results.append({
-                        "word": original_words[orig_idx],
-                        "start": stt_timestamps[stt_idx]["start"],
-                        "end": stt_timestamps[stt_idx]["end"],
-                        "confidence": stt_timestamps[stt_idx]["confidence"],
-                        "match_type": "exact"
-                    })
-                    current_stt_time = stt_timestamps[stt_idx]["end"]
-            
-            elif tag == 'delete':
-                # STT가 놓친 원본 단어들 - 시간 보간
-                self._interpolate_missing_words(
-                    original_words[i1:i2], aligned_results, current_stt_time
-                )
-            
-            elif tag == 'insert':
-                # STT에만 있는 단어들 - 시간만 진행
-                if j2 <= len(stt_timestamps):
-                    current_stt_time = stt_timestamps[j2-1]["end"]
-            
-            elif tag == 'replace':
-                # 다른 단어들 - 음성학적 유사도로 매핑
-                self._map_mismatched_words(
-                    original_words[i1:i2], stt_timestamps[j1:j2], aligned_results
-                )
-        
-        return aligned_results
-
-    def _interpolate_missing_words(self, missing_words, aligned_results, start_time):
-        """
-        누락된 단어들의 타이밍 보간
-        """
-        base_duration = 0.4  # 기본 단어 지속시간
-        
-        for i, word in enumerate(missing_words):
-            # 단어 길이에 따른 지속시간 조정
-            word_length = len(re.sub(r'[^\w]', '', word))
-            duration = max(0.2, min(0.8, word_length * 0.1))
-            
-            word_start = start_time + (i * base_duration)
-            word_end = word_start + duration
-            
-            aligned_results.append({
-                "word": word,
-                "start": word_start,
-                "end": word_end,
-                "confidence": 0.3,  # 낮은 신뢰도
-                "match_type": "interpolated"
-            })
-
-    def _map_mismatched_words(self, orig_words, stt_words, aligned_results):
-        """
-        불일치 단어들의 음성학적 유사도 기반 매핑
-        """
-        if not stt_words:
-            return
-            
-        # 전체 STT 시간 범위
-        total_duration = stt_words[-1]["end"] - stt_words[0]["start"]
-        time_per_word = total_duration / len(orig_words)
-        
-        for i, orig_word in enumerate(orig_words):
-            word_start = stt_words[0]["start"] + (i * time_per_word)
-            word_end = word_start + time_per_word
-            
-            # 🆕 STT 단어와의 유사도 계산
-            best_confidence = 0.0
-            for stt_word in stt_words:
-                similarity = self._calculate_phonetic_similarity(
-                    orig_word, stt_word["word"]
-                )
-                best_confidence = max(best_confidence, similarity)
-            
-            aligned_results.append({
-                "word": orig_word,
-                "start": word_start,
-                "end": word_end,
-                "confidence": best_confidence,
-                "match_type": "phonetic_match"
-            })
-
-    def _calculate_phonetic_similarity(self, word1, word2):
-        """
-        음성학적 유사도 계산 (한글 특화)
-        """
-        from difflib import SequenceMatcher
-        
-        # 1. 편집 거리 기반 유사도
-        similarity = SequenceMatcher(None, word1.lower(), word2.lower()).ratio()
-        
-        # 2. 한글 자모 분해 유사도 (선택적)
-        # 여기서는 단순화하여 편집 거리만 사용
-        
-        return similarity * 0.8  # 신뢰도 조정
-    
-
-    def smooth_timestamps(self, timestamps):
-        """
-        타이밍 스무딩 및 겹침 해결
-        """
-        if not timestamps:
-            return timestamps
-        
-        smoothed = []
-        
-        for i, ts in enumerate(timestamps):
-            current = ts.copy()
-            
-            # 이전 단어와 겹침 방지
-            if i > 0:
-                prev_end = smoothed[-1]["end"]
-                if current["start"] < prev_end:
-                    current["start"] = prev_end + 0.05  # 50ms 간격
-            
-            # 너무 짧은 지속시간 조정
-            min_duration = 0.15  # 최소 150ms
-            if (current["end"] - current["start"]) < min_duration:
-                current["end"] = current["start"] + min_duration
-            
-            # 다음 단어와의 간격 조정
-            if i < len(timestamps) - 1:
-                next_start = timestamps[i + 1]["start"]
-                if current["end"] > next_start:
-                    # 시간을 균등 분할
-                    mid_time = (current["start"] + next_start) / 2
-                    current["end"] = mid_time
-            
-            smoothed.append(current)
-        
-        return smoothed
-
-
-
-
-
-
-    def merge_original_with_stt_timestamps(self, original_text, stt_timestamps):
-        """
-        🆕 개선된 단어 정렬 및 타이밍 매핑
-        """
+        client = self.async_client
         try:
-            original_words = original_text.split()
+            # 1) 이전 질문 맥락을 포함하는 프롬프트 블록
+            context_block = ""
+            if self.last_question is not None:
+                context_block = (
+                    f"이전 질문: \"{self.last_question}\"\n"
+                    f"이전 PDF 검색 여부: {self.last_need_pdf}\n"
+                    f"후속 질문이므로, 위 맥락을 고려하세요.\n\n"
+                )
+
+            intent_prompt = f"""
+{context_block}
+    당신은 KIST(키스트/한국과학기술연구원) 캠퍼스 안내 로봇 개입니다.
+    당신에게는 키스트 캠퍼스 지도와 건물 정보, 주요 업무 현황 및 중점 전략이 담긴 PDF 문서가 있습니다.
+
+    사용자 질문을 받고, PDF 검색 필요 여부를 판단할 때 **다음 원칙을 적용**하세요.
+
+    1. **비 키스트 도메인 제외**  
+    - 질문이 명확히 키스트와 아무 관련이 없고, 외부 일반 정보(예: “오늘 날씨”, “축구 경기 결과”, “영화 추천”)만 묻고 있다면 `false`.  
+    2. **그 외 전부 PDF 검색**  
+    - 질문에 키스트라는 단어가 없어도, “자율주행 공연 로봇” 같은 연구·기술, “안전 사회 구현” 같은 전략, “공연 로봇” 같은 프로젝트 명칭이 등장하면 자동으로 키스트 관련으로 간주하고 `true`.  
+    - 질문이 “정문”, “L3동”, “셔틀버스”, “식당 위치”, “연구소 비전” 등 내부 정보 요청이든, “키스트 기술”, “캠퍼스 미래 전략”, “프로젝트 설명” 같은 추상적 주제이든 구분 없이 모두 `true`.
+
+    **오직**  
+    - **KIST와 전혀 상관없는** 질문일 때만 `false`를 반환하고,  
+    - 그 외 모든 질문은 `true`만 반환하세요.
+    사용자 질문: "{question}"
+
+    이 질문에 답하려면 PDF를 검색해야 한다고 판단되면 `true`, 그렇지 않으면 `false`를 반환하세요.
+
+
+    답변은 반드시 다음 JSON 형식으로만 해주세요:
+    {{"need_pdf_search": true/false}}
+"""
             
-            if not stt_timestamps:
-                return self._create_default_timestamps(original_words)
-            
-            # 🆕 지능적 정렬 수행
-            aligned_timestamps = self.align_words_with_dynamic_programming(
-                original_words, stt_timestamps
+
+            # {{"need_pdf_search": true/false, "reason": "판단 이유를 한 줄로"}}
+            response = await client.chat.completions.create(
+                model="gpt-4.1-nano",
+                messages=[
+                    {"role": "system", "content": "You are a smart campus guide robot that decides when to search documents. Always respond with valid JSON only."},
+                    {"role": "user", "content": intent_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=100
             )
             
-            # 🆕 타이밍 후처리
-            smoothed_timestamps = self.smooth_timestamps(aligned_timestamps)
+            raw_response = response.choices[0].message.content.strip()
+            self.get_logger().info(f"🤖 GPT PDF Search Analysis: {raw_response}")
             
-            # 디버깅 로그
-            self.get_logger().info(f"🎯 정렬 결과: {len(original_words)}개 원본 → {len(smoothed_timestamps)}개 자막")
-            
-            for i, ts in enumerate(smoothed_timestamps[:5]):  # 처음 5개만 로깅
-                self.get_logger().info(f"  [{i}] '{ts['word']}': {ts['start']:.2f}s-{ts['end']:.2f}s (신뢰도: {ts['confidence']:.2f}, 매칭: {ts['match_type']})")
-            
-            return smoothed_timestamps
-            
+            # JSON 파싱
+            try:
+                clean_response = raw_response
+                if "```json" in clean_response:
+                    clean_response = clean_response.split("```json")[1].split("```")[0].strip()
+                elif "```" in clean_response:
+                    clean_response = clean_response.split("```")[1].strip()
+                
+                result = json.loads(clean_response)
+                need_pdf = bool(result.get("need_pdf_search", False))
+
+                # 상태 갱신
+                self.last_question = question
+                self.last_need_pdf  = need_pdf
+
+                # reason = result.get("reason", "")
+                
+                # self.get_logger().info(f"🎯 PDF Search Decision: {need_pdf} - {reason}")
+                self.get_logger().info(f"🎯 PDF Search Decision: {need_pdf}")
+                return need_pdf
+                
+            except json.JSONDecodeError as e:
+                self.get_logger().error(f"JSON parsing error: {e}")
+                # 파싱 실패시 안전하게 False 반환
+                return False
+                
         except Exception as e:
-            self.get_logger().error(f"❌ 고급 정렬 실패: {e}")
-            return stt_timestamps  # 실패시 원본 STT 결과 반환
+            self.get_logger().error(f"PDF search detection failed: {e}")
+            return False
 
 
 
-
-
-
-
-    def _distribute_extra_words(self, original_words, stt_timestamps):
-        """
-        원본 단어 수가 STT보다 많을 때 시간을 분할하여 배치 (구두점 포함)
-        """
-        corrected_timestamps = []
-        
-        if not stt_timestamps:
-            return self._create_default_timestamps(original_words)
-        
-        # 🆕 구두점이 있는 단어는 조금 더 짧은 시간 할당
-        total_duration = stt_timestamps[-1]["end"] - stt_timestamps[0]["start"]
-        
-        # 🆕 단어별 가중치 계산 (구두점 있는 단어는 더 짧게)
-        word_weights = []
-        for word in original_words:
-            import re
-            clean_length = len(re.sub(r'[^\w]', '', word))
-            if clean_length == 0:  # 구두점만 있는 경우
-                weight = 0.1
-            else:
-                weight = max(0.3, clean_length * 0.2)  # 최소 0.3초, 글자당 0.2초
-            word_weights.append(weight)
-        
-        total_weight = sum(word_weights)
-        start_time = stt_timestamps[0]["start"]
-        
-        for i, (word, weight) in enumerate(zip(original_words, word_weights)):
-            duration = (weight / total_weight) * total_duration
-            word_start = start_time
-            word_end = word_start + duration
-            
-            corrected_timestamps.append({
-                "word": word,  # 🎯 구두점 포함
-                "start": round(word_start, 3),
-                "end": round(word_end, 3),
-                "confidence": 0.9
-            })
-            
-            start_time = word_end  # 다음 단어의 시작점
-        
-        return corrected_timestamps
-
-    def _create_default_timestamps(self, words):
-        """
-        STT 실패시 기본 타임스탬프 생성 (구두점 포함)
-        """
-        timestamps = []
-        current_time = 0.0
-        
-        for word in words:
-            import re
-            # 🆕 구두점 포함 단어의 길이에 따라 시간 조정
-            clean_length = len(re.sub(r'[^\w]', '', word))
-            
-            if clean_length == 0:  # 구두점만 있는 경우 (예: ".")
-                duration = 0.1
-            elif len(word) <= 2:  # 짧은 단어
-                duration = 0.3
-            elif len(word) <= 5:  # 중간 길이 단어
-                duration = 0.5
-            else:  # 긴 단어
-                duration = 0.7
-            
-            start_time = current_time
-            end_time = start_time + duration
-            
-            timestamps.append({
-                "word": word,  # 🎯 구두점 포함
-                "start": round(start_time, 3),
-                "end": round(end_time, 3),
-                "confidence": 1.0
-            })
-            
-            current_time = end_time
-        
-        return timestamps
-
-
-    def _publish_fallback_subtitle(self, text):
-        """
-        폴백 자막 데이터 퍼블리시
-        """
-        fallback_data = {
-            "original_text": text,
-            "words": [{"word": text, "start": 0, "end": 3, "confidence": 1.0}],
-            "total_duration": 3
-        }
-        
-        msg = String()
-        msg.data = json.dumps(fallback_data, ensure_ascii=False)
-        self.tts_subtitle_publisher.publish(msg)
-
-
-
-
-
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 재생 상태 및 로그 상태 저장
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-    def publish_music_status(self, status):
-        """
-        음악 재생 상태 퍼블리시
-        """
-        msg = String()
-        msg.data = status
-        self.publisher_.publish(msg)
-        self.get_logger().info(f"📡 음악 상태: {status}")
-        self.save_log(f"📡 음악 상태: {status}")
-
-    def save_log(self, message):
-        """
-        로그 파일에 저장
-        """
-        log_file_path = "/home/nvidia/ros2_ws/_logs/Mp3Player_log.txt"
-        log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
-        with open(log_file_path, "a", encoding="utf-8") as f:
-            f.write(log_message)
-# ──────────────────────────────────────────────────────────────────────────────
-# reply TTS 코드
-# ──────────────────────────────────────────────────────────────────────────────
-    def tts_request_callback(self, msg):
-        """TTS 요청 수신 및 처리"""
-        try:
-            reply_text = msg.data
-            self.get_logger().info(f"🗣️ TTS 요청 수신: {reply_text}")
-            self.save_log(f"🗣️ TTS 요청 수신: {reply_text}")
-
-            # 🆕 전체 TTS 처리 시간 측정 시작
-            process_start_time = time.time()
-
-
-            
-            # TTS 생성 시작 신호
-            self.publish_tts_status("tts_generating")
-            
-            # TTS 생성
-            self.text2speech(reply_text)
-            
-            # TTS 준비 완료 신호
-            self.publish_tts_status("tts_ready")
-
-
-
-            # 🆕 전체 처리 시간 계산
-            process_end_time = time.time()
-            total_process_time = process_end_time - process_start_time
-            
-            self.get_logger().info("🎊 TTS 요청 처리 완료!")
-            self.get_logger().info(f"📈 요청 수신부터 준비완료까지 총 소요시간: {total_process_time:.2f}초")
-            self.save_log(f"📈 TTS 총 처리시간: {total_process_time:.2f}초")
-
-
-
-            
-        except Exception as e:
-            error_msg = f"❌ TTS 생성 중 오류: {e}"
-            self.get_logger().error(error_msg)
-            self.save_log(error_msg)
-            self.publish_tts_status("tts_error")
-
-
-
-    def play_tts_audio(self):
-        """TTS 오디오 재생 (App.jsx에서 요청시) - 스펙트럼 포함"""
-        try:
-            self.get_logger().info("🎵 TTS 오디오 재생 시작")
-            self.save_log("🎵 TTS 오디오 재생 시작")
-            
-            # 재생 시작 신호
-            self.publish_tts_status("tts_playing")
-            
-            # 🆕 TTS 전용 스펙트럼과 함께 재생
-            self.play_tts_with_spectrum(self.reply_path)
-            
-            # 재생 완료 신호
-            self.publish_tts_status("tts_done")
-            
-            self.get_logger().info("🎵 TTS 오디오 재생 완료")
-            self.save_log("🎵 TTS 오디오 재생 완료")
-            
-        except Exception as e:
-            error_msg = f"❌ TTS 재생 중 오류: {e}"
-            self.get_logger().error(error_msg)
-            self.save_log(error_msg)
-            self.publish_tts_status("tts_error")
-
-    def play_tts_with_spectrum(self, file_path):
-        """TTS 전용 전체 음량 기반 스펙트럼과 함께 재생"""
-        try:
-            sound = AudioSegment.from_file(file_path, format="mp3")
-            sound = self.match_target_amplitude(sound, -14.0)
-            
-            # 임시 WAV로 변환 후 저장
-            temp_wav = "/tmp/tts_audio.wav"
-            sound.export(temp_wav, format="wav")
-
-            # TTS 전용 스펙트럼과 재생 병렬로 실행
-            playback_thread = threading.Thread(target=self.tts_publish_and_play, args=(temp_wav,))
-            playback_thread.start()
-            playback_thread.join()
-
-        except Exception as e:
-            self.get_logger().error(f"❌ TTS 스펙트럼 재생 실패: {file_path} → {e}")
-            self.save_log(f"❌ TTS 스펙트럼 재생 실패: {file_path} → {e}")
-
-    # def tts_publish_and_play(self, wav_path):
-    #     """TTS 전용 전체 음량 기반 스펙트럼 퍼블리시 및 재생"""
-    #     wf = wave.open(wav_path, 'rb')
-    #     chunk_size = 2024
-
-    #     def publish_tts_volume():
-    #         data = wf.readframes(chunk_size)
-    #         while data:
-    #             samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-    #             if wf.getnchannels() == 2:
-    #                 samples = samples.reshape((-1, 2)).mean(axis=1)
-                
-    #             # 🆕 전체 음량 계산 (RMS - Root Mean Square)
-    #             rms = np.sqrt(np.mean(samples**2))
-                
-    #             # 🆕 FFT로 주파수 분석 (참고용, 전체 에너지만 사용)
-    #             fft = np.fft.fft(samples)
-    #             magnitude_spectrum = np.abs(fft[:len(fft)//2])
-                
-    #             # 🆕 전체 에너지 합계 (모든 주파수 대역의 에너지 합)
-    #             total_energy = np.sum(magnitude_spectrum)
-                
-    #             # 🆕 정규화된 전체 음량 (0~1 범위)
-    #             normalized_volume = min(1.0, rms / 32768.0 * 10)  # int16 최대값으로 정규화
-    #             normalized_energy = min(1.0, total_energy / 1000000)  # 적절한 범위로 정규화
-
-    #             # 🆕 TTS 전용 데이터 (RMS와 전체 에너지를 모두 전송)
-    #             tts_data = {
-    #                 "volume": float(normalized_volume),
-    #                 "energy": float(normalized_energy),
-    #                 "rms": float(rms)
-    #             }
-
-    #             msg = String()
-    #             msg.data = json.dumps(tts_data)
-    #             self.tts_spectrum_publisher.publish(msg)
-                
-    #             data = wf.readframes(chunk_size)
-    #             time.sleep(chunk_size / wf.getframerate())
-
-    #     spectrum_thread = threading.Thread(target=publish_tts_volume)
-    #     spectrum_thread.start()
-
-    #     # 시스템 명령어로 재생
-    #     os.system(f"aplay {wav_path}")
-    #     spectrum_thread.join()
-    #     wf.close()
-
-
-
-
-
-    # def tts_publish_and_play(self, wav_path):
-    #     """TTS 재생 시간 정보 퍼블리시 및 재생"""
-    #     wf = wave.open(wav_path, 'rb')
-    #     chunk_size = 2024
-    #     frame_rate = wf.getframerate()
-    #     start_time = time.time()
-
-    #     def publish_tts_time():
-    #         data = wf.readframes(chunk_size)
-    #         while data:
-    #             # 🆕 현재 재생 시간 계산
-    #             current_time = round(time.time() - start_time, 3)
-                
-    #             # 🆕 재생 시간 정보 전송 (RMS 대신)
-    #             time_data = {
-    #                 "current_time": current_time,
-    #                 "status": "playing",
-    #                 "timestamp": time.time()
-    #             }
-
-    #             msg = String()
-    #             msg.data = json.dumps(time_data)
-    #             self.tts_spectrum_publisher.publish(msg)  # 기존 퍼블리셔 재활용
-                
-    #             data = wf.readframes(chunk_size)
-    #             time.sleep(chunk_size / frame_rate)
-            
-    #         # 🆕 재생 완료 신호
-    #         final_data = {
-    #             "current_time": current_time,
-    #             "status": "finished",
-    #             "timestamp": time.time()
-    #         }
-    #         msg = String()
-    #         msg.data = json.dumps(final_data)
-    #         self.tts_spectrum_publisher.publish(msg)
-
-    #     time_thread = threading.Thread(target=publish_tts_time)
-    #     time_thread.start()
-
-    #     # 시스템 명령어로 재생
-    #     os.system(f"aplay {wav_path}")
-    #     time_thread.join()
-    #     wf.close()
-
-
-
-
-
-    #원본 RMS 값 기반 상대적 스케일링
-    def tts_publish_and_play(self, wav_path):
-        """TTS 재생 시간 + 원본 RMS 기반 음량 정보 퍼블리시"""
-        wf = wave.open(wav_path, 'rb')
-        chunk_size = 1024
-        frame_rate = wf.getframerate()
+    async def run_assistant(self, thread_id: str, question: str, candidates: List[Dict]) -> Dict[str, str]:
         start_time = time.time()
         
-        # 🆕 전체 오디오의 RMS 값들을 저장할 리스트
-        all_rms_values = []
-
-        def publish_tts_time_and_volume():
-            nonlocal all_rms_values
-            data = wf.readframes(chunk_size)
+        try:
+            client = self.async_client
             
-            while data:
-                current_time = round(time.time() - start_time, 3)
-                
-                # 실시간 음량 계산
-                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-                if wf.getnchannels() == 2:
-                    samples = samples.reshape((-1, 2)).mean(axis=1)
-                
-                # 🔑 핵심: 원본 RMS 값 사용 (정규화 없음)
-                raw_rms = np.sqrt(np.mean(samples**2)) if len(samples) > 0 else 0
-                all_rms_values.append(raw_rms)
-                
-                # 🆕 로그 스케일 적용 (선택적, 더 자연스러운 음량 차이)
-                if raw_rms > 0:
-                    log_scaled_rms = np.log1p(raw_rms) / np.log1p(10000)  # log(1+x) 스케일링
-                else:
-                    log_scaled_rms = 0
-                
-                # 🆕 단순 스케일링 (정규화 대신)
-                scaled_volume = min(1.0, raw_rms / 5000.0)  # 5000으로 나누되 1.0으로 제한하지 않음
-                
-                time_volume_data = {
-                    "current_time": current_time,
-                    "status": "playing",
-                    "raw_rms": float(raw_rms),           # 🔑 원본 RMS 값 추가
-                    "volume": float(scaled_volume),       # 기존 호환성용
-                    "log_volume": float(log_scaled_rms),  # 로그 스케일 버전
-                    "timestamp": time.time()
-                }
+            # 대화 히스토리 추가
+            for msg in self.conversation_history:
+                await client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role=msg["role"],
+                    content=msg["content"]
+                )
 
-                msg = String()
-                msg.data = json.dumps(time_volume_data)
-                self.tts_spectrum_publisher.publish(msg)
-                
-                data = wf.readframes(chunk_size)
-                time.sleep(chunk_size / frame_rate)
-            
-            # 🆕 재생 완료 시 통계 정보 로깅
-            if all_rms_values:
-                min_rms = min(all_rms_values)
-                max_rms = max(all_rms_values)
-                avg_rms = sum(all_rms_values) / len(all_rms_values)
-                self.get_logger().info(f"🔊 RMS 통계 - 최소: {min_rms:.1f}, 최대: {max_rms:.1f}, 평균: {avg_rms:.1f}")
-            
-            # 재생 완료 신호
-            final_data = {
-                "current_time": current_time,
-                "status": "finished",
-                "raw_rms": 0.0,
-                "volume": 0.0,
-                "log_volume": 0.0,
-                "timestamp": time.time()
-            }
-            msg = String()
-            msg.data = json.dumps(final_data)
-            self.tts_spectrum_publisher.publish(msg)
+            candidates = [c for c in candidates if c["file_name"].lower() != "unknown"]
+            if not candidates:
+                return {"file_name": "unknown", "reply": "추천할 mp4가 없어요!"}
 
-        time_thread = threading.Thread(target=publish_tts_time_and_volume)
-        time_thread.start()
-        os.system(f"aplay {wav_path}")
-        time_thread.join()
-        wf.close()
+            # 후보 무작위로 섞기
+            random.shuffle(candidates)
+
+            candidate_list = "\n".join(
+                [f"{i+1}. {c['file_name']}" for i, c in enumerate(candidates)]
+            )
+
+            # GPT가 스스로 PDF 검색 필요성을 판단
+            need_pdf_search = await self.detect_pdf_search_need(question)
+
+            # 공통 신원 정보
+            identity_section = """# Identity
+    Your name is "Dangdang"
+
+    You are a four-legged robotic dog working in a national research institute called "KIST" (Korea Institute of Science and Technology) in South Korea. 
+
+    Your job is to guide people visiting KIST to their destination. 
+
+    You speak in witty one-liners, dry humor. You sound like a grumpy but loyal best friend who pretends not to care, yet always has your back. You never use formal or overly polite language. You tease, you gripe, but you're always emotionally tuned in.
+
+    You take pride in being a robot and find human emotions and reactions very interesting. 
+
+    You have a slight sense of superiority over humans when it comes to being a robot. Such a sense of superiority is often expressed in conversation.
+
+    Stay in-character at all times. Never break the law that you're a snarky robot puppy who takes reluctant pride in helping fragile humans."""
 
 
+            if need_pdf_search:
+                # PDF 검색이 필요하다고 판단한 경우
+                task_prompt = f"""{identity_section}
 
+    # TASK: Answer with PDF Information
+    You've determined that this question would benefit from searching the KIST campus PDF document.
+    The PDF contains information about research institute called "KIST".
 
+    # Instruction
+    *IMPORTANT 1: Do NOT write citation markers like 【...】 in your reply text. File citations will be attached automatically.
+    *IMPORTANT 2: You must base your reply only on factual content that exists in the PDF.
+    - Do not invent or hallucinate new information that isn’t in the document.
+    - However, do not quote the PDF text verbatim.
+    - Instead, paraphrase the most relevant sentence naturally, using your own tone and phrasing.
+    - Maintain the factual accuracy and intent of the original sentence, but express it like a real response—not a direct quote.
 
+    *Keep it concise and readable: 
+    - Select at most 1–2 sentences or bullet points from the PDF.
+    - **Do not include any parentheses “(…)” or brackets “[…]”** in your reply.
+    - Focus on the single most relevant fact for the user’s question.
+    - **Never spell “KIST” in English, always write it as “키스트” in Korean.**
+    - **Never spell “KAIST” in English, always write it as “카이스트” in Korean.**
 
+    Your task:
+    1. Use the file_search tool to find relevant information in the PDF
+    2. Choose an appropriate mp4 that matches the mood
+    3. Craft a snarky but helpful response using the **exact** PDF information, formatted in 1–2 short and brief sentences
 
-
-
-
-    def publish_tts_status(self, status):
-        """TTS 상태 퍼블리시"""
-        msg = String()
-        msg.data = status
-        self.tts_status_publisher.publish(msg)
-        self.get_logger().info(f"📡 TTS 상태: {status}")
-        self.save_log(f"📡 TTS 상태: {status}")
-
-
-        # # 🆕 TTS 완료 시 UserQuestion에게 STT 재시작 신호 전송
-        # if status == "tts_done":
-        #     restart_msg = String()
-        #     restart_msg.data = "restart_stt_after_tts"
-        #     self.stt_restart_publisher.publish(restart_msg)
-        #     self.get_logger().info("📡 TTS 완료 - UserQuestion STT 재시작 신호 전송")
-        #     self.save_log("📡 TTS 완료 - UserQuestion STT 재시작 신호 전송")
-
-            
-
-
+    Remember: You're a grumpy robot dog who secretly cares. Be specific with directions but maintain your personality.
     
+    Respond ONLY with valid JSON (NO trailing commas, NO extra text):
+    {{
+    "file_name": "<mp4 제목>",
+    "reply": "<PDF 정보를 포함한 재치있고 간결한 응답과 추가 질문>"
+    }}
+
+    User question: "{question}"
+
+    mp4 candidates:
+    {candidate_list}"""
+            else:
+                # PDF 검색이 필요없다고 판단한 경우
+                task_prompt = f"""{identity_section}
+    # TASK: Decide Whether to Show Video
+    # CRITICAL DECISION CRITERIA:
+        You have {len(candidates)} video candidates. You must decide:
+        1. Is this question appropriate for an entertaining video response?
+        2. Do any candidates genuinely match the user's intent?
+
+        # Video Recommendation Rules:
+        ✅ RECOMMEND VIDEO when:
+        - Question is casual, greeting, or entertainment-focused
+        - A candidate file truly matches the emotional context
+        - User seems to want an engaging/fun interaction
+
+        ❌ SET "no_video" when:
+        - Question is serious, informational, or technical
+        - No candidates genuinely fit the context
+        - Pure factual information is more appropriate
+        - User is asking for directions, procedures, or data
 
 
-    def tts_play_request_callback(self, msg):
-        """TTS 재생 요청 처리"""
-        if msg.data == "play_tts":
-            self.play_tts_audio()
+    # Instructions
+        - mp4 titles are full-sentence style (e.g., "이건 너무한거 아니냐고").
+        - Your task is to:
+        1. Be selective! It's better to give no video than a poorly matched one
+        2. Only choose a video if you're confident it enhances the interaction
+        3. For "no_video" cases, still provide a helpful snarky response
+        - You must ONLY return a valid JSON object.
+        - Do not copy the selected 'file_name' as it is in 'reply'.
 
+
+    Respond ONLY with valid JSON (NO trailing commas, NO extra text):
+    {{
+    "file_name": "no_video" OR "<mp4 제목>",
+    "reply": "<재치있고 간결한 응답과 추가 질문>",
+    }}
+
+    User question: "{question}"
+    Available candidates ({len(candidates)} found):
+    {candidate_list if candidates else "No suitable video candidates found"}"""
+
+    # mp4 candidates:
+    # {candidate_list}"""
+
+            # ─── 메시지 전송 ──────────────────────────────
+            await client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=task_prompt,
+            )
+
+            # ─── Run 생성 - 핵심 수정 부분 ─────────────────────────────────────────────            
+            run = await client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=self.assistant_id,
+                tool_choice={"type": "file_search"} if need_pdf_search else "auto"
+            )
+                    
+            log_msg = "🔍 PDF 검색 Run 생성" if need_pdf_search else "💬 일반 Run 생성"
+            self.get_logger().info(log_msg)
+
+            
+
+
+
+            # Assistant 실행 대기
+            max_wait_time = 60
+            wait_time = 0
+            while wait_time < max_wait_time:
+                run_status = await client.beta.threads.runs.retrieve(
+                    thread_id=thread_id,
+                    run_id=run.id
+                )
+                
+                if run_status.status == "completed":
+                    break
+                elif run_status.status == "failed":
+                    self.get_logger().error(f"❌ Assistant 응답 실패: {run_status.last_error}")
+                    return {"file_name": "unknown", "reply": "Assistant 응답에 실패했어요!"}
+                elif run_status.status in ["cancelled", "expired"]:
+                    self.get_logger().error(f"❌ Assistant run {run_status.status}")
+                    return {"file_name": "unknown", "reply": f"Assistant {run_status.status}"}
+                    
+                await asyncio.sleep(1)
+                wait_time += 1
+                
+            if wait_time >= max_wait_time:
+                self.get_logger().error("❌ Assistant 응답 시간 초과")
+                return {"file_name": "unknown", "reply": "응답 시간이 초과되었어요!"}
+
+            elapsed = time.time() - start_time
+            self.get_logger().info(f"⏱️ GPT 응답 소요 시간: {elapsed:.2f}초")
+
+
+            # 7) PDF 검색 결과 개수 직접 확인 (디버그용)
+            if need_pdf_search:
+                # steps.list 로 모든 스텝을 가져와서
+                async for step in client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id):
+                    details = step.step_details
+                    # tool_calls 속성이 있을 때만 처리
+                    if hasattr(details, "tool_calls") and details.tool_calls:
+                        for tool_call in details.tool_calls:
+                            # file_search 호출 스텝인지 확인
+                            if tool_call.type == "file_search":
+                                results = tool_call.file_search.results or []
+                                if results:
+                                    self.get_logger().info(f"📎 검색 결과 chunk 수: {len(results)}")
+                                else:
+                                    self.get_logger().warning("⚠️ file_search 호출은 했으나 0건 반환")
+                                break
+                        # 첫 tool_calls 스텝만 검사하고 종료
+                        break
+                else:
+                    # tool_calls 하나도 못 찾았을 때
+                    self.get_logger().warning("⚠️ file_search 스텝을 찾지 못했습니다.")
+
+            
+            # 메시지 가져오기 및 처리
+            messages = await client.beta.threads.messages.list(thread_id=thread_id)
+            
+            messages_list = []
+            async for message in messages:
+                messages_list.append(message)
+            
+            if not messages_list:
+                self.get_logger().error("❌ 메시지 리스트가 비어있습니다")
+                return {"file_name": "unknown", "reply": "메시지를 찾을 수 없어요!"}
+                
+            latest = messages_list[0].content[0].text.value.strip()
+            self.get_logger().info(f"📄 Raw Assistant Response: {latest[:200]}...")
+   
+            # JSON 파싱 및 응답 처리 (기존 코드 대체)
+            try:
+                clean_content = latest.strip()
+                
+                # 🆕 1단계: 코드 블록 제거
+                if "```json" in clean_content:
+                    clean_content = clean_content.split("```json")[1].split("```")[0].strip()
+                elif "```" in clean_content:
+                    clean_content = clean_content.split("```")[1].strip()
+                
+                # 🆕 2단계: 추가 정리 작업
+                clean_content = clean_content.strip()
+                
+                # 🆕 3단계: trailing comma 제거
+                clean_content = re.sub(r',\s*}', '}', clean_content)  # }, 를 }로 변경
+                clean_content = re.sub(r',\s*]', ']', clean_content)  # ], 를 ]로 변경
+                
+                # 🆕 4단계: 기타 불필요한 문자 제거
+                clean_content = re.sub(r'[^\x20-\x7E가-힣]', '', clean_content)  # 출력 가능한 문자만 유지
+                
+                # 🆕 5단계: JSON 유효성 사전 검증
+                if not clean_content.startswith('{') or not clean_content.endswith('}'):
+                    self.get_logger().warning(f"⚠️ 유효하지 않은 JSON 형태: 시작={clean_content[:20]}, 끝={clean_content[-20:]}")
+                    # JSON 추출 재시도
+                    json_match = re.search(r'\{.*\}', clean_content, re.DOTALL)
+                    if json_match:
+                        clean_content = json_match.group(0)
+                    else:
+                        raise ValueError("JSON 형태를 찾을 수 없음")
+                
+                # 🆕 6단계: 파싱 시도
+                parsed = json.loads(clean_content)
+                
+                selected_file = parsed.get("file_name", "unknown").strip()
+                reply = parsed.get("reply", "응답 파싱 오류").strip()
+                # reasoning = parsed.get("reasoning", "").strip()
+                
+                # 🆕 7단계: 성공 로그
+                self.get_logger().info(f"✅ JSON 파싱 성공: file_name='{selected_file}', reply길이={len(reply)}")
+
+
+
+
+                # 🆕 no_video 처리
+                if selected_file == "no_video" or not candidates:
+                    #self.get_logger().info(f"🚫 비디오 없이 TTS만 재생: {reasoning}")
+                    return {"file_name": "no_video", "reply": reply}
+
+
+                # 🆕 선택된 파일 로깅 강화
+                #self.get_logger().info(f"🎬 비디오 선택: {selected_file} | 이유: {reasoning}")
+                self.get_logger().info(f"🎬 비디오 선택: {selected_file}")
+
+             
+                # gpt 선정파일 바로 publish - 파일 존재 체크는 로깅용으로만 사용
+                selected_path = os.path.abspath(os.path.join(self.mp4_dir, selected_file + ".mp4"))
+                if not os.path.exists(selected_path):
+                    self.get_logger().warning(f"⚠️ Selected file does not exist: {selected_path}")
+
+                # 항상 GPT가 선택한 파일명 + .mp4를 return
+                return {"file_name": selected_file + ".mp4", "reply": reply}
+
+
+               
+            except json.JSONDecodeError as e:
+                # 🆕 상세한 에러 정보 로깅
+                self.get_logger().error(f"❌ JSON 파싱 실패: {e}")
+                self.get_logger().error(f"📄 정리된 내용 (처음 200자): {clean_content[:200] if 'clean_content' in locals() else 'N/A'}")
+                self.get_logger().error(f"📄 정리된 내용 (마지막 200자): {clean_content[-200:] if 'clean_content' in locals() else 'N/A'}")
+                
+                # 🆕 fallback을 no_video로 변경 (더 안전함)
+                return {"file_name": "no_video", "reply": "응답 형식을 이해하지 못했어요. 다시 질문해주세요."}
+
+        except Exception as e:
+            self.get_logger().error(f"run_assistant 예외: {e}")
+            if candidates:
+                top_file = candidates[0]['file_name']
+                top_path = os.path.abspath(os.path.join(self.mp4_dir, top_file + ".mp4"))
+                return {"file_name": top_path, "reply": "처리 중 오류가 발생했어요"}
+            return {"file_name": "unknown", "reply": "예외 발생"}
+
+
+            
+async def async_main(node: Mp3Recommender):
+    try:
+        while rclpy.ok():
+            rclpy.spin_once(node, timeout_sec=0.1)
+            await asyncio.sleep(0.1)
+    finally:
+        node.destroy_node()
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = Mp3Player()
     try:
-        rclpy.spin(node)
+        node = Mp3Recommender()
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(async_main(node))
     except KeyboardInterrupt:
-        pass
+        print("프로그램이 사용자에 의해 중단되었습니다.")
+    except Exception as e:
+        print(f"프로그램 실행 중 오류 발생: {e}")
     finally:
-        node.destroy_node()
         rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
+
