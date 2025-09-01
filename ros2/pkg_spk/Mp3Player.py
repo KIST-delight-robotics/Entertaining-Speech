@@ -1,4 +1,8 @@
 
+
+
+#whisper local model 도입
+
 import os
 import requests
 import threading
@@ -26,6 +30,9 @@ import re
 import torch
 import whisper_timestamped as whisper
 
+from difflib import SequenceMatcher
+
+from kiwipiepy import Kiwi
 
 
 class Mp3Player(Node):
@@ -110,6 +117,476 @@ class Mp3Player(Node):
         # 🆕 모델 사전 로딩 (비동기)
         self.preload_whisper_model()
 
+
+
+        # 🆕 Kiwi 형태소 분석기 초기화
+        self.kiwi = None
+        self.mecab = None  # 호환성을 위해 유지
+
+
+
+
+        # 🆕 형태소 분석기 초기화
+        try:
+            self.kiwi = Kiwi()
+            self.get_logger().info("✅ 한국어 형태소 분석기 초기화 완료")
+        except Exception as e:
+            self.get_logger().error(f"❌ 형태소 분석기 초기화 실패: {e}")
+            self.kiwi = None
+
+      
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 형태소분석기
+# ──────────────────────────────────────────────────────────────────────────────
+    # # 🆕 명사 추출 함수
+    # def extract_nouns_from_text(self, text):
+    #     """
+    #     Kiwi를 사용하여 텍스트에서 명사만 추출 (빠르고 정확)
+    #     """
+    #     if not self.kiwi:
+    #         self.get_logger().warning("⚠️ Kiwi 형태소 분석기가 초기화되지 않음")
+    #         return self._simple_noun_extraction(text)
+        
+    #     try:
+    #         # Kiwi로 형태소 분석 수행
+    #         result = self.kiwi.analyze(text)
+            
+    #         # 첫 번째 분석 결과 사용 (가장 확률이 높은 결과)
+    #         if not result or not result[0] or not result[0][0]:
+    #             self.get_logger().warning("⚠️ Kiwi 분석 결과가 비어있음")
+    #             return self._simple_noun_extraction(text)
+            
+    #         tokens = result[0][0]  # 첫 번째 분석 결과의 토큰들
+            
+    #         # 명사만 필터링
+    #         nouns = []
+    #         for token in tokens:
+    #             # Kiwi 태그에서 명사 확인 (NNG: 일반명사, NNP: 고유명사, NNB: 의존명사)
+    #             if token.tag in ['NNG', 'NNP', 'NNB'] or token.tag.startswith('NN'):
+    #                 if self._is_meaningful_noun(token.form):
+    #                     nouns.append(token.form)
+            
+    #         # 중복 제거하되 순서 유지
+    #         unique_nouns = list(dict.fromkeys(nouns))
+            
+    #         self.get_logger().info(f"🔤 Kiwi 추출된 명사: {unique_nouns}")
+    #         return unique_nouns
+            
+    #     except Exception as e:
+    #         self.get_logger().error(f"❌ Kiwi 명사 추출 실패: {e}")
+    #         return self._simple_noun_extraction(text)
+
+
+
+
+#로그추가
+
+
+    def extract_nouns_from_text(self, text):
+        """
+        Kiwi를 사용하여 텍스트에서 명사만 추출 (빠르고 정확) - 시간 측정 포함
+        """
+        # 🆕 형태소 분석 시간 측정 시작
+        morphology_start_time = time.time()
+        self.get_logger().info(f"⏳ 형태소 분석 시작: '{text}'")
+        
+        if not self.kiwi:
+            self.get_logger().warning("⚠️ Kiwi 형태소 분석기가 초기화되지 않음")
+            fallback_result = self._simple_noun_extraction(text)
+            
+            # 폴백도 시간 측정
+            morphology_end_time = time.time()
+            morphology_duration = morphology_end_time - morphology_start_time
+            self.get_logger().info(f"⌛ 폴백 형태소 분석 소요시간: {morphology_duration:.3f}초")
+            self.get_logger().info(f"🔤 폴백 추출된 명사: {fallback_result}")
+            return fallback_result
+        
+        try:
+            # 🆕 Kiwi 분석 단계별 시간 측정
+            kiwi_analysis_start = time.time()
+            
+            # Kiwi로 형태소 분석 수행
+            result = self.kiwi.analyze(text)
+            
+            kiwi_analysis_end = time.time()
+            kiwi_analysis_duration = kiwi_analysis_end - kiwi_analysis_start
+            
+            # 첫 번째 분석 결과 사용 (가장 확률이 높은 결과)
+            if not result or not result[0] or not result[0][0]:
+                self.get_logger().warning("⚠️ Kiwi 분석 결과가 비어있음")
+                fallback_result = self._simple_noun_extraction(text)
+                
+                morphology_end_time = time.time()
+                morphology_duration = morphology_end_time - morphology_start_time
+                self.get_logger().info(f"⌛ 형태소 분석 총 소요시간: {morphology_duration:.3f}초 (Kiwi 분석: {kiwi_analysis_duration:.3f}초)")
+                self.get_logger().info(f"🔤 폴백 추출된 명사: {fallback_result}")
+                return fallback_result
+            
+            # 🆕 토큰 처리 시간 측정
+            token_processing_start = time.time()
+            
+            tokens = result[0][0]  # 첫 번째 분석 결과의 토큰들
+            
+            # 🆕 상세한 토큰 분석 로그
+            self.get_logger().info(f"📊 Kiwi 분석된 총 토큰 수: {len(tokens)}개")
+            
+            # 명사만 필터링
+            raw_nouns = []  # 필터링 전 모든 명사
+            filtered_nouns = []  # 필터링 후 의미있는 명사
+            
+            for token in tokens:
+                # Kiwi 태그에서 명사 확인 (NNG: 일반명사, NNP: 고유명사, NNB: 의존명사)
+                if token.tag in ['NNG', 'NNP', 'NNB'] or token.tag.startswith('NN'):
+                    raw_nouns.append(f"{token.form}({token.tag})")  # 태그 정보 포함
+                    
+                    if self._is_meaningful_noun(token.form):
+                        filtered_nouns.append(token.form)
+            
+            token_processing_end = time.time()
+            token_processing_duration = token_processing_end - token_processing_start
+            
+            # 중복 제거하되 순서 유지
+            unique_nouns = list(dict.fromkeys(filtered_nouns))
+            
+            # 🆕 전체 시간 계산
+            morphology_end_time = time.time()
+            morphology_total_duration = morphology_end_time - morphology_start_time
+            
+            # 🆕 상세 분석 로그
+            self.get_logger().info("="*50)
+            self.get_logger().info("📊 형태소 분석 상세 결과")
+            self.get_logger().info(f"⌛ 총 소요시간: {morphology_total_duration:.3f}초")
+            self.get_logger().info(f"  - Kiwi 분석: {kiwi_analysis_duration:.3f}초 ({kiwi_analysis_duration/morphology_total_duration*100:.1f}%)")
+            self.get_logger().info(f"  - 토큰 처리: {token_processing_duration:.3f}초 ({token_processing_duration/morphology_total_duration*100:.1f}%)")
+            self.get_logger().info(f"📝 원시 명사 ({len(raw_nouns)}개): {raw_nouns}")
+            self.get_logger().info(f"✅ 필터링된 명사 ({len(unique_nouns)}개): {unique_nouns}")
+            self.get_logger().info(f"🎯 최종 선택 명사: {unique_nouns}")
+            self.get_logger().info("="*50)
+            
+            return unique_nouns
+            
+        except Exception as e:
+            morphology_end_time = time.time()
+            morphology_duration = morphology_end_time - morphology_start_time
+            
+            self.get_logger().error(f"❌ Kiwi 명사 추출 실패 (소요시간: {morphology_duration:.3f}초): {e}")
+            fallback_result = self._simple_noun_extraction(text)
+            self.get_logger().info(f"🔤 폴백 추출된 명사: {fallback_result}")
+            return fallback_result
+
+
+
+
+    def _simple_noun_extraction(self, text):
+        """
+        Kiwi 실패시 간단한 규칙 기반 명사 추출 (폴백 함수) - 시간 측정 포함
+        """
+        import re
+        
+        fallback_start = time.time()
+        self.get_logger().warning("⚠️ Kiwi 실패 - 간단한 규칙 기반 명사 추출 사용")
+        
+        # 한글 2글자 이상 단어 추출
+        words = re.findall(r'[가-힣]{2,}', text)
+        
+        # 의미있는 명사만 필터링
+        nouns = []
+        for word in words:
+            if self._is_meaningful_noun(word):
+                nouns.append(word)
+        
+        # 중복 제거 후 최대 8개
+        result = list(dict.fromkeys(nouns))[:8]
+        
+        fallback_end = time.time()
+        fallback_duration = fallback_end - fallback_start
+        
+        self.get_logger().info(f"⌛ 폴백 명사 추출 소요시간: {fallback_duration:.3f}초")
+        self.get_logger().info(f"📝 규칙 기반 원시 명사: {words}")
+        self.get_logger().info(f"🔤 필터링 후 명사: {result}")
+        
+        return result
+
+
+
+
+
+
+
+    def _is_meaningful_noun(self, noun):
+        """
+        의미있는 명사인지 판별 (Kiwi용 개선 버전)
+        """
+        # 길이 확인
+        if len(noun) < 2:
+            return False
+        
+        # 개선된 불용어 리스트
+        stopwords = {
+            '것', '데', '거', '게', '걸', '곳', '때', '말', '분', '점', 
+            '번', '개', '명', '사람', '이것', '그것', '저것', '여기',
+            '거기', '저기', '이곳', '그곳', '저곳', '어디', '언제',
+            '누구', '무엇', '어떤', '이런', '그런', '저런', '같은',
+            '다른', '새로운', '오늘', '어제', '내일', '지금', '나중'
+        }
+        
+        if noun in stopwords:
+            return False
+        
+        # 숫자만 있는 경우 제외
+        if noun.isdigit():
+            return False
+        
+        # 특수문자만 있는 경우 제외
+        if not any(char.isalnum() for char in noun):
+            return False
+        
+        # 한글이 포함되어야 함 (한국어 명사)
+        if not any('가' <= char <= '힣' for char in noun):
+            return False
+        
+        # 너무 일반적인 단어 제외
+        common_words = {'위치', '상태', '방법', '시간', '장소', '이유'}
+        if noun in common_words:
+            return False
+        
+        return True
+
+
+
+
+
+
+# 🔑 핵심: 명사와 STT 타임스탬프 매핑
+    def map_nouns_to_timestamps(self, nouns, stt_timestamps, original_text):
+        """
+        추출된 명사들을 STT 타임스탬프와 매핑하여 명사별 타임스탬프 생성
+        """
+        try:
+            if not nouns or not stt_timestamps:
+                return []
+            
+            noun_timestamps = []
+            
+            # 각 명사에 대해 STT에서 가장 적절한 타임스탬프 찾기
+            for noun in nouns:
+                best_match = self._find_best_timestamp_for_noun(noun, stt_timestamps, original_text)
+                if best_match:
+                    noun_timestamps.append({
+                        'word': noun,
+                        'start': best_match['start'],
+                        'end': best_match['end'],
+                        'confidence': best_match['confidence'],
+                        'original_stt_word': best_match['original_word']
+                    })
+            
+            # 🔑 시간순 정렬
+            noun_timestamps.sort(key=lambda x: x['start'])
+            
+            # 🔑 핵심: 시간 분할 및 조정
+            adjusted_timestamps = self._adjust_noun_timestamps(noun_timestamps)
+            
+            self.get_logger().info(f"🎯 명사 타임스탬프 매핑 완료: {len(adjusted_timestamps)}개")
+            
+            return adjusted_timestamps
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ 명사-타임스탬프 매핑 실패: {e}")
+            return []
+
+    def _find_best_timestamp_for_noun(self, noun, stt_timestamps, original_text):
+        """
+        명사에 가장 적합한 STT 타임스탬프 찾기
+        """
+        best_match = None
+        best_score = 0
+        
+        for stt_word in stt_timestamps:
+            # 1. 완전 일치 확인
+            if noun == stt_word['word'].strip():
+                return {
+                    'start': stt_word['start'],
+                    'end': stt_word['end'],
+                    'confidence': stt_word['confidence'],
+                    'original_word': stt_word['word']
+                }
+            
+            # 2. 포함 관계 확인
+            similarity_score = 0
+            if noun in stt_word['word'] or stt_word['word'] in noun:
+                similarity_score = 0.8
+            else:
+                # 3. 편집 거리 기반 유사도
+                similarity_score = SequenceMatcher(None, noun, stt_word['word']).ratio()
+            
+            # 4. 원본 텍스트에서의 근접성도 고려
+            text_proximity = self._calculate_text_proximity(noun, stt_word['word'], original_text)
+            final_score = similarity_score * 0.7 + text_proximity * 0.3
+            
+            if final_score > best_score and final_score > 0.5:  # 임계값
+                best_score = final_score
+                best_match = {
+                    'start': stt_word['start'],
+                    'end': stt_word['end'],
+                    'confidence': stt_word['confidence'] * final_score,
+                    'original_word': stt_word['word']
+                }
+        
+        return best_match
+
+    def _calculate_text_proximity(self, noun, stt_word, original_text):
+        """
+        원본 텍스트에서 두 단어의 근접성 계산
+        """
+        try:
+            noun_pos = original_text.find(noun)
+            stt_pos = original_text.find(stt_word)
+            
+            if noun_pos == -1 or stt_pos == -1:
+                return 0
+            
+            distance = abs(noun_pos - stt_pos)
+            max_distance = len(original_text)
+            
+            return max(0, 1 - (distance / max_distance))
+        except:
+            return 0
+
+    # 🔑 핵심: 시간 분할 및 조정 로직
+    def _adjust_noun_timestamps(self, noun_timestamps):
+        """
+        명사 타임스탬프 조정 및 시간 분할
+        """
+        if not noun_timestamps:
+            return []
+        
+        adjusted = []
+        i = 0
+        
+        while i < len(noun_timestamps):
+            current_noun = noun_timestamps[i]
+            
+            # 같은 시간대에 있는 명사들 그룹핑
+            same_time_group = [current_noun]
+            j = i + 1
+            
+            while j < len(noun_timestamps):
+                next_noun = noun_timestamps[j]
+                # 시간 겹침 확인 (오차 허용)
+                if self._timestamps_overlap(current_noun, next_noun):
+                    same_time_group.append(next_noun)
+                    j += 1
+                else:
+                    break
+            
+            # 🔑 시간 분할 수행
+            if len(same_time_group) > 1:
+                self.get_logger().info(f"⏰ 시간 분할 필요: {len(same_time_group)}개 명사")
+                divided_timestamps = self._divide_timestamp_for_multiple_nouns(same_time_group)
+                adjusted.extend(divided_timestamps)
+            else:
+                # 단일 명사는 그대로 추가 (최소 지속시간 보장)
+                single_noun = same_time_group[0]
+                duration = single_noun['end'] - single_noun['start']
+                if duration < 1.0:  # 최소 1초 보장
+                    single_noun['end'] = single_noun['start'] + 1.0
+                adjusted.append(single_noun)
+            
+            i = j
+        
+        # 최종 겹침 방지 및 간격 조정
+        return self._prevent_timestamp_overlaps(adjusted)
+
+    def _timestamps_overlap(self, ts1, ts2, tolerance=0.5):
+        """
+        두 타임스탬프가 겹치는지 확인 (허용 오차 포함)
+        """
+        return not (ts1['end'] + tolerance < ts2['start'] or ts2['end'] + tolerance < ts1['start'])
+
+    def _divide_timestamp_for_multiple_nouns(self, noun_group):
+        """
+        🔑 핵심: 하나의 타임스탬프를 여러 명사로 균등 분할
+        """
+        if len(noun_group) <= 1:
+            return noun_group
+        
+        # 전체 시간 범위 계산
+        start_time = min(noun['start'] for noun in noun_group)
+        end_time = max(noun['end'] for noun in noun_group)
+        total_duration = end_time - start_time
+        
+        # 명사별 최소 지속시간 보장
+        min_duration_per_noun = 0.8  # 각 명사당 최소 0.8초
+        required_total_duration = len(noun_group) * min_duration_per_noun
+        
+        if total_duration < required_total_duration:
+            total_duration = required_total_duration
+            end_time = start_time + total_duration
+        
+        # 균등 분할
+        duration_per_noun = total_duration / len(noun_group)
+        divided_timestamps = []
+        
+        for i, noun in enumerate(noun_group):
+            noun_start = start_time + (i * duration_per_noun)
+            noun_end = noun_start + duration_per_noun
+            
+            divided_timestamps.append({
+                'word': noun['word'],
+                'start': round(noun_start, 3),
+                'end': round(noun_end, 3),
+                'confidence': noun['confidence'],
+                'original_stt_word': noun['original_stt_word'],
+                'divided': True  # 분할된 표시
+            })
+            
+            self.get_logger().info(f"  📍 '{noun['word']}': {noun_start:.2f}s - {noun_end:.2f}s")
+        
+        return divided_timestamps
+
+    def _prevent_timestamp_overlaps(self, timestamps):
+        """
+        타임스탬프 겹침 방지 및 간격 조정
+        """
+        if not timestamps:
+            return timestamps
+        
+        # 시간순 정렬
+        sorted_timestamps = sorted(timestamps, key=lambda x: x['start'])
+        adjusted = []
+        
+        for i, current in enumerate(sorted_timestamps):
+            if i == 0:
+                adjusted.append(current)
+                continue
+            
+            previous = adjusted[-1]
+            
+            # 겹침 방지
+            if current['start'] < previous['end']:
+                # 시간을 균등하게 조정
+                mid_time = (previous['start'] + current['end']) / 2
+                previous['end'] = round(mid_time - 0.1, 3)  # 100ms 간격
+                current['start'] = round(mid_time + 0.1, 3)
+            
+            # 최소 지속시간 보장
+            if (current['end'] - current['start']) < 0.5:
+                current['end'] = current['start'] + 0.8
+            
+            adjusted.append(current)
+        
+        return adjusted
+
+
+
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Whisper 모델 설정
+# ──────────────────────────────────────────────────────────────────────────────
 
 
     def setup_whisper_environment(self):
@@ -748,6 +1225,7 @@ class Mp3Player(Node):
                 self.get_logger().info(f"  🎤 TTS API 호출:        {tts_api_duration:.2f}초 ({tts_api_duration/total_duration*100:.1f}%)")
                 self.get_logger().info(f"  🔄 WAV 변환:            {wav_convert_duration:.2f}초 ({wav_convert_duration/total_duration*100:.1f}%)")
                 self.get_logger().info(f"  📝 동적자막 생성:        {getattr(self, '_last_stt_duration', 0):.2f}초 ({getattr(self, '_last_stt_duration', 0)/total_duration*100:.1f}%)")
+                self.get_logger().info(f"  🔤 형태소 분석:          {getattr(self, '_last_morphology_duration', 0):.3f}초 ({getattr(self, '_last_morphology_duration', 0)/total_duration*100:.1f}%)")  # 🆕 추가
                 self.get_logger().info(f"  ⚙️ 자막 처리:           {subtitle_process_duration:.2f}초 ({subtitle_process_duration/total_duration*100:.1f}%)")
                 self.get_logger().info(f"  📡 퍼블리시:            {publish_duration:.2f}초 ({publish_duration/total_duration*100:.1f}%)")
                 self.get_logger().info(f"  🏁 전체 소요시간:        {total_duration:.2f}초")
@@ -928,35 +1406,117 @@ class Mp3Player(Node):
 
 
 
+    # def merge_original_with_stt_timestamps(self, original_text, stt_timestamps):
+    #     """
+    #     🆕 개선된 단어 정렬 및 타이밍 매핑
+    #     """
+    #     try:
+    #         original_words = original_text.split()
+            
+    #         if not stt_timestamps:
+    #             return self._create_default_timestamps(original_words)
+            
+    #         # 🆕 지능적 정렬 수행
+    #         aligned_timestamps = self.align_words_with_dynamic_programming(
+    #             original_words, stt_timestamps
+    #         )
+            
+    #         # 🆕 타이밍 후처리
+    #         smoothed_timestamps = self.smooth_timestamps(aligned_timestamps)
+            
+    #         # 디버깅 로그
+    #         self.get_logger().info(f"🎯 정렬 결과: {len(original_words)}개 원본 → {len(smoothed_timestamps)}개 자막")
+            
+    #         for i, ts in enumerate(smoothed_timestamps[:5]):  # 처음 5개만 로깅
+    #             self.get_logger().info(f"  [{i}] '{ts['word']}': {ts['start']:.2f}s-{ts['end']:.2f}s (신뢰도: {ts['confidence']:.2f}, 매칭: {ts['match_type']})")
+            
+    #         return smoothed_timestamps
+            
+    #     except Exception as e:
+    #         self.get_logger().error(f"❌ 고급 정렬 실패: {e}")
+    #         return stt_timestamps  # 실패시 원본 STT 결과 반환
+
+
+
+
     def merge_original_with_stt_timestamps(self, original_text, stt_timestamps):
         """
-        🆕 개선된 단어 정렬 및 타이밍 매핑
+        🆕 명사 전용 자막 생성 (기존 함수 완전 교체)
         """
         try:
-            original_words = original_text.split()
+            # 🆕 형태소 분석 시간 측정 시작
+            morphology_extraction_start = time.time()
             
+            # 1. 명사 추출
+            nouns = self.extract_nouns_from_text(original_text)
+            
+            # 🆕 형태소 분석 시간 저장 (나중에 전체 시간 분석에서 사용)
+            morphology_extraction_end = time.time()
+            self._last_morphology_duration = morphology_extraction_end - morphology_extraction_start
+            
+            if not nouns:
+                self.get_logger().warning("⚠️ 추출된 명사가 없습니다. 기본 자막 생성")
+                return self._create_fallback_subtitle_data(original_text)
+            
+            # 나머지 코드는 동일...
+            # 2. STT가 없는 경우 기본 타임스탬프 생성
             if not stt_timestamps:
-                return self._create_default_timestamps(original_words)
+                return self._create_default_noun_timestamps(nouns)
             
-            # 🆕 지능적 정렬 수행
-            aligned_timestamps = self.align_words_with_dynamic_programming(
-                original_words, stt_timestamps
-            )
+            # 3. 명사와 STT 타임스탬프 매핑 및 분할
+            noun_timestamps = self.map_nouns_to_timestamps(nouns, stt_timestamps, original_text)
             
-            # 🆕 타이밍 후처리
-            smoothed_timestamps = self.smooth_timestamps(aligned_timestamps)
+            if not noun_timestamps:
+                self.get_logger().warning("⚠️ 명사 타임스탬프 매핑 실패")
+                return self._create_default_noun_timestamps(nouns)
             
-            # 디버깅 로그
-            self.get_logger().info(f"🎯 정렬 결과: {len(original_words)}개 원본 → {len(smoothed_timestamps)}개 자막")
+            self.get_logger().info(f"✅ 명사 자막 생성 완료: {len(noun_timestamps)}개 명사")
+            for i, ts in enumerate(noun_timestamps[:3]):  # 처음 3개만 로그
+                divided_info = " (분할됨)" if ts.get('divided') else ""
+                self.get_logger().info(f"  [{i}] '{ts['word']}': {ts['start']:.2f}s-{ts['end']:.2f}s{divided_info}")
             
-            for i, ts in enumerate(smoothed_timestamps[:5]):  # 처음 5개만 로깅
-                self.get_logger().info(f"  [{i}] '{ts['word']}': {ts['start']:.2f}s-{ts['end']:.2f}s (신뢰도: {ts['confidence']:.2f}, 매칭: {ts['match_type']})")
-            
-            return smoothed_timestamps
+            return noun_timestamps
             
         except Exception as e:
-            self.get_logger().error(f"❌ 고급 정렬 실패: {e}")
-            return stt_timestamps  # 실패시 원본 STT 결과 반환
+            self.get_logger().error(f"❌ 명사 자막 생성 실패: {e}")
+            return self._create_fallback_subtitle_data(original_text)
+
+
+
+
+    def _create_default_noun_timestamps(self, nouns):
+            """
+            STT 실패시 명사용 기본 타임스탬프 생성
+            """
+            timestamps = []
+            current_time = 0.0
+            
+            for noun in nouns:
+                duration = max(1.0, len(noun) * 0.3)  # 명사는 더 긴 지속시간
+                
+                timestamps.append({
+                    'word': noun,
+                    'start': round(current_time, 3),
+                    'end': round(current_time + duration, 3),
+                    'confidence': 1.0,
+                    'original_stt_word': noun
+                })
+                
+                current_time += duration + 0.5  # 명사 간 간격
+            
+            return timestamps
+
+    def _create_fallback_subtitle_data(self, text):
+        """
+        모든 처리 실패시 폴백 데이터
+        """
+        return [{
+            'word': '처리 중...',
+            'start': 0,
+            'end': 3,
+            'confidence': 1.0,
+            'original_stt_word': text[:20] + '...' if len(text) > 20 else text
+        }]
 
 
 
