@@ -1,50 +1,35 @@
 
-from __future__ import annotations
+//동적자막(google-stt 이용)
 
-# ────────────────────────────────────────────────────────────────
-# Std / third‑party imports
-# ────────────────────────────────────────────────────────────────
-from typing import Optional
-import os, threading, time, queue, random, asyncio, wave
-from datetime import datetime
-import numpy as np
-import torch
-import pyaudio
-import webrtcvad
-import soundfile as sf
-import tempfile
-from rclpy.node import Node
-from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
-from google.cloud import speech
-from dotenv import load_dotenv
-import pygame
-import rclpy
-from rclpy.node import Node
-import simpleaudio as sa
-from pydub import AudioSegment
-from pydub.playback import play
-import json
-from std_msgs.msg import String, Float32
-import librosa
-import librosa.display
-from scipy import ndimage 
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
-from scipy import signal
-import matplotlib.pyplot as plt
-import webbrowser
-from openpyxl import Workbook
-from datetime import datetime
-import csv
+import React, { useEffect, useRef, useState } from 'react';
+import ros from './ros';
+import ROSLIB from 'roslib';
 
-# 기존 imports에 추가
-import requests  # TTS API 호출용
 
-import websockets
-import asyncio
-from openai import AsyncOpenAI
-import base64
-from openai import OpenAI
+
+
+
+
+// 중앙 일부만 사용
+function getCentralSlice(arr, ratio = 0.6) {
+  const total = arr.length;
+  const sliceSize = Math.floor(total * ratio);
+  const start = Math.floor((total - sliceSize) / 2);
+  return arr.slice(start, start + sliceSize);
+}
+
+// 다운샘플(평균)로 바 개수 줄이기
+function downsampleArray(arr, targetLen) {
+  const result = [];
+  const binSize = Math.floor(arr.length / targetLen);
+  for (let i = 0; i < targetLen; i++) {
+    const start = i * binSize;
+    const end = (i + 1) * binSize;
+    const bin = arr.slice(start, end);
+    result.push(bin.reduce((a, b) => a + b, 0) / bin.length || 0);
+  }
+  return result;
+}
 
 
 
@@ -52,506 +37,271 @@ from openai import OpenAI
 
 
 
+function SpectrumVisualizer() {
+
+  // 🆕 비디오 관련 상태 변수들 추가
+  const [currentVideo, setCurrentVideo] = useState(null);
+  const [videoVisible, setVideoVisible] = useState(false);
+  const [currentReply, setCurrentReply] = useState(''); // 추가: reply 텍스트
+  const videoRef = useRef(null); // 비디오 ref 추가
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 🆕 시간 도메인 최대 소리크기 기반 원형 스펙트럼 처리
-# ──────────────────────────────────────────────────────────────────────────────
-class VoiceCircularSpectrum:
-    def __init__(self):
-        self.volume_history = []
-        self.history_size = 1  # 🔧 5프레임에서 3프레임으로 줄여서 더 빠른 반응
-        self.peak_decay_rate = 0.85  # 🆕 피크 감쇠율 추가
-        self.current_peak = 0.0  # 🆕 현재 피크값 추적
-        
-    def calculate_volume(self, audio_data):
-        """시간 도메인에서 최대 소리크기 계산 - 원본 최대값 반환"""
-        samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
-        if len(samples) == 0:
-            return 0.0
-        
-        # 🔑 핵심 변경: RMS 대신 Peak Amplitude (최대 절댓값) 계산
-        peak_amplitude = np.max(np.abs(samples))
-        
-        # 🆕 현재 피크와 비교하여 더 큰 값 선택
-        if peak_amplitude > self.current_peak*0.8:
-            self.current_peak = peak_amplitude
-        else:
-            # 🆕 피크 감쇠 적용 (자연스러운 감소)
-            self.current_peak *= self.peak_decay_rate
-        
-        # # 🆕 최근 최대값들을 히스토리에 저장
-        # self.volume_history.append(peak_amplitude)
-        # if len(self.volume_history) > self.history_size:
-        #     self.volume_history.pop(0)
-        
-        # # 🆕 현재 피크와 최근 최대값 중 더 큰 값 반환
-        # recent_max = np.max(self.volume_history) if self.volume_history else 0.0
-        # final_volume = max(self.current_peak, recent_max)
-        # 🚀 히스토리 최소화 (1프레임만)
-        self.volume_history = [peak_amplitude]  # 현재값만 저장
 
-        # 🚀 현재 피크와 즉시값 중 더 큰 값
-        return float(max(self.current_peak, peak_amplitude))
+  // 🆕 분리된 스펙트럼 상태
+  const [musicSpectrum, setMusicSpectrum] = useState([]);
+  const [micSpectrum, setMicSpectrum] = useState([]);
+
+  const [musicPlaying, setMusicPlaying] = useState(false);
+  //const [currentImage, setCurrentImage] = useState(null); // 이미지 상태 추가
+  const canvasRef = useRef(null);
+  const [recommendStatus, setRecommendStatus] = useState('done');
+  const [canvasSize, setCanvasSize] = useState({ width: 800, height: 400 });
+  //const [imageVisible, setImageVisible] = useState(false);
+  const [canShowSpectrum, setCanShowSpectrum] = useState(false);
+
+  // 🆕 방향 상태 추가
+  const [soundDirection, setSoundDirection] = useState(0);
+  const [screenFlipped, setScreenFlipped] = useState(false);
+
+  // 🆕 누락된 상태 변수들 추가
+  const [fixedDirection, setFixedDirection] = useState(null);
+  const [isDirectionFixed, setIsDirectionFixed] = useState(false);
+
+  
+
+// 🆕 trigger_detected 상태 추가 (기존 플래그 재사용)
+  const [triggerDetected, setTriggerDetected] = useState(false);
+  const [currentGif, setCurrentGif] = useState('');
+
+
+  // 기존 상태 변수들 다음에 추가
+  const [waitingSpectrum, setWaitingSpectrum] = useState([]);
+
+  const [isWaitingAudioMode, setIsWaitingAudioMode] = useState(false);
+
+
+  // Mp3Player waiting 전용 상태 추가
+  const [mp3WaitingSpectrum, setMp3WaitingSpectrum] = useState([]);
+  const [isMp3WaitingMode , setIsMp3WaitingMode] = useState(false);
+
+
+  // 기존 상태 변수들 다음에 추가
+  const [isTransitioning, setIsTransitioning] = useState(false);
+
+
+
+
+
+
+ // 🆕 TTS 관련 상태 추가
+ const [ttsStatus, setTtsStatus] = useState('idle'); // idle, generating, ready, playing, done, error
+ const [showReply, setShowReply] = useState(false);
+
+
+
+// 🆕 TTS 관련 상태 추가
+const [ttsVolume, setTtsVolume] = useState(0);
+const [isTtsPlaying, setIsTtsPlaying] = useState(false);
+
+
+// 기존 TTS 상태들 다음에 추가
+const [ttsSubtitle, setTtsSubtitle] = useState(null); // 자막 데이터
+const [currentTtsTime, setCurrentTtsTime] = useState(0); // 현재 재생 시간
+const [currentWordIndex, setCurrentWordIndex] = useState(-1); // 현재 재생 중인 단어 인덱스
+
+// 기존 TTS 상태들 다음에 추가
+const [currentTtsVolume, setCurrentTtsVolume] = useState(0); // 🆕 실시간 음량 상태
+
+const [wordMaxVolumes, setWordMaxVolumes] = useState({}); // 🆕 각 단어별 최대 음량 저장
+
+
+// 🆕 UserQuestion 소리크기 비례 원형 스펙트럼 관련 상태 추가
+const [voiceVolume, setVoiceVolume] = useState(0);
+const [isVoiceActive, setIsVoiceActive] = useState(false);
+
+
+
+// 🆕 사용자 질문 표시용 상태 변수 추가
+const [userQuestionText, setUserQuestionText] = useState('');
+const [showUserQuestion, setShowUserQuestion] = useState(false);
+
+
+
+// 🔧 Realtime 관련 상태 제거하고 질문 확인 TTS 상태로 교체
+const [questionConfirmStatus, setQuestionConfirmStatus] = useState('idle'); // 'idle', 'playing', 'completed'
+const [pendingVideo, setPendingVideo] = useState(null);
+const [pendingReply, setPendingReply] = useState('');
+
+
+// 대기 상태 통합 관리
+const [pendingContent, setPendingContent] = useState(null); // { type: 'video'|'tts_only', videoPath?, reply }
+const [waitingForQuestionConfirm, setWaitingForQuestionConfirm] = useState(false);
+
+
+// 🔧 수정된 질문확인 상태 구독
+useEffect(() => {
+  const questionConfirmStatusListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/question_confirm_status',
+    messageType: 'std_msgs/String'
+  });
+  
+  questionConfirmStatusListener.subscribe((message) => {
+    const newStatus = message.data;
     
-    def reset(self):
-        """새 세션 시작시 초기화"""
-        self.volume_history = []
-        self.current_peak = 0.0  # 🆕 피크값도 초기화
-
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# UserQuestion 노드
-# ──────────────────────────────────────────────────────────────────────────────
-
-class UserQuestion(Node):
-    def __init__(self):
-        super().__init__("UserQuestion")
-        self.get_logger().info("UserQuestion Node started")
-        load_dotenv("/home/nvidia/ros2_ws/src/.env")
-
-        # Google Cloud STT
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/home/nvidia/ros2_ws/my-service-account.json"
-        self.client = speech.SpeechClient()
-
-
-        # 신뢰성 높은 QoS 설정
-        reliable_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL
-        )
-
-
-        # ROS 2 인터페이스
-        stt_group = ReentrantCallbackGroup()
-        self.publisher_ = self.create_publisher(String, "user_question", 10)
-        # 트리거 상태 퍼블리시용 추가
-        self.trigger_status_pub = self.create_publisher(String, "/trigger_status", 10)
-        self.gif_status_pub = self.create_publisher(String, "/gif_status", 10)
-        #self.gif_status_pub = self.create_publisher(String, "/gif_status", reliable_qos)
+    if (questionConfirmStatus !== newStatus) {
+      console.log(`🎙️ 질문확인 TTS 상태 전환: ${questionConfirmStatus} → ${newStatus}`);
+      setQuestionConfirmStatus(newStatus);
+      
+      // 🆕 질문확인 완료 시 대기 중인 컨텐츠 처리
+      if (newStatus === 'completed') {
+        console.log('✅ 질문확인 TTS 완료');
         
-
-        # self.create_subscription(
-        #     String, "processing_done", self.processing_done_callback, 10
-        # )
-        self.processing_subscription = self.create_subscription(String, "processing_done", self.processing_done_callback, 10)
-        # self.music_status_subscription = self.create_subscription(String, "music_status", self.music_status_callback, 10)
-        self.stt_restart_subscription = self.create_subscription(String, "stt_restart", self.stt_restart_callback, 10)
-       
-
-        self.spectrum_frame_counter = 0
-        self.spectrum_skip_rate = 2  # 2프레임마다 1번만 처리
-
-
-        # 상태 변수
-        self.audio_stream = queue.Queue()
-        self.audio_buffer = []  
-
-        self.processing = False  
-        self.music_playing = False  
-        self.last_published_text = ""  
-        self.stt_restart_time = time.time()  
-        self.partial_transcript = ""  
-        self.trigger_detected = False  
-
-        self.last_speech_time = time.time()
-        self.is_sound_playing = False
-        
-       
-
-        # ✅ 강제 퍼블리시 방지를 위한 플래그 추가
-        self.force_published = False 
-        self.transcribing = False  # ✅ STT 중복 실행 방지용
-        self.ignore_stt = False  # 🔇 효과음 재생 중 STT 무시
-
-        self.waiting_for_input_after_music = False  # 음악 종료 후 최초 입력 대기 플래그
-        self.timer_30s = None  # 30초 타이머 초기화
-
-        # PyAudio 세팅 (16 kHz mono)
-        self.p = pyaudio.PyAudio()
-        # self.stream = self.p.open(
-        #     format=pyaudio.paInt16,
-        #     channels=1,
-        #     rate=16000,
-        #     input=True,
-        #     frames_per_buffer=1024,
-        #     stream_callback=self.audio_callback,
-        # )
-        # # STT 스레드 시작
-        # threading.Thread(target=self.transcribe_streaming, daemon=True).start()
-        self.device_index = 24
-        
-        self.stream = None
-
-        # 마이크 스트리밍 시작
-        self.visualizer_pub = self.create_publisher(String, "/audio_visualizer", 10)
-        
-
-
-        self.visualizer_queue = queue.Queue(maxsize=100)
-
-        threading.Thread(target=self.visualizer_worker, daemon=True).start()
-
-        self.is_speaking = False  # STT 인식 중인지 여부
-        self.current_speaker_id = 1  # 최초 화자 id 1로 시작
-        # 음성 강조 스펙트럼 시각화를 위한 변수 추가
-        self.baseline_spectrum = None
-        self.spectrum_history = []
-        self.history_size = 50
-        self.sample_rate = 16000
-        
-        # 주파수 계산을 위한 변수
-        self.fft_size = 1024
-        self.freqs = np.fft.fftfreq(self.fft_size, 1/self.sample_rate)[:self.fft_size//2]
-
-        # 🆕 현재 각도 저장 및 고정 각도 퍼블리시용
-        self.current_direction = 0.0
-        self.fixed_direction_pub = self.create_publisher(Float32, "/fixed_direction", 10)
-        
-        # 🆕 실시간 각도 구독
-        self.direction_sub = self.create_subscription(
-            Float32, 
-            '/sound_direction_angle', 
-            self.direction_callback, 
-            10
-        )
-
-     
-       
-        # 기존 플래그들 다음에 추가
-        self.waiting_sequence_running = False
-
-
-     
-
-        # 스펙트럼 평균화를 위한 변수들 (기존 변수들과 함께 추가)
-        self.spectrum_buffer = []  # 5개의 스펙트럼을 저장할 버퍼
-        self.spectrum_count = 0    # 현재 누적된 스펙트럼 개수
-
-
-
-            
-
-
-
-        # 🆕 실시간 음성 원형 스펙트럼 퍼블리셔 (기존 realtime_words_pub 대신)
-        self.voice_spectrum_pub = self.create_publisher(String, "/voice_spectrum", 10)
-        # 🆕 실시간 음성 스펙트럼 처리 추가 (기존 word_processor 대신)
-        self.voice_spectrum = VoiceCircularSpectrum()
-
-
-        # 🆕 질문 확인 TTS 파일 저장 경로 추가
-        self.question_confirm_path = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/question_confirm.mp3"
-
-        # 🆕 TTS 상태 구독 추가
-        self.tts_status_subscription = self.create_subscription(
-            String, "tts_status", self.tts_status_callback, 10
-        )
-
-
-        # 🆕 사용자 질문 표시용 퍼블리셔 추가
-        self.user_question_display_pub = self.create_publisher(String, "/user_question_display", 10)
-
-        # 🆕 GPT-4.1 nano 관련 설정
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            self.get_logger().error("❌ OPENAI_API_KEY가 설정되지 않음")
-            raise ValueError("OPENAI_API_KEY 필수")
-        
-        self.openai_client = OpenAI(api_key=api_key)  # 동기 클라이언트 사용
-
-        # 🆕 질문 확인 TTS 관련 변수
-        self.question_confirm_path = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/question_confirm.mp3"
-        self.question_confirm_playing = False  # TTS 재생 중 플래그
-        self.pending_mp4_data = None  # 대기 중인 mp4 데이터
-
-        self.question_confirm_status_pub = self.create_publisher(String, "/question_confirm_status", 10)
-
-
-        self.start_audio_stream()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # 🆕 GPT-4.1 nano로 질문 확인 문구 생성
-    def generate_question_confirmation(self, user_question):
-        """GPT-4.1 nano를 사용해 질문 확인 문구 생성"""
-        try:
-            self.get_logger().info(f"🤖 GPT-4.1 nano로 질문 확인 문구 생성: {user_question}")
-            
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4.1-nano",  # GPT-4.1 nano 대신 4o-mini 사용
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are Dangdang, a witty robotic dog at KIST. "
-                    "The user just asked a question. Your job is to acknowledge their question "
-                    "in a casual, engaging way while you're 'thinking' about the answer. "
-                    "Keep responses conversational and natural, around 2-3 sentences. "
-                    "Use phrases like '그걸 물어본거지?', '한번 알아볼까?', '잠깐만, 생각해보자' etc. "
-                    "Speak in Korean in a friendly, slightly snarky tone."
-                        )
-                    },
-                    {
-                        "role": "user", 
-                        "content": f"사용자가 '{user_question}'라고 질문했어. 이 질문을 확인하면서 답변을 찾고 있다는 느낌으로 2-3문장 정도로 자연스럽게 응답해줘."
-                    }
-                ],
-                temperature=0.7,
-                max_tokens=100
-            )
-            
-            confirmation_text = response.choices[0].message.content.strip()
-            self.get_logger().info(f"✅ 질문 확인 문구 생성 완료: {confirmation_text}")
-            return confirmation_text
-            
-        except Exception as e:
-            self.get_logger().error(f"❌ GPT-4.1 nano 호출 실패: {e}")
-            # 기본 문구 반환
-            return f"{user_question} 라고 물어본거지? 잠깐만, 찾아볼게!"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # 🔧 수정된 Mp3Recommender 완료 처리
-    def mp3_recommend_done_callback(self, msg):
-        """Mp3Recommender 완료 처리 - TTS 재생 중이면 대기"""
-        if msg.data == "completed":
-            if self.question_confirm_playing:
-                self.get_logger().info("🎵 TTS 재생 중 - mp4 데이터 대기 저장")
-                self.pending_mp4_data = msg.data  # 실제로는 mp4 데이터가 별도 토픽으로 올 것
-            else:
-                self.get_logger().info("📬 Mp3Recommender 완료 - 즉시 처리 가능")
-                # 즉시 처리 (기존 로직)
-
-
-
-
-
-    # 🆕 ElevenLabs TTS 함수 추가
-    def text2speech_question_confirm(self, text):
-        """ElevenLabs TTS 호출하여 질문 확인 음성 생성"""
-        api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        voice_id = "59zWnTQLbwyr94bFbcUe"
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
-        headers = {
-            "xi-api-key": api_key,
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg"
+        if (waitingForQuestionConfirm && pendingContent) {
+          console.log('🎬 대기 중인 컨텐츠 처리 시작');
+          processPendingContent(pendingContent);
+          
+          // 대기 상태 초기화
+          setPendingContent(null);
+          setWaitingForQuestionConfirm(false);
         }
-
-        data = {
-            "text": text,
-            # "model_id": "eleven_multilingual_v2",
-            "model_id": "eleven_flash_v2_5",
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
-                # "style": 0.25,
-                "speed": 0.8
-            },
-            "apply_text_normalization": "off"
-        }
-
-        try:
-            start_time = time.time()
-            response = requests.post(url, headers=headers, json=data)
-            
-            if response.status_code == 200:
-                with open(self.question_confirm_path, "wb") as f:
-                    f.write(response.content)
-                
-                generation_time = time.time() - start_time    
-                self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 → {self.question_confirm_path}")
-                self.get_logger().info(f"⏱️ TTS 생성 시간: {generation_time:.3f}초")
-                return True
-            else:
-                self.get_logger().error(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
-                return False
-                
-        except Exception as e:
-            self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
-            return False
+      }
+    }
+  });
+  
+  return () => {
+    questionConfirmStatusListener.unsubscribe();
+  };
+}, [questionConfirmStatus, waitingForQuestionConfirm, pendingContent]);
 
 
-
-
-    def extract_question_from_published_text(self, published_text):
-            """published_text에서 순수 질문만 추출"""
-            try:
-                if "|" in published_text:
-                    _, question = published_text.split("|", 1)
-                    return question.strip()
-                else:
-                    return published_text.strip()
-            except Exception as e:
-                self.get_logger().error(f"질문 추출 실패: {e}")
-                return published_text
-
-
-
-    # 🆕 질문 확인 TTS 재생 함수
-    def play_question_confirm_tts(self, audio_path):
-        """질문 확인 TTS를 재생하고 완료 시 상태 퍼블리시"""
-        def play_audio():
-            try:
-                self.question_confirm_playing = True
-                
-                # 재생 시작 상태 퍼블리시
-                self.publish_question_confirm_status("playing")
-                
-                # pygame으로 MP3 재생
-                pygame.mixer.init()
-                pygame.mixer.music.load(audio_path)
-                pygame.mixer.music.play()
-                
-                # 재생 완료까지 대기
-                while pygame.mixer.music.get_busy():
-                    pygame.time.Clock().tick(10)
-                
-                self.get_logger().info("🎵 질문 확인 TTS 재생 완료")
-                
-            except Exception as e:
-                self.get_logger().error(f"❌ TTS 재생 실패: {e}")
-            finally:
-                self.question_confirm_playing = False
-                # 재생 완료 상태 퍼블리시
-                self.publish_question_confirm_status("completed")
-                
-                # 🔧 대기 중인 mp4가 있으면 재생 허용 신호 전송
-                if self.pending_mp4_data:
-                    self.get_logger().info("📬 TTS 완료 - 대기 중인 mp4 재생 허용")
-                    self.process_pending_mp4()
-
-        # 별도 스레드에서 재생
-        threading.Thread(target=play_audio, daemon=True).start()
-
-
-    # 🆕 대기 중인 mp4 처리 함수
-    def process_pending_mp4(self):
-        """대기 중인 mp4 재생 허용"""
-        if self.pending_mp4_data:
-            # 여기서는 단순히 완료 신호만 재전송
-            # 실제 mp4 재생은 App.jsx에서 question_confirm_status를 보고 처리
-            self.pending_mp4_data = None
-
-
-    # 🆕 질문 확인 상태 퍼블리시 함수
-    def publish_question_confirm_status(self, status):
-        """질문 확인 TTS 상태를 프론트엔드에 전송"""
-        msg = String()
-        msg.data = status
-        self.question_confirm_status_pub.publish(msg)
-        self.get_logger().info(f"🎙️ 질문 확인 상태 퍼블리시: {status}")
-
-
-
-
+ // 🆕 사용자 질문 표시용 구독 추가
+ useEffect(() => {
+  const userQuestionDisplayListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/user_question_display',
+    messageType: 'std_msgs/String'
+  });
+  
+  userQuestionDisplayListener.subscribe((message) => {
+    console.log('🗨️ 사용자 질문 표시 데이터 수신:', message.data);
     
+    if (message.data && message.data.trim() !== "") {
+      setUserQuestionText(message.data.trim());
+      setShowUserQuestion(true);
+      console.log('✅ 사용자 질문 말풍선 표시:', message.data);
+    } else {
+      setUserQuestionText('');
+      setShowUserQuestion(false);
+      console.log('❌ 사용자 질문 말풍선 숨김');
+    }
+  });
+  
+  return () => {
+    console.log('🗨️ 사용자 질문 표시 리스너 해제');
+    userQuestionDisplayListener.unsubscribe();
+  };
+}, []);
+
+// 🔧 수정된 renderUserQuestionBubble 함수
+const renderUserQuestionBubble = () => {
+  // 🆕 조건 완화: isWaitingAudioMode 조건 제거
+  if (!showUserQuestion || !userQuestionText) {
+    return null;
+  }
+
+  // 🆕 대기 상태 추가 고려
+  if (isTtsPlaying || videoVisible || waitingForQuestionConfirm) {
+    return null;
+  }
 
 
-
+  return (
+    <div style={{
+      position: 'absolute',
+      top: '20%',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      zIndex: 40, // 🔧 z-index 상향 조정 (기존 35 → 40)
+      maxWidth: '90vw',
+      padding: '0',
+      pointerEvents: 'none'
+    }}>
+      {/* 기존 말풍선 UI 코드 동일 */}
+      <div style={{
+        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+        color: '#333',
+        padding: '30px 40px',
+        borderRadius: '35px',
+        fontSize: '2.2rem',
+        fontWeight: '600',
+        textAlign: 'center',
+        boxShadow: '0 12px 48px rgba(0, 0, 0, 0.4)',
+        border: '4px solid rgba(100, 200, 255, 0.8)',
+        position: 'relative',
+        maxWidth: '800px',
+        wordWrap: 'break-word',
+        lineHeight: '1.4',
+        animation: 'bubbleAppear 0.3s ease-out'
+      }}>
+        {/* 말풍선 꼬리들과 내용은 기존과 동일 */}
+        <div style={{
+          position: 'absolute',
+          bottom: '-20px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: '0',
+          height: '0',
+          borderLeft: '20px solid transparent',
+          borderRight: '20px solid transparent',
+          borderTop: '20px solid rgba(255, 255, 255, 0.95)'
+        }} />
         
+        <div style={{
+          position: 'absolute',
+          bottom: '-24px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: '0',
+          height: '0',
+          borderLeft: '27px solid transparent',
+          borderRight: '27px solid transparent',
+          borderTop: '27px solid rgba(100, 200, 255, 0.8)',
+          zIndex: -1
+        }} />
+        
+        <div style={{
+          marginBottom: '10px'
+        }}>
+          "{userQuestionText}"
+        </div>
+        
+        <div style={{
+          fontSize: '1.4rem',
+          color: '#666',
+          fontWeight: '400'
+        }}>
+          이렇게 들었어!
+        </div>
+      </div>
 
-    # def text2speech_question_confirm(self, text):
-    #     """
-    #     ElevenLabs TTS 호출하여 질문 확인 음성 생성
-    #     """
-    #     api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-    #     voice_id = "59zWnTQLbwyr94bFbcUe"
-    #     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
-    #     headers = {
-    #         "xi-api-key": api_key,
-    #         "Content-Type": "application/json",
-    #         "Accept": "audio/mpeg"
-    #     }
-
-    #     data = {
-    #         "text": text,
-    #         "model_id": "eleven_multilingual_v2",
-    #         "voice_settings": {
-    #             "stability": 0.5,
-    #             "similarity_boost": 0.75,
-    #             "style": 0.25,
-    #             "speed": 0.9
-    #         },
-    #         "apply_text_normalization": "on"
-    #     }
-
-    #     try:
-    #         # 🕐 TTS 생성 시간 측정 시작
-    #         start_time = time.time()
-
-
-    #         response = requests.post(url, headers=headers, json=data)
-    #         if response.status_code == 200:
-    #             with open(self.question_confirm_path, "wb") as f:
-    #                 f.write(response.content)
-    #             # 🕐 TTS 생성 완료 시간 계산
-    #             generation_time = time.time() - start_time    
-    #             self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 → {self.question_confirm_path}")
-    #             self.get_logger().info(f"⏱️ TTS 생성 시간: {generation_time:.3f}초")
-    #             self.save_log(f"🟢 질문 확인 TTS 생성 성공")
-    #             return True
-    #         else:
-    #             self.get_logger().error(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
-    #             self.save_log(f"🔴 TTS 오류 발생: {response.status_code}")
-    #             self.get_logger().info(f"⏱️ TTS 시도 시간: {generation_time:.3f}초")
-    #             return False
-    #     except Exception as e:
-    #         self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
-    #         self.save_log(f"🔴 TTS 호출 실패: {e}")
-    #         self.get_logger().info(f"⏱️ TTS 시도 시간: {generation_time:.3f}초")
-    #         return False
-
-    # def extract_question_from_published_text(self, published_text):
-    #     """
-    #     published_text에서 순수 질문만 추출
-    #     형태: "speaker001|질문내용" → "질문내용"
-    #     """
-    #     try:
-    #         if "|" in published_text:
-    #             _, question = published_text.split("|", 1)
-    #             return question.strip()
-    #         else:
-    #             return published_text.strip()
-    #     except Exception as e:
-    #         self.get_logger().error(f"질문 추출 실패: {e}")
-    #         return published_text
+      <style>
+        {`
+          @keyframes bubbleAppear {
+            0% { 
+              transform: translateX(-50%) translateY(-20px) scale(0.8);
+              opacity: 0;
+            }
+            100% { 
+              transform: translateX(-50%) translateY(0) scale(1);
+              opacity: 1;
+            }
+          }
+        `}
+      </style>
+    </div>
+  );
+};
 
 
 
@@ -570,152 +320,633 @@ class UserQuestion(Node):
 
 
 
-    # ── Google STT -----------------------------------------------------------
-
-    
-    def processing_done_callback(self, msg):
-        """ ✅ 오류 해결: 이 함수가 누락되어 있었음 """
-        self.get_logger().info("Processing completed. Resuming recognition.")
-        self.processing = False
-        self.last_published_text = ""  
-        self.force_restart_stt()
-
-
-    def publish_trigger_status(self):
-            """🆕 기존 trigger_detected 플래그 상태를 프론트엔드로 전송"""
-            status = "triggered" if self.trigger_detected else "waiting"
-            msg = String()
-            msg.data = status
-            self.trigger_status_pub.publish(msg)
-            self.get_logger().info(f"Trigger status published: {status}")
 
 
 
-    # def music_status_callback(self, msg):
-    #     """ 음악 상태에 따라 STT 동작 제어 """
-    #     if msg.data == "music_playing":
-    #         self.get_logger().info("Music is playing. Muting STT output.")
-    #         self.music_playing = True
-    #         self.audio_stream.queue.clear()
-    #         self.audio_buffer = []
-    #         self.partial_transcript = ""
-    #         self.stop_audio_stream()
 
-    #     elif msg.data == "music_done":
-    #         self.get_logger().info("Music playback finished. Resuming STT output.")
-    #         self.music_playing = False
-    #         self.word_processor.reset() 
-    #         self.publish_realtime_phrase("")   # ← True 플래그
 
-    #         # 음악 종료 후 입력 대기 플래그 활성화
-    #         self.trigger_detected = True
-    #         self.waiting_for_input_after_music = True
-    #         self.partial_transcript = ""
-    #         # 🆕 트리거 상태 퍼블리시 (대기 상태)
-    #         self.publish_trigger_status()
-
-    #         # 마이크 입력 다시 시작 및 STT 재개
-    #         self.start_audio_stream()
-    #         threading.Thread(target=self.transcribe_streaming, daemon=True).start()
-
-    #         # 음악 종료 후 30초 타이머 시작
-    #         self.start_30s_timer()
-    #         # 무음 모니터링은 최초 입력이 들어올 때 시작
+// 🆕 TTS 자막 데이터 구독
+useEffect(() => {
+  const ttsSubtitleListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/tts_subtitle',
+    messageType: 'std_msgs/String'
+  });
+  
+  ttsSubtitleListener.subscribe((message) => {
+    try {
+      const subtitleData = JSON.parse(message.data);
+      console.log('📝 TTS 자막 데이터 수신:', subtitleData);
+      setTtsSubtitle(subtitleData);
+      setCurrentWordIndex(-1); // 초기화
+      setCurrentTtsTime(0); // 시간 초기화
+    } catch (e) {
+      console.error('TTS 자막 JSON parse error:', e);
+    }
+  });
+  
+  return () => {
+    ttsSubtitleListener.unsubscribe();
+  };
+}, []);
 
 
 
-    def tts_status_callback(self, msg):
-        """TTS 상태 변화 감지 - 30초 타이머 기반 speaker_id 관리"""
-        if msg.data == "tts_done":
-            self.get_logger().info("🎵 TTS 재생 완료 - 30초 타이머 기반 대기 모드로 전환")
-            self.save_log("🎵 TTS 재생 완료 - 30초 타이머 기반 대기 모드로 전환")
+const renderTtsKaraokeSubtitle = () => {
+  if (!isTtsPlaying || !ttsSubtitle || !ttsSubtitle.words || ttsSubtitle.words.length === 0) {
+    return null;
+  }
+
+  return (
+    <div style={{
+      position: 'absolute',
+      top: '0',
+      left: '0',
+      width: '100vw',
+      height: '100vh',
+      zIndex: 30,
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: 'rgba(26, 26, 26, 0.95)'
+    }}>
+      <div style={{
+        maxWidth: '90vw',
+        textAlign: 'center',
+        padding: '40px 20px'
+      }}>
+        <div style={{
+          lineHeight: '1.4',
+          letterSpacing: '0.05em',
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+          alignItems: 'center',
+          gap: '0.3em',
+          minHeight: '200px' // 🆕 최소 높이 설정으로 레이아웃 안정화
+        }}>
+          {ttsSubtitle.words.map((wordInfo, index) => {
+            const isActive = index === currentWordIndex;
             
-            # ✅ 상태 초기화 (speaker_id는 변경하지 않음)
-            self.music_playing = False
-            # 🆕 원형 스펙트럼 초기화 (기존 word_processor.reset() 대신)
-            self.voice_spectrum.reset()
+            // 🆕 핵심 변경: 현재 시간보다 이후 단어들은 숨김
+            const shouldShow = currentTtsTime >= wordInfo.start - 0.1;
+            
+            if (!shouldShow) {
+              return null;
+            }
+            
+            const baseFontSize = '3.5rem';
+            const fixedFontSize = calculateFontSizeFromMaxVolume(baseFontSize, index);
+            
+            // 🆕 단어가 나타나는 애니메이션 효과
+            const timeSinceStart = currentTtsTime - wordInfo.start;
+            const isNewlyAppeared = timeSinceStart <= 0.3;
+            
+            return (
+              <span
+                key={index}
+                style={{
+                  color: '#FFFFFF',
+                  textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
+                  fontSize: fixedFontSize,
+                  fontWeight: isActive ? 'bold' : 'normal',
+                  display: 'inline-block',
+                  marginRight: '0.2em',
+                  marginBottom: '0.1em',
+                  
+                  // 🆕 등장 애니메이션 효과
+                  opacity: isNewlyAppeared ? Math.min(1, timeSinceStart * 3) : 1,
+                  transform: `translateY(${isNewlyAppeared ? Math.max(0, 10 - timeSinceStart * 30) : 0}px)`,
+                  transition: isNewlyAppeared ? 'none' : 'all 0.2s ease',
+                  
+                  // 현재 단어 강조
+                  ...(isActive && {
+                    textShadow: '0 0 15px rgba(255, 255, 255, 0.8), 3px 3px 6px rgba(0,0,0,0.8)',
+                    transform: `translateY(${isNewlyAppeared ? Math.max(0, 10 - timeSinceStart * 30) - 2 : -2}px)`,
+                  }),
+                  
+     
+                }}
+              >
+                {wordInfo.word}
+              </span>
+            );
+          })}
+        </div>
+    
+      </div>
+    </div>
+  );
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// 🆕 개선된 활성 단어 찾기 로직
+const findActiveWordWithTolerance = (currentTime, words) => {
+  const TIMING_TOLERANCE = 0.2; // 200ms 허용 오차
+  const CONFIDENCE_THRESHOLD = 0.6; // 신뢰도 임계값
+  
+  // 1. 정확한 시간 범위 내 단어 찾기 (신뢰도 높은 단어 우선)
+  let candidates = words.map((word, index) => {
+    const isInRange = currentTime >= (word.start - TIMING_TOLERANCE) && 
+                     currentTime <= (word.end + TIMING_TOLERANCE);
+    const distance = Math.abs(currentTime - (word.start + word.end) / 2);
+    const confidence = word.confidence || 1.0;
+    
+    return {
+      index,
+      distance,
+      confidence,
+      isInRange,
+      word
+    };
+  }).filter(candidate => candidate.isInRange);
+  
+  if (candidates.length === 0) {
+    // 2. 범위 내 단어가 없으면 가장 가까운 단어 찾기
+    candidates = words.map((word, index) => ({
+      index,
+      distance: Math.abs(currentTime - (word.start + word.end) / 2),
+      confidence: word.confidence || 1.0,
+      word
+    }));
+  }
+  
+  // 3. 신뢰도와 거리를 종합적으로 고려하여 최적 단어 선택
+  candidates.sort((a, b) => {
+    // 높은 신뢰도와 가까운 거리를 우선시
+    const scoreA = (a.confidence * 2) - (a.distance * 0.5);
+    const scoreB = (b.confidence * 2) - (b.distance * 0.5);
+    return scoreB - scoreA;
+  });
+  
+  const bestMatch = candidates[0];
+  
+  // 너무 멀거나 신뢰도가 낮으면 -1 반환
+  if (bestMatch.distance > 1.0 && bestMatch.confidence < CONFIDENCE_THRESHOLD) {
+    return -1;
+  }
+  
+  return bestMatch.index;
+};
+
+
+// TTS 시간 구독에서 원본 RMS 값 활용
+useEffect(() => {
+  const ttsTimeListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/tts_spectrum',
+    messageType: 'std_msgs/String'
+  });
+  
+  ttsTimeListener.subscribe((message) => {
+    try {
+      const data = JSON.parse(message.data);
+      
+      if (data.current_time !== undefined && data.status === 'playing') {
+        setCurrentTtsTime(data.current_time);
+        setCurrentTtsVolume(data.volume || 0);
+
+        if (ttsSubtitle && ttsSubtitle.words) {
+          const activeWordIndex = findActiveWordWithTolerance(
+            data.current_time,
+            ttsSubtitle.words
+          );
+          
+          if (activeWordIndex !== currentWordIndex) {
+            setCurrentWordIndex(activeWordIndex);
+          }
+
+          // 🔑 핵심: 원본 RMS 값 사용
+          if (activeWordIndex >= 0 && data.raw_rms !== undefined) {
+            setWordMaxVolumes(prev => {
+              const currentMax = prev[activeWordIndex] || 0;
+              const newMax = Math.max(currentMax, data.raw_rms); // 🔑 raw_rms 사용
+              
+              // 🆕 원본 값으로 디버깅 로그
+              if (newMax > currentMax) {
+                console.log(`🔊 단어 "${ttsSubtitle.words[activeWordIndex].word}" 최대RMS 업데이트: ${currentMax.toFixed(1)} → ${newMax.toFixed(1)}`);
+              }
+              
+              return {
+                ...prev,
+                [activeWordIndex]: newMax
+              };
+            });
+          }
+        } 
+      }
+    } catch (e) {
+      console.error('TTS time JSON parse error:', e);
+    }
+  });
+  
+  return () => ttsTimeListener.unsubscribe();
+}, [ttsSubtitle, currentWordIndex]);
+
+
+
+
+
+
+// 🆕 차이 극대화 버전
+const calculateFontSizeFromMaxVolume = (baseSize, wordIndex) => {
+  const maxRms = wordMaxVolumes[wordIndex] || 0;
+  
+
+  return `${Math.max(1.0, maxRms*0.0005)}rem`;
+};
+
+
+
+
+
+
+
+
+
+
+
+
+// 🆕 TTS 음량 스무딩 함수
+const previousTtsVolumeRef = useRef(0);
+
+const applyTtsVolumeSmoothing = (newVolume) => {
+  const previous = previousTtsVolumeRef.current;
+  
+  let smoothed;
+  if (newVolume > previous) {
+    // 음성 증가: 빠른 반응 (70% 새값)
+    smoothed = previous * 0.3 + newVolume * 0.7;
+  } else {
+    // 음성 감소: 자연스러운 감쇠 (40% 새값)
+    smoothed = previous * 0.6 + newVolume * 0.4;
+  }
+  
+  previousTtsVolumeRef.current = smoothed;
+  return smoothed;
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// 🆕 TTS 상태 구독
+useEffect(() => {
+  const ttsStatusListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/tts_status',
+    messageType: 'std_msgs/String'
+  });
+
+  ttsStatusListener.subscribe((message) => {
+    console.log('🗣️ TTS 상태 변경:', message.data);
+    setTtsStatus(message.data);
+  });
+
+  return () => {
+    ttsStatusListener.unsubscribe();
+  };
+}, []);
+
+// 🆕 TTS 재생 요청 퍼블리셔 생성
+const ttsPlayPublisher = useRef(null);
+
+useEffect(() => {
+  if (!ttsPlayPublisher.current) {
+    ttsPlayPublisher.current = new ROSLIB.Topic({
+      ros: ros,
+      name: '/tts_play_request',
+      messageType: 'std_msgs/String'
+    });
+  }
+}, []);
+
+
+
+
+// 🆕 대기 중인 비디오 재생 함수
+const playPendingVideo = () => {
+  if (!pendingVideo) return;
+  
+  console.log('🎬 대기 비디오 재생:', pendingVideo);
+  setCurrentVideo(pendingVideo);
+  setCurrentReply(pendingReply);
+  setVideoVisible(true);
+  
+  // 대기 모드 종료
+  setIsWaitingAudioMode(false);
+  setIsMp3WaitingMode(false);
+  
+  if (recommendStatus === 'searching') {
+    setRecommendStatus('processing');
+  }
+  
+  // 대기 상태 초기화
+  setPendingVideo(null);
+  setPendingReply('');
+};
+
+
+
+// 🔧 수정된 Mp3Recommender 구독 부분
+useEffect(() => {
+  const mp4Listener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/recommended_mp4',
+    messageType: 'std_msgs/String'
+  });
+
+  mp4Listener.subscribe((message) => {
+    console.log('🎬 MP4 메시지 수신:', message.data);
+    
+    if (message.data && message.data.trim() !== "") {
+      const parts = message.data.split(';');
+      let fileName = '';
+      let reply = '';
+      
+      parts.forEach(part => {
+        if (part.startsWith('file_name=')) {
+          fileName = part.substring('file_name='.length);
+        } else if (part.startsWith('reply=')) {
+          reply = part.substring('reply='.length);
+        }
+      });
+
+      // 🆕 질문확인 상태 확인 후 처리 방식 결정
+      if (questionConfirmStatus === 'playing') {
+        console.log('⏳ 질문확인 TTS 재생 중 - 컨텐츠 대기');
+        
+        if (fileName === 'no_video') {
+          // TTS 전용 모드도 대기 처리
+          setPendingContent({ 
+            type: 'tts_only', 
+            reply: reply 
+          });
+          setWaitingForQuestionConfirm(true);
+        } else if (fileName && fileName !== 'unknown') {
+          // 비디오 모드 대기 처리
+          setPendingContent({ 
+            type: 'video', 
+            videoPath: `/videos/${fileName}`, 
+            reply: reply 
+          });
+          setWaitingForQuestionConfirm(true);
+        }
+        
+        if (recommendStatus === 'searching') {
+          setRecommendStatus('processing');
+        }
+      } else {
+        // 질문확인이 완료된 상태면 즉시 처리
+        processPendingContent({ 
+          type: fileName === 'no_video' ? 'tts_only' : 'video',
+          videoPath: fileName !== 'no_video' ? `/videos/${fileName}` : null,
+          reply: reply 
+        });
+      }
+    }
+  });
+
+  return () => {
+    mp4Listener.unsubscribe();
+  };
+}, [questionConfirmStatus, recommendStatus]);
+
+
+
+
+
+// 🆕 질문확인 완료 처리 함수
+const processPendingContent = (content) => {
+  if (!content) return;
+  
+  console.log('🎬 컨텐츠 처리:', content);
+  
+  if (content.type === 'video') {
+    // 비디오가 있는 경우: tts_ready까지 기다림
+    console.log('🎬 비디오 모드 - TTS 준비 대기');
+    setCurrentVideo(content.videoPath);
+    setCurrentReply(content.reply);
+    // 비디오는 tts_ready 상태에서 재생됨
+    
+  } else if (content.type === 'tts_only') {
+    // 비디오가 없는 경우: 즉시 TTS 대기 상태로
+    console.log('🗣️ TTS 전용 모드 - 즉시 TTS 대기');
+    setVideoVisible(false);
+    setCurrentVideo(null);
+    setCurrentReply(content.reply);
+    setShowReply(true);
+  }
+  
+  // 공통 처리
+  setIsWaitingAudioMode(false);
+  setIsMp3WaitingMode(false);
+  
+  if (recommendStatus === 'searching') {
+    setRecommendStatus('processing');
+  }
+};
+
+
+
+
+
+// 🆕 즉시 비디오 재생 함수 추가
+const playVideoImmediately = (videoPath, reply) => {
+  console.log('🎬 즉시 비디오 재생:', videoPath);
+  setCurrentVideo(videoPath);
+  setCurrentReply(reply);
+  setVideoVisible(true);
+  
+  setIsWaitingAudioMode(false);
+  setIsMp3WaitingMode(false);
+  
+  if (recommendStatus === 'searching') {
+    setRecommendStatus('processing');
+  }
+};
+
+
+
+
+
+ // 🔧 비디오 대기 표시 수정
+ const renderVideoPending = () => {
+  if (!pendingVideo || questionConfirmStatus !== 'playing') {
+    return null;
+  }
+
+  return (
+    <div style={{
+      position: 'absolute',
+      bottom: '20px',
+      right: '20px',
+      backgroundColor: 'rgba(0, 0, 0, 0.85)',
+      color: '#fff',
+      padding: '15px 20px',
+      borderRadius: '12px',
+      fontSize: '0.9rem',
+      zIndex: 50,
+      border: '2px solid #ff6b6b'
+    }}>
+      <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>
+        🎬 비디오 대기 중...
+      </div>
+      <div style={{ fontSize: '0.8rem', opacity: 0.8 }}>
+        질문 확인 TTS 재생 완료 대기 중
+      </div>
+    </div>
+  );
+};
+
+
+
+
+
+// 🆕 비디오 렌더링 함수
+const renderVideo = () => {
+  console.log('🎬 renderVideo 호출:', {
+    currentVideo,
+    videoVisible,
+    musicPlaying
+  });
+
+  if (!currentVideo || !videoVisible) {
+    console.log('🎬 비디오 렌더링 조건 불만족');
+      return null;
+  }
+
+
+
+  // App.jsx - renderVideo 안
+const createSafeUrl = (path) => {
+  try {
+    // // 파일명만 인코딩
+    // const lastSlash = path.lastIndexOf('/');
+    // const dir = path.substring(0, lastSlash + 1);      // '/videos/'
+    // const file = path.substring(lastSlash + 1);        // '파티분위기....mp4'
+    // return dir + encodeURIComponent(file);
+
+    const lastSlash = path.lastIndexOf('/');
+  const dir  = path.slice(0, lastSlash + 1);   // "/videos/"
+  const file = path.slice(lastSlash + 1);      // "why so long.mp4"
+  return dir + encodeURIComponent(file);      // 디렉터리 부분은 인코딩 X
+
+
+  } catch (e) {
+    console.error('비디오 URL 생성 오류:', e);
+    return path;
+  }
+};
+
+
+
+  const safeVideoUrl = createSafeUrl(currentVideo);
+  console.log('🎬 안전한 비디오 URL:', safeVideoUrl);
+
+
+
+
+
+  return (
+      <div style={{
+          position: 'absolute',
+          top: '0',
+          left: '0',
+          width: '100vw',
+          height: '100vh',
+          zIndex: 15,
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: '#000'
+      }}>
+          <video 
+          key={safeVideoUrl} 
+          ref={videoRef}
+          src={safeVideoUrl}
+          autoPlay
+        
+      
+          playsInline
+          controls // 🔧 임시 디버깅용 컨트롤 추가
+          style={{
+            width: 'auto',
+            height: '100vh',
+            minWidth: '100vw',
+            objectFit: 'cover',
+            objectPosition: 'center'
+          }}
+          onLoadStart={() => {
+            console.log('🎬 비디오 로드 시작:', safeVideoUrl);
+          }}
+          onLoadedMetadata={() => {
+            console.log('🎬 비디오 메타데이터 로드 완료');
+          }}
+          onLoadedData={() => {
+            console.log('🎬 비디오 데이터 로드 완료:', safeVideoUrl);
+            if (videoRef.current) {
+              videoRef.current.play().then(() => {
+                console.log('✅ 비디오 자동재생 성공');
+              }).catch(e => {
+                console.error('❌ 비디오 자동재생 실패:', e);
+              });
+            }
+          }}
+
+         // 🆕 핵심 수정: 비디오 종료 후 TTS 재생 시퀀스
+         onEnded={() => {
+          console.log('🎬 비디오 재생 완료 - TTS 대기');
+          setVideoVisible(false);
+          setCurrentVideo(null); // ⭐ 핵심 추가
+          // TTS가 준비된 경우 즉시 재생, 아니면 대기
+          if (ttsStatus === 'tts_ready') {
+            console.log('🗣️ TTS 준비 완료 - 즉시 재생');
+            requestTtsPlay();
+          } else {
+            console.log('🗣️ TTS 준비 대기 중...');
+            setShowReply(true); // TTS 대기 중 표시
+          }
+        }}
+
+
+
+
+
          
-            
-            # 기본 상태 초기화
-            self.processing = False
-            self.last_published_text = ""
-            self.partial_transcript = ""
-            self.force_published = False
-            self.transcribing = False
-            self.ignore_stt = False
-            self.is_sound_playing = False
-            
-            # 대기 관련 상태 초기화
-            self.waiting_sequence_running = False
-            self.waiting_image_displayed = False
-            self.current_waiting_image_path = ""
-            
-            # ✅ 핵심: speaker_id는 변경하지 않고 대기 상태만 설정
-            self.trigger_detected = True  # 새로운 질문 대기 모드
-            self.waiting_for_input_after_music = True
-            
-            # 트리거 상태 퍼블리시
-            self.publish_trigger_status()
-            
-            # ✅ 완전한 버퍼 초기화로 STT 재시작
-            self.complete_buffer_reset_and_restart()
-            
-            # ✅ 30초 타이머 시작 (기존 speaker_id 유지)
-            self.start_30s_timer()
-            
-            self.get_logger().info(f"✅ TTS 완료 후 대기 모드 - 현재 speaker_id: {self.current_speaker_id} (30초 유지)")
-
-
-    def complete_buffer_reset_and_restart(self):
-        """TTS 완료 후 완전한 버퍼 초기화 및 STT 재시작"""
-        self.get_logger().info("🧹 완전한 버퍼 초기화 시작")
+          onError={(e) => {
+            console.error('🎬 비디오 로드 실패:', safeVideoUrl);
+            console.error('🎬 에러 상세:', e.target.error);
+          }}
+        />
+          
         
-        try:
-            # 1. 기존 STT 스레드 완전 종료
-            self.transcribing = False
-            
-            # 2. 오디오 스트림 완전 정리
-            self.stop_audio_stream()
-            
-            # 3. 모든 오디오 버퍼 완전 초기화
-            while not self.audio_stream.empty():
-                try:
-                    self.audio_stream.get_nowait()
-                except queue.Empty:
-                    break
-            
-            # 4. 시각화 큐도 완전 초기화
-            while not self.visualizer_queue.empty():
-                try:
-                    self.visualizer_queue.get_nowait()
-                except queue.Full:
-                    break
-            
-            # 5. 오디오 버퍼 초기화
-            self.audio_buffer = []
-            
-            # 6. STT 관련 상태 완전 초기화
-            self.partial_transcript = ""
-            self.last_published_text = ""
-            
-            # 7. 스펙트럼 관련 버퍼 초기화
-            self.spectrum_buffer = []
-            self.spectrum_count = 0
-            
-            self.get_logger().info("🧹 모든 버퍼 초기화 완료")
-            
-            # 8. 잠시 대기 후 새로운 오디오 스트림 시작
-            time.sleep(0.5)  # 시스템 안정화 대기
-            
-            # 9. 새로운 오디오 스트림 시작
-            self.start_audio_stream()
-            
-            self.get_logger().info("✅ STT 완전 재시작 완료")
-            
-        except Exception as e:
-            self.get_logger().error(f"❌ 버퍼 초기화 실패: {e}")
-            # 비상 복구
-            self.force_restart_stt()
 
 
 
@@ -729,1082 +960,1186 @@ class UserQuestion(Node):
 
 
 
-    def stt_restart_callback(self, msg):
-        """🆕 TTS 완료 후 STT 재시작 콜백"""
-        if msg.data == "restart_stt_after_tts":
-            self.get_logger().info("🔄 TTS 완료 - STT 재시작")
-            self.save_log("🔄 TTS 완료 - STT 재시작")
-            
-            # 🆕 상태 완전 초기화 (기존 music_done 로직과 유사하지만 더 포괄적)
-            self.music_playing = False
-            # 🆕 원형 스펙트럼 초기화 (기존 word_processor.reset() 대신)
-            self.voice_spectrum.reset()
-            
-            # 모든 상태 초기화
-            self.processing = False
-            self.last_published_text = ""
-            self.partial_transcript = ""
-            self.trigger_detected = True  # 🔑 핵심: 새로운 질문 대기 모드 활성화
-            self.waiting_for_input_after_music = True  # 음악 종료 후와 동일한 대기 상태
-            self.force_published = False
-            self.transcribing = False
-            self.ignore_stt = False
-            self.is_sound_playing = False
-            
-            # 대기 관련 상태 초기화
-            self.waiting_sequence_running = False
-            self.waiting_image_displayed = False
-            self.current_waiting_image_path = ""
-            
-            # 새로운 화자 ID 할당
-            self.current_speaker_id += 1
-            self.get_logger().info(f"🆕 새로운 speaker_id 할당: {self.current_speaker_id}")
-            
-            # 🆕 트리거 상태 퍼블리시 (새로운 질문 대기 상태)
-            self.publish_trigger_status()
-            
-            # 기존 타이머 정리
-            if self.timer_30s and self.timer_30s.is_alive():
-                self.timer_30s.cancel()
-                
-            # STT 재시작
-            self.start_audio_stream()
-            threading.Thread(target=self.transcribe_streaming, daemon=True).start()
-            
-            # 새로운 질문 대기 30초 타이머 시작
-            self.start_30s_timer()
-            
-            self.get_logger().info("✅ TTS 완료 후 STT 재시작 완료 - 새로운 질문 대기 중")
-            self.save_log("✅ TTS 완료 후 STT 재시작 완료 - 새로운 질문 대기 중")
+      </div>
+  );
+};
+
+
+// 🆕 TTS 재생 요청 함수
+const requestTtsPlay = () => {
+  if (ttsPlayPublisher.current) {
+    const msg = new ROSLIB.Message({
+      data: 'play_tts'
+    });
+    ttsPlayPublisher.current.publish(msg);
+    console.log('🗣️ TTS 재생 요청 전송');
+  }
+};
 
 
 
 
 
 
-    def start_30s_timer(self):
-        """음악 종료 후 30초 타이머 시작 함수 추가"""
-        if self.timer_30s is not None and self.timer_30s.is_alive():
-            self.timer_30s.cancel()
-
-        self.get_logger().info("⏳ 음악 종료 후 30초 타이머 시작")
-        self.timer_30s = threading.Timer(30, self.timer_30s_expired)
-        self.timer_30s.start()
 
 
 
 
 
-    def timer_30s_expired(self):
-        self.get_logger().info("⏱️ 음악 종료 후 30초 동안 추가 입력 없음. trigger 상태 초기화")
-        self.trigger_detected = False
-        self.waiting_for_input_after_music = False
-        self.partial_transcript = ""
-        self.current_speaker_id += 1  # 새로운 화자 id 할당
-        self.get_logger().info(f"새로운 speaker_id 할당: {self.current_speaker_id}")
-        # 🆕 trigger_detected 상태 전송
-        self.publish_trigger_status()
+
+
+// 🆕 TTS 대기 중 표시 함수
+const renderTtsWaiting = () => {
+  if (!showReply || !currentReply|| isTtsPlaying) {
+    return null;
+  }
+
+  return (
+    <div style={{
+      position: 'absolute',
+      top: '0',
+      left: '0',
+      width: '100vw',
+      height: '100vh',
+      zIndex: 20,
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: 'rgba(0, 0, 0, 0.8)'
+    }}>
+      <div style={{
+        color: '#fff',
+        fontSize: '1.5rem',
+        textAlign: 'center',
+        padding: '20px'
+      }}>
+        <div>음성을 준비하는 중...</div>
+        <div style={{ 
+          fontSize: '1rem', 
+          marginTop: '10px',
+          opacity: 0.7 
+        }}>
+          {currentReply}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 
 
-    def start_audio_stream(self):
-        """ 마이크 입력을 Google STT API로 실시간 전송 """
-        self.get_logger().info('Starting microphone stream (continuous)...')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// 🚀 음성 원형 스펙트럼 구독 (더 빠른 반응)
+useEffect(() => {
+  const voiceSpectrumListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/voice_spectrum',
+    messageType: 'std_msgs/String'
+  });
+
+  voiceSpectrumListener.subscribe((message) => {
+    try {
+      const data = JSON.parse(message.data);
+      if (data.type === 'voice_spectrum') {
+        // 🚀 더 민감한 스케일링
+        const scaledVolume = data.volume * 0.0003; // 0.00015 → 0.0003
+        const clampedVolume = Math.min(1.0, scaledVolume);
+        
+        console.log(`🔊 원본 Peak: ${data.volume.toFixed(1)}, 스케일된값: ${clampedVolume.toFixed(3)}`);
+        
+        setVoiceVolume(clampedVolume);
+        setIsVoiceActive(data.volume > 100); // 🚀 임계값 낮춤 (200 → 100)
+      }
+    } catch (e) {
+      console.error('음성 스펙트럼 JSON 파싱 오류:', e);
+    }
+  });
+
+  return () => voiceSpectrumListener.unsubscribe();
+}, []);
+
+
+
+
+// 🆕 음성 원형 스펙트럼 표시 조건 함수 (수정된 버전)
+const shouldShowVoiceSpectrum = () => {
+  return triggerDetected && 
+         !musicPlaying && 
+         recommendStatus !== 'searching' && 
+         !isWaitingAudioMode && 
      
-        #self.stop_audio_stream()
+         !isMp3WaitingMode && 
+         !videoVisible &&
+         !isTtsPlaying &&
+         !showUserQuestion && 
+         isVoiceActive;
+};
 
-        try:
-            self.stream = self.p.open(
-            format=pyaudio.paInt16,
-            channels=1,  # ✅ PulseAudio에서는 1 채널을 지원할 가능성이 높음
-            rate=16000,
-            input=True,
-            frames_per_buffer=1024,
-            input_device_index=None,  # ✅ PulseAudio의 기본 입력 장치를 사용
-            stream_callback=self.audio_callback
-        )
+// 🚀 더 즉각적인 렌더링
+const renderVoiceSpectrum = () => {
+  if (!shouldShowVoiceSpectrum()) {
+    return null;
+  }
+
+  // 🚀 더 역동적인 크기 변화
+  const minRadius = 60;   // 🚀 60 → 40 (더 작은 최소값)
+  const maxRadius = 600;  // 🚀 350 → 400 (더 큰 최대값)
+  const radius = minRadius + (voiceVolume * (maxRadius - minRadius));
+  
+  // 🚀 더 강한 투명도 변화
+  const minOpacity = 0.2; // 🚀 0.3 → 0.2
+  const maxOpacity = 1.0; // 🚀 0.95 → 1.0 (완전 불투명)
+  const opacity = minOpacity + (voiceVolume * (maxOpacity - minOpacity));
+
+  return (
+    <div style={{
+      position: 'fixed',
+      top: '50%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+      zIndex: 25,
+      pointerEvents: 'none'
+    }}>
+      {/* 메인 원 */}
+      <div style={{
+        width: `${radius * 2}px`,
+        height: `${radius * 2}px`,
+        borderRadius: '50%',
+        background: `radial-gradient(circle, rgba(100, 200, 255, ${opacity}) 0%, rgba(50, 150, 255, ${opacity * 0.5}) 70%, rgba(0, 100, 255, 0) 100%)`,
+        border: `4px solid rgba(100, 200, 255, ${opacity})`,
+        transition: 'all 0.02s linear', // 🚀 0.05s → 0.02s (더 빠른 전환)
+        animation: voiceVolume > 0.05 ? 'voicePulse 0.15s infinite alternate' : 'none' // 🚀 더 빠른 애니메이션
+      }} />
+      
+      {/* 🚀 더 역동적인 중앙 점 */}
+      <div style={{
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        width: `${8 + (voiceVolume * 20)}px`,  // 🚀 더 큰 변화폭
+        height: `${8 + (voiceVolume * 20)}px`,
+        borderRadius: '50%',
+        backgroundColor: `rgba(100, 200, 255, ${opacity})`,
+        boxShadow: `0 0 ${10 + (voiceVolume * 40)}px rgba(100, 200, 255, ${opacity})`, // 🚀 더 큰 그림자
+        transition: 'all 0.01s linear' // 🚀 매우 빠른 반응
+      }} />
+      
+      {/* 🚀 더 민감한 외곽 링 */}
+      {voiceVolume > 0.05 && ( // 🚀 0.1 → 0.05 (더 민감)
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: `${radius * 3.0}px`, // 🚀 더 큰 링
+          height: `${radius * 3.0}px`,
+          borderRadius: '50%',
+          border: `3px solid rgba(100, 200, 255, ${opacity * 0.4})`,
+          animation: 'voiceRipple 0.4s infinite' // 🚀 더 빠른 리플
+        }} />
+      )}
+      
+      {/* CSS 애니메이션도 더 빠르게 */}
+      <style>
+        {`
+          @keyframes voicePulse {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.12); }
+          }
+          
+          @keyframes voiceRipple {
+            0% { 
+              transform: translate(-50%, -50%) scale(0.6);
+              opacity: 1;
+            }
+            100% { 
+              transform: translate(-50%, -50%) scale(1.6);
+              opacity: 0;
+            }
+          }
+        `}
+      </style>
+    </div>
+  );
+};
 
 
-            time.sleep(0.5)  
-            #self.transcribe_streaming()  # ✅ 누락된 함수 호출 (아래에 정의)
-            threading.Thread(target=self.transcribe_streaming, daemon=True).start()
-        except Exception as e:
-            self.get_logger().error(f"Failed to start microphone stream: {e}")
-            self.get_logger().info("Retrying microphone stream in 1 second...")
-            time.sleep(1)
-            self.start_audio_stream()
 
-    def stop_audio_stream(self):
-        """ ✅ 마이크 입력 스트리밍 중지 함수 추가 """
-        if self.stream is not None:
-            self.get_logger().info("Stopping microphone stream...")
-            self.stream.stop_stream()
-            self.stream.close()
-            self.stream = None
+  // 🆕 trigger_detected 상태 구독
+  useEffect(() => {
+    const triggerListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/trigger_status',
+        messageType: 'std_msgs/String'
+    });
+
+    triggerListener.subscribe((message) => {
+        const isTriggered = message.data === "triggered";
+        console.log('🎯 trigger_detected 상태:', isTriggered);
+        setTriggerDetected(isTriggered);
+    });
+
+    return () => triggerListener.unsubscribe();
+  }, []);
+
+  // 🆕 스펙트럼 표시 조건 함수 (기존 trigger_detected 플래그 활용)
+  const shouldShowSpectrum = () => {
+    if (musicPlaying) {
+      return canShowSpectrum; // 음악 재생 중일 때는 기존 로직
+    } else {
+      // 음악이 재생 중이 아닐 때는 trigger_detected에 따라 결정
+      return triggerDetected && recommendStatus !== 'searching';
+    }
+  };
 
 
 
-    def transcribe_streaming(self):
-        """ Google STT API를 사용하여 실시간 음성 인식 """
-        if self.transcribing:
-            self.get_logger().info("STT already running, skipping duplicate start.")
-            return
 
-        self.transcribing = True
-        self.get_logger().info("Starting transcribe_streaming...")
 
-        def request_gen():
-            while True:
-                data = self.audio_stream.get() 
-                if data is None:
-                    break
-                yield speech.StreamingRecognizeRequest(audio_content=data)
+  // 🆕 실시간 각도 구독 (주석 해제 및 수정)
+  useEffect(() => {
+    const directionListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/sound_direction_angle',
+        messageType: 'std_msgs/Float32'
+    });
 
-        # 1) 화자 분할 설정
-        diar_cfg = speech.SpeakerDiarizationConfig(
-            enable_speaker_diarization=True,
-            min_speaker_count=2,
-            max_speaker_count=2,
-        )
+    directionListener.subscribe((message) => {
+        const angle = message.data;
+        setSoundDirection(angle);
+        
+        // 🆕 고정 모드가 아닐 때만 실시간 화면 방향 변경
+        if (!isDirectionFixed) {
+            if (angle >= 180 && angle <= 360) {
+                setScreenFlipped(true);
+                console.log(`🔄 실시간 화면 반전: ${angle}도`);
+            } else {
+                setScreenFlipped(false);
+                console.log(`➡️ 실시간 정상 화면: ${angle}도`);
+            }
+        } else {
+            console.log(`📍 실시간 각도: ${angle}도 (고정 모드: ${fixedDirection}도 유지)`);
+        }
+    });
 
-        config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=16000,
-            language_code="ko-KR",
-            model='telephony',
-            enable_automatic_punctuation = True
-        )
-        streaming_config = speech.StreamingRecognitionConfig(
-            config=config, interim_results=True
-        )
-        try:
-            self.stt_restart_time = time.time()
-            responses = self.client.streaming_recognize(
-                streaming_config, request_gen()
-            )
-            self.process_responses(responses)
-        except Exception as e:
-            self.get_logger().error(f"STT error: {e}")
-            self.force_restart_stt()
-        finally:
-            self.transcribing = False  # ✅ 항상 플래그 초기화
+    return () => directionListener.unsubscribe();
+  }, [isDirectionFixed, fixedDirection]);
+
+
+
+
+
+
+  // 🆕 고정 각도 토픽 구독 (수정)
+  useEffect(() => {
+    const fixedDirectionListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/fixed_direction',
+        messageType: 'std_msgs/Float32'
+    });
+
+    fixedDirectionListener.subscribe((message) => {
+        const fixedAngle = message.data;
+        console.log('🔒 고정 각도 수신:', fixedAngle);
+        
+        setFixedDirection(fixedAngle);
+        setIsDirectionFixed(true);
+        
+        // 고정 각도에 따른 화면 방향 설정
+        if (fixedAngle >= 180 && fixedAngle <= 360) {
+            setScreenFlipped(true);
+            console.log(`🔒 화면 반전 고정: ${fixedAngle}도`);
+        } else {
+            setScreenFlipped(false);
+            console.log(`🔒 정상 화면 고정: ${fixedAngle}도`);
+        }
+    });
+
+    return () => fixedDirectionListener.unsubscribe();
+  }, []);
+
+
+
+
+
+
+  // 🆕 음악 상태 구독 (Mp3Player waiting 지원)
+  useEffect(() => {
+    const statusListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/music_status',
+        messageType: 'std_msgs/String'
+    });
+
+    statusListener.subscribe((message) => {
+        console.log('음악 상태 변경:', message.data);
+        
+        if (message.data === 'mp3_waiting_playing') {  // 새로운 상태 처리
+            console.log('🎵 Mp3Player waiting 재생 시작');
+            // waiting 모드는 스펙트럼 데이터가 오면 자동으로 시작됨
+        } else if (message.data === 'music_playing') {
+            setMusicPlaying(true);
+            setCanShowSpectrum(false);
+            setIsMp3WaitingMode(false); // Mp3 waiting 모드 종료
             
+        } 
+
+    });
+
+    return () => {
+        statusListener.unsubscribe();
+    };
+  }, []);
 
 
 
-    # def audio_callback(self, in_data, frame_count, time_info, status):
-    #     # 1) 시각화용 큐에 즉시 저장 (blocking 없이)
-    #     try:
-    #         self.visualizer_queue.put_nowait(in_data)
-    #     except queue.Full:
-    #         pass
+
+
+
+// TTS 상태 변화 감지 및 처리 (수정된 버전)
+useEffect(() => {
+
+  console.log('🔄 TTS 상태 변화 감지:', {
+    ttsStatus,
+    videoVisible,
+    showReply,
+    currentReply,
+    isTtsPlaying
+  });
+
+
+  if (ttsStatus === 'tts_ready') {
+    if (currentVideo && !videoVisible) {
+      // 비디오가 있는 경우: 비디오 재생 시작
+      console.log('🎬 TTS 준비 완료 - 비디오 재생 시작');
+      setVideoVisible(true);
+      setShowReply(false);
+      setIsWaitingAudioMode(false);
+      setIsMp3WaitingMode(false);
+      
+    } else if (!currentVideo && showReply) {
+      // 비디오가 없는 경우: TTS 재생 시작
+      console.log('🗣️ TTS 준비 완료 - TTS 전용 재생 시작');
+      
+      if (!currentReply || currentReply.trim() === '') {
+        console.warn('⚠️ currentReply가 비어있음 - TTS 재생 중단');
+        return;
+      }
+
+      setShowUserQuestion(false);
+      setUserQuestionText('');
+      setIsWaitingAudioMode(false);
+      setIsMp3WaitingMode(false);
+      setShowReply(false);
+      setIsTtsPlaying(true);
+      setWordMaxVolumes({});
+      requestTtsPlay();
+    }
+
+
+  } else if (ttsStatus === 'tts_playing') {
+    setIsTtsPlaying(true);
+  } else if (ttsStatus === 'tts_done') {
+    console.log('🗣️ TTS 재생 완료 - 제한적 초기화');
+    
+    // ✅ TTS 관련 상태만 초기화 (비디오 상태는 보존)
+    setShowReply(false);
+    setIsTtsPlaying(false);
+    setTtsVolume(0);
+
+    // 🆕 질문 말풍선도 초기화
+    setShowUserQuestion(false);
+    setUserQuestionText('');
+
+
+
+    
+    // ✅ TTS 자막 관련만 초기화
+    setTtsSubtitle(null);
+    setCurrentTtsTime(0);
+    setCurrentWordIndex(-1);
+
+    // 🆕 단어별 최대 음량도 초기화 (다음 TTS를 위해)
+    setWordMaxVolumes({});
+
+
+    // 🆕 TTS 전용 모드 완료 후 상태 초기화
+    setCurrentReply('');  // 🔑 추가
+
+    // 🆕 다음 TTS 대기를 위한 플래그 초기화
+    setVideoVisible(false);  // 🔑 추가
+
+    
+    // ✅ 새 질문을 위한 최소한의 초기화만
+    setCanShowSpectrum(false);
+    setMusicPlaying(false);
+    
+    // 기타 대기 상태들 초기화
+
+
+ 
+    setIsWaitingAudioMode(false);
+    setIsMp3WaitingMode(false);
+    setIsTransitioning(false);
+    
+    // 🆕 음성 원형 스펙트럼 상태 초기화
+    setVoiceVolume(0);
+    setIsVoiceActive(false);
+
+
+    // 방향 관련 상태 초기화
+    setIsDirectionFixed(false);
+    setFixedDirection(null);
+    
+    console.log('✅ TTS 완료 후 제한적 상태 초기화 - 비디오 상태 보존');
+  }
+},[ttsStatus, videoVisible, showReply, currentReply, currentVideo, isTtsPlaying]);
+
+
+
+
+
+
+
+
+
+  // 🆕 이전 스펙트럼 값을 저장하는 ref
+  const previousSpectrumRef = useRef([]);
+  
+  // 🆕 향상된 스무딩 함수
+  const applyAdvancedSmoothing = (newSpectrum) => {
+    const previous = previousSpectrumRef.current;
+    
+    if (previous.length === 0) {
+      previousSpectrumRef.current = [...newSpectrum];
+      return newSpectrum;
+    }
+
+    const smoothed = newSpectrum.map((current, index) => {
+      const prev = previous[index] || 0;
+      
+      // 🆕 음악 특성에 맞는 스무딩
+      if (current > prev) {
+        // 비트/드럼 등 급격한 증가: 빠른 반응 (40% 새값)
+        return prev * 0.4 + current * 0.6;
+      } else {
+        // 소리 감소: 자연스러운 감쇠 (8% 새값)
+        return prev * 0.6 + current * 0.4;
+      }
+    });
+    
+    // 이전 값 업데이트
+    previousSpectrumRef.current = [...smoothed];
+    return smoothed;
+  };
+
+
+
+  //==========================================================
+
+  // 🆕 마이크용 별도 스무딩 함수
+  const previousMicSpectrumRef = useRef([]);
+
+  const applyMicSmoothing = (newSpectrum) => {
+    const previous = previousMicSpectrumRef.current;
+    
+    if (previous.length === 0) {
+      previousMicSpectrumRef.current = [...newSpectrum];
+      return newSpectrum;
+    }
+
+    // 마이크용 다른 스무딩 설정 (예시)
+    const smoothed = newSpectrum.map((current, index) => {
+      const prev = previous[index] || 0;
+      
+      if (current > prev) {
+        return prev * 0.6 + current * 0.4; // 더 빠른 반응
+      } else {
+        return prev * 0.4 + current * 0.6; // 더 빠른 감쇠
+      //   return prev * 0.5 + current * 0.5; // 더 빠른 반응
+      // } else {
+      //   return prev * 0.8 + current * 0.2; // 더 빠른 감쇠
+
+      }
+    });
+    
+    previousMicSpectrumRef.current = [...smoothed];
+    return smoothed;
+  };
+  //==========================================================
+
+  // 🆕 Mp3Player waiting 전용 스무딩 함수
+  const previousMp3WaitingSpectrumRef = useRef([]);
+
+  const applyMp3WaitingSmoothing = (newSpectrum) => {
+    const previous = previousMp3WaitingSpectrumRef.current;
+    
+    if (previous.length === 0) {
+      previousMp3WaitingSpectrumRef.current = [...newSpectrum];
+      return newSpectrum;
+    }
+
+    // Mp3Player waiting 전용 스무딩 설정 (더 부드럽고 독특한 특성)
+    const smoothed = newSpectrum.map((current, index) => {
+      const prev = previous[index] || 0;
+      
+      if (current > prev) {
+        // 빠른 상승 반응 (60% 새값으로 더 빠르게)
+        return prev * 0.4 + current * 0.6;
+      } else {
+        // 느린 감쇠 (20% 새값으로 더 부드럽게)
+        return prev * 0.8 + current * 0.2;
+      }
+    });
+    
+    previousMp3WaitingSpectrumRef.current = [...smoothed];
+    return smoothed;
+  };
+
+  //==========================================================
+
+
+
+
+
+  // 🆕 음악 스펙트럼 구독
+  useEffect(() => {
+    if (!musicPlaying) return;
+    
+    const musicSpectrumListener = new ROSLIB.Topic({
+      ros: ros,
+      name: '/audio_amplitude',
+      messageType: 'std_msgs/String'
+    });
+    
+    musicSpectrumListener.subscribe((message) => {
+      try {
+        const data = JSON.parse(message.data);
+        if (data.spectrum) {
+          const smoothedData = applyAdvancedSmoothing(data.spectrum);
+          setMusicSpectrum(smoothedData);
+          // setMusicSpectrum(data.spectrum);
+        }
+      } catch (e) {
+        console.error('Music spectrum JSON parse error:', e);
+      }
+    });
+    
+    return () => {
+      musicSpectrumListener.unsubscribe();
+    //  previousSpectrumRef.current = [];
+    };
+  }, [musicPlaying]);
+
+
+ 
+
+
+    
+    
+  //==========================================================
+
+
+    // 🆕 Mp3Player waiting 스펙트럼 구독 (/mp3_waiting_spectrum)
+    useEffect(() => {
+      const mp3WaitingSpectrumListener = new ROSLIB.Topic({
+        ros: ros,
+        name: '/mp3_waiting_spectrum',
+        messageType: 'std_msgs/String'
+      });
+      
+      mp3WaitingSpectrumListener.subscribe((message) => {
+        try {
+          const data = JSON.parse(message.data);
+          if (data.spectrum) {
+            console.log('🎵 Mp3Player waiting 스펙트럼 수신 - 독립 렌더링');
+  
+            // 🆕 전환 상태 해제 (Mp3 스펙트럼이 정상적으로 도착했으므로)
+            setIsTransitioning(false);
+            
+            // 🆕 다른 모드들 완전히 비활성화
+            setIsMp3WaitingMode(true);
+     
+            setIsWaitingAudioMode(false);
+            setMusicPlaying(false);
+  
+  
+            
+            // 🆕 Mp3Player 전용 스무딩 적용
+            // const smoothedData = applyMp3WaitingSmoothing(data.spectrum);
+            const smoothedData = applyAdvancedSmoothing(data.spectrum);
+            
+            setMp3WaitingSpectrum(smoothedData);
+          }
+        } catch (e) {
+          console.error('Mp3Player waiting spectrum JSON parse error:', e);
+        }
+      });
+      
+      return () => {
+        mp3WaitingSpectrumListener.unsubscribe();
+        // 🆕 Mp3Player 전용 스무딩 상태 초기화
+        previousMp3WaitingSpectrumRef.current = [];
+      };
+    }, []);
+  
+
+    
+
+
+  //==========================================================
+
+
+  // 🆕 음악 스펙트럼 렌더링
+useEffect(() => {
+  if (!musicPlaying || musicSpectrum.length === 0) return;
+  
+  const canvas = canvasRef.current;
+  if (!canvas) return;
+  
+  const ctx = canvas.getContext('2d');
+  const { width, height } = canvasSize;
+  
+  canvas.width = width;
+  canvas.height = height;
+  
+  // 음악용 배경
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, width, height);
+  
+  if (!canShowSpectrum) return;
+  
+  // 🆕 음악용 스펙트럼 처리 (기존 로직 유지)
+  // const central = getCentralSlice(musicSpectrum, 0.6);
+  const numBars = 64;
+
+  const limitedSpectrum = musicSpectrum.slice(0,200); // 0~300 인덱스 추출
+  let bars = downsampleArray(limitedSpectrum, numBars);
+
+ // let bars = downsampleArray(musicSpectrum, numBars);
+  bars = bars.map(v => Math.min(1, v * 0.0000005));
+  
+
+
+   // 🆕 원형 스펙트럼 설정
+   const centerX = width / 2;
+   const centerY = height / 2;
+   const baseRadius = Math.min(width, height) * 0.2;    // 기본 원 반지름
+   const maxBarLength = Math.min(width, height) * 0.15; // 최대 바 길이
+ 
+   // 🆕 원형 스펙트럼 스타일 (검정색)
+   ctx.strokeStyle = '#000';
+   ctx.lineWidth = 4; // 바 두께
+   ctx.lineCap = 'round';
+   ctx.lineJoin = 'round';
+ 
+   // 🆕 원형 스펙트럼 그리기
+   for (let i = 0; i < numBars; i++) {
+     const angle = (i / numBars) * 2 * Math.PI; // 각도 계산
+     const barLength = bars[i] * maxBarLength;  // 바 길이
+     const radius = baseRadius + barLength;     // 최종 반지름
+     
+     // 바의 시작점 (기본 원 위의 점)
+     const startX = centerX + Math.cos(angle) * baseRadius;
+     const startY = centerY + Math.sin(angle) * baseRadius;
+     
+     // 바의 끝점 (확장된 반지름의 점)
+     const endX = centerX + Math.cos(angle) * radius;
+     const endY = centerY + Math.sin(angle) * radius;
+ 
+     // 바 그리기
+     ctx.beginPath();
+     ctx.moveTo(startX, startY);
+     ctx.lineTo(endX, endY);
+     ctx.stroke();
+
+
+  }
+}, [musicSpectrum, musicPlaying, canvasSize, canShowSpectrum]);
+
+
+
+
+
+    
+    
+  //==========================================================
+
+
+  // 🆕 마이크 스펙트럼 렌더링
+  useEffect(() => {
+    
+    // if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode) return;
+    // 🆕 Mp3Player waiting 모드도 마이크 스펙트럼 비활성화 조건에 추가
+    if (musicPlaying || micSpectrum.length === 0 || isWaitingAudioMode || isMp3WaitingMode   || isTransitioning|| videoVisible) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const { width, height } = canvasSize;
+    
+    canvas.width = width;
+    canvas.height = height;
+    
+    // 마이크용 배경
+    ctx.fillStyle = '#222222';
+    ctx.fillRect(0, 0, width, height);
+    
+    if (recommendStatus === 'searching' && !videoVisible) {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, width, height);
+      return;
+    }
+    
+    if (!triggerDetected) {
+      console.log('🎵 마이크 모드 - trigger_detected=false, 배경색만 표시');
+      return;
+    }
+    
+    if (recommendStatus === 'searching') {
+      console.log('🎵 마이크 모드 - 검색 중이므로 스펙트럼 숨김');
+      return;
+    }
+
+
+    // 🆕 추가 차단 조건들 - 모든 다른 모드에서 마이크 스펙트럼 완전 차단
+    if (isWaitingAudioMode) {
+      console.log('🎵 마이크 모드 - UserQuestion 대기 스펙트럼 중이므로 차단');
+      return;
+    }
+
+  
+
+    if (isMp3WaitingMode) {
+      console.log('🎵 마이크 모드 - Mp3Player 대기 스펙트럼 중이므로 차단');
+      return;
+    }
+
+    if (musicPlaying || canShowSpectrum) {
+      console.log('🎵 마이크 모드 - 음악 재생/스펙트럼 중이므로 차단');
+      return;
+    }
+
+    if (videoVisible) {
+      console.log('🎵 마이크 모드 - 이미지 표시 중이므로 차단');
+      return;
+    }
+
+    if (isTransitioning) {
+      console.log('🎵 마이크 모드 - 상태 전환 중이므로 차단');
+      return;
+    }
+
+
+
+
+
+
+    
+    // 🆕 마이크용 스펙트럼 처리 (나중에 다르게 커스터마이징 가능)
+    // const central = getCentralSlice(micSpectrum, 0.6);
+    const numBars = 20;
+    const limitedSpectrum = micSpectrum.slice(80, 180); // 0~300 인덱스 추출
+let bars = downsampleArray(limitedSpectrum, numBars);
+  // let bars = downsampleArray(micSpectrum, numBars);
+
+
+// bars = bars.map(v => v * 0.0000035);
+
+// bars = bars.map(v => v * 0.0005);
+// 🆕 바 값 정규화로 더 안정적인 높이 제어
+bars = bars.map(v => {
+  const normalizedValue = v * 0.00035;
+  return Math.min(7, normalizedValue); // 최대값 1로 제한
+});
+
+
+// // 최대값 2로 제한
+// bars = bars.map(v => Math.min(1, v * 0.00005));
+    
+
+
+
+
+
+const availableWidth = width * 0.9; // 화면 너비의 90% 사용
+const totalGaps = (numBars - 1);
+    
+    const scale = Math.min(width / 2560, height / 1600);
+    // const barWidth = 10 * scale;
+    const barWidth = Math.max(2, availableWidth / (numBars + totalGaps * 0.5));
+    // const gap = 14 * scale;
+    const gap = Math.max(1, barWidth * 0.5); // 바 너비의 30%를 간격으로
+  // 🆕 바 두께 별도 설정 (가로길이는 기존 barWidth 유지)
+  const barThickness = barWidth * 0.8; // 바 두께를 기존의 60%로 설정
 
       
-    
-    #     # 3) STT 큐 등 기존 로직
-    #     if not (self.music_playing or self.ignore_stt):
-    #         self.audio_stream.put(in_data)
-    #         if self.trigger_detected:
-    #             self.audio_buffer.append(in_data)
+     const maxBarHeight = 100 * scale;
 
-    #     return None, pyaudio.paContinue
-
-
-
-
-    def audio_callback(self, in_data, frame_count, time_info, status):
-        """오디오 콜백 - 버퍼 관리 최적화"""
-        # 1. 시각화용 큐 (넌블로킹)
-        try:
-            self.visualizer_queue.put_nowait(in_data)
-        except queue.Full:
-            # 큐가 가득 찬 경우 오래된 데이터 제거
-            try:
-                self.visualizer_queue.get_nowait()
-                self.visualizer_queue.put_nowait(in_data)
-            except queue.Empty:
-                pass
-
-        # 🆕 2. 원형 스펙트럼용 음량 계산 및 전송 (trigger_detected 상태에서만)
-        if self.trigger_detected and not self.music_playing and not self.ignore_stt:
-            volume = self.voice_spectrum.calculate_volume(in_data)
-            self.publish_voice_spectrum(volume)
-
-
-        
-        # 2. STT 데이터 처리 - 더 엄격한 조건
-        should_process_stt = (
-            not self.music_playing and 
-            not self.ignore_stt and 
-            not self.is_sound_playing and
-            self.transcribing  # STT가 실제로 동작 중일 때만
-        )
-        
-        if should_process_stt:
-            try:
-                self.audio_stream.put_nowait(in_data)
-                if self.trigger_detected:
-                    self.audio_buffer.append(in_data)
-            except queue.Full:
-                # STT 큐가 가득 찬 경우 가장 오래된 데이터 제거
-                try:
-                    self.audio_stream.get_nowait()
-                    self.audio_stream.put_nowait(in_data)
-                except queue.Empty:
-                    pass
-        
-        return None, pyaudio.paContinue
-
-        
-
-
-    def visualizer_worker(self):
-        while True:
-            in_data = self.visualizer_queue.get()
-            self.publish_audio_visualizer(in_data)
-
-
-  
-    def publish_voice_spectrum(self, volume):
-        """실시간 음성 원형 스펙트럼 데이터를 프론트엔드로 전송"""
-        spectrum_data = {
-            "type": "voice_spectrum",
-            "volume": float(volume),  # 원본 Peak Amplitude 값 전송
-            "timestamp": time.time(),
-            "speaker_id": self.current_speaker_id
-        }
-        
-        msg = String()
-        msg.data = json.dumps(spectrum_data)
-        self.voice_spectrum_pub.publish(msg)
-        
-        # 🔧 디버깅 로그 수정 (Peak Amplitude 표시)
-        current_time = time.time()
-        if not hasattr(self, 'last_spectrum_log_time'):
-            self.last_spectrum_log_time = 0
-        
-        if current_time - self.last_spectrum_log_time >= 0.5:
-            self.last_spectrum_log_time = current_time
-            self.get_logger().info(f"🔊 원본 Peak Amplitude: {volume:.1f}")  # Peak 값으로 로그 변경
-
-
-
-
-
-
-    #DC 오프셋 제거 + 5회 평균화
-    def publish_audio_visualizer(self, in_data):
-        # 🆕 0.5초 간격 출력 제어
-        current_time = time.time()
-        if not hasattr(self, 'last_print_time'):
-            self.last_print_time = 0
-        
-        should_print = current_time - self.last_print_time >= 0.5
-
-        samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
-        # 🆕 DC 오프셋 제거 - 평균값 빼기
-        samples = samples - np.mean(samples)
-
-        window = np.hanning(len(samples))
-        windowed_data = samples * window
-
-        # 1. 기본 FFT 계산
-        fft = np.fft.fft(windowed_data)
-        spectrum = np.abs(fft[:len(fft)//2])
-        # spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-
-        # Mp3Player.py와 동일한 JSON 구조로 평균 스펙트럼 발송
-        msg = String()
-        msg.data = json.dumps({"spectrum": spectrum.tolist()})
-        self.visualizer_pub.publish(msg)
-  
-   #   spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-        
-
-        # log_spectrum = np.log10(spectrum + 1)
-        # log_spectrum /= np.log10(np.max(spectrum) + 1)  # 정규화
-         
-
-        # # 🆕 스펙트럼 버퍼에 추가
-        # self.spectrum_buffer.append(spectrum)
-        # self.spectrum_count += 1
-
-        # # 🆕 5개가 모이면 평균 계산 후 전송
-        # if self.spectrum_count >= 2:
-        #     # 평균 스펙트럼 계산
-        #     avg_spectrum = np.mean(self.spectrum_buffer, axis=0)
-        #     # 로그 스케일링 적용 (값이 0~수천까지 나올 수 있으므로)
-           
-        #     # # 🆕 0.5초에 한 번씩만 스펙트럼 값 10개 출력 (디버깅용)
-        #     # if should_print:
-        #     #     self.last_print_time = current_time
-        #     #     print("=== 평균 스펙트럼 값 (처음 10개) ===")
-        #     #     for i in range(min(10, len(avg_spectrum))):
-        #     #         print(f"[{i}] {avg_spectrum[i]:.6f}")
-        #     #         print(f"최소값: {np.min(avg_spectrum):.6f}")
-        #     #         print(f"최대값: {np.max(avg_spectrum):.6f}")
-        #     #     print("==============================")
-            
-        #     # Mp3Player.py와 동일한 JSON 구조로 평균 스펙트럼 발송
-        #     msg = String()
-        #     msg.data = json.dumps({"spectrum": avg_spectrum.tolist()})
-        #     self.visualizer_pub.publish(msg)
-            
-        #     # 🆕 버퍼 초기화
-        #     self.spectrum_buffer = []
-        #     self.spectrum_count = 0
-        
-        # # 개별 스펙트럼은 더 이상 전송하지 않음
-
-
-
-
-
-
-
-
-
-
-
-
-
-    def process_responses(self, responses):
-        silence_threshold = 3  # 3초 무음 시 퍼블리시
-        for resp in responses:
-            for result in resp.results:
-                txt = result.alternatives[0].transcript.strip()
-                is_final = result.is_final
-
-                if self.ignore_stt:
-                    self.get_logger().info(f"[무시됨] 효과음 재생 중 transcript: {txt}")
-                    continue
-
-                if txt:
-                    self.is_speaking = True  # 말하고 있음 (텍스트 인식됨)
-                    self.last_speech_time = time.time()
-                    self.silence_seconds = 0
-
-
-                 
-                    
-                        
-
-                    # 음악 종료 후 최초 음성 입력이 들어왔을 때만 무음 감지 시작
-                    if self.waiting_for_input_after_music:
-                        self.waiting_for_input_after_music = False  # 최초 입력 감지 완료
-                        self.get_logger().info("🎤 음악 종료 후 최초 입력 감지됨. 무음 체크 시작.")
-                        self.start_silence_monitoring()
-                else:
-                    self.is_speaking = False  # 말 안 하고 있음 (텍스트 없음)
-
-                self.get_logger().info(f'Transcript: {txt} (Final: {is_final})')
-
-                # ── 1) trigger 감지 시 ──
-                if not self.trigger_detected:
-                    if "안녕!" in txt:
-                        split_text = txt.split("안녕!", 1)
-                        if len(split_text) > 1:
-                            self.partial_transcript = split_text[1].strip()
-                            self.get_logger().info(f"Trigger detected. Capturing transcript: {self.partial_transcript}")
-
-                            # 🆕 원형 스펙트럼 초기화 (기존 word_processor.reset() 대신)
-                            self.voice_spectrum.reset()
-
-                           
-
-
-                            self.play_effect_sound_trigger()
-                            self.trigger_detected = True
-                        
-                            # 🆕 트리거 감지 상태 전송
-                            self.publish_trigger_status()
-                            self.audio_buffer = []  # 본 질문 음성 버퍼링 시작
-                            
-                            
-                            self.start_silence_monitoring()
-                        continue
-
-                # ── 2) trigger 이후 본 질문 저장 ──
-                elif self.trigger_detected:
-                    if "안녕!" in txt:
-                        split_text = txt.split("안녕!", 1)
-                        if len(split_text) > 1:
-                            self.partial_transcript = split_text[1].strip()
-                    else:
-                        self.partial_transcript = txt
-
-                # ── 3) 무음 3초 후 퍼블리시 시점 ──
-                if is_final and self.partial_transcript.strip():
-                    try:
-                        if self.waiting_sequence_running:
-                            self.get_logger().info("이미 대기 시퀀스가 실행 중입니다.")
-                            return
-                        
-                        self.publish_transcription(self.partial_transcript)
-                        self.save_audio_clip()
-                        return
-                    except Exception as e:
-                        self.get_logger().error(f"Speaker identification error: {e}")
-                        self.publish_transcription(self.partial_transcript)
-                        self.save_audio_clip()
-                        return
-
-            if not self.waiting_for_input_after_music:
-                self.start_silence_monitoring()
-
-
-    
-
-
-
-
-    def start_silence_monitoring(self):
-        """무음 상태에서 1초마다 경과 시간을 출력하는 스레드 실행"""
-        
-        if hasattr(self, 'silence_monitoring_thread') and self.silence_monitoring_thread.is_alive():
-            return  # 이미 실행 중이면 중복 실행 방지
-        
-        self.silence_monitoring_thread = threading.Thread(target=self.monitor_silence,args=(3,), daemon=True)
-        self.silence_monitoring_thread.start()
-
-
-   
-
-    def monitor_silence(self, silence_threshold):
-        """ 3초 이상 무음 상태가 지속되면 강제 Publish 또는 상태 초기화 """
-        self.silence_seconds = 0  # 무음 지속 시간 초기화
-        self.after_prompt = False  # 종료음 후 무음 감지 상태 초기화
-
-        while self.trigger_detected:
-            # 🔥 오디오 재생 중일 때 무음 감지 시작 방지
-            if self.is_sound_playing:
-                time.sleep(0.1)
-                continue
-
-            elapsed_silence = time.time() - self.last_speech_time
-
-            # 1초마다 로그 출력
-            if elapsed_silence >= self.silence_seconds + 1:
-                self.silence_seconds += 1
-                self.get_logger().info(f"무음성 {self.silence_seconds}초 경과 (무음 감지 중)")
-
-            # 무음 시간이 임계값을 초과했을 때
-            if elapsed_silence >= silence_threshold:
-                # 🔥 이미 퍼블리시된 경우 종료음 실행 방지
-                if self.force_published:
-                    self.get_logger().info("이미 퍼블리시된 텍스트이므로 종료음 생략")
-                    self.force_published = False  # 플래그 리셋
-                    break
-
-                # 🔥 무음 시간 동안 텍스트가 있는지 최종 확인
-                if self.partial_transcript.strip():
-                    self.get_logger().info(f"무음성 3초 경과 전 텍스트 감지: {self.partial_transcript}")
-                    self.publish_transcription(self.partial_transcript)
-                    self.last_published_text = self.partial_transcript
-                    self.partial_transcript = ""
-                    self.trigger_detected = False
-                    self.get_logger().info("무음 감지 중지: 퍼블리시 완료")
-                    break
-
-                # 종료음 재생 전이면
-                if not self.after_prompt:
-                    self.get_logger().info("무음성 3초 경과 (초기 체크): 종료음 재생 후 추가 무음 체크 시작")
-                    self.play_effect_sound_requestion()  # 종료음 재생
-
-                    # 종료음 후에도 무음 체크를 위해 시간 갱신
-                    self.last_speech_time = time.time()
-
-                    # 상태 전환
-                    self.after_prompt = True
-                    self.silence_seconds = 0  # 무음 카운터 초기화
-                    continue  # 추가 무음 체크 계속
-
-                # 종료음 후 3초 무음 상태 확인
-                else:
-                    if not self.partial_transcript.strip():
-                        self.get_logger().info(f"종료음 후 추가 무음 {self.silence_seconds}초 경과 (음성 없음)")
-                        self.get_logger().info("추가 음성이 없으므로 초기 상태로 복귀")
-                        self.trigger_detected = False
-                        self.partial_transcript = ""
-                        self.after_prompt = False  # 상태 초기화
-                        break
-                    else:
-                        self.get_logger().info(f"종료음 후 추가 무음 {self.silence_seconds}초 경과 (음성 감지)")
-                        self.get_logger().info("종료음 재생 후 3초 경과로 인해 강제 publish")
-                        self.publish_transcription(self.partial_transcript)
-                        self.last_published_text = self.partial_transcript
-                        self.partial_transcript = ""
-                        self.after_prompt = False  # 상태 초기화
-                        break
-
-            time.sleep(0.1)
-
-
-
-
-
-
-
-    def play_effect_sound_requestion(self):
-        """ 랜덤으로 요청 음성(MP3)을 재생하며, 재생 중 텍스트 입력을 무시 """
-        # 효과음 파일이 저장된 디렉토리 경로
-        effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_requestion"
-
-        # 디렉토리에서 MP3 파일 목록 가져오기
-        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
-
-        if not mp3_files:
-            self.get_logger().error("No MP3 files found in the requestion directory.")
-            return
-
-        try:
-            self.ignore_stt = True  # 🔇 STT 입력 무시 시작
-            self.audio_buffer = []
-            self.partial_transcript = ""
-            self.audio_stream.queue.clear()
-
-            # 랜덤으로 하나의 MP3 파일 선택
-            selected_file = random.choice(mp3_files)
-            selected_path = os.path.join(effects_dir, selected_file)
-
-            self.get_logger().info(f"Playing sound: {selected_file}")
-
-            # 🔥 효과음 재생 중 상태 설정
-            self.is_sound_playing = True
-
-            # ✅ 버퍼 초기화 (효과음 재생 중 텍스트 무시)
-            
-
-            # pygame을 사용하여 MP3 파일 재생
-            pygame.mixer.init()
-            pygame.mixer.music.load(selected_path)
-            pygame.mixer.music.play()
-
-            # 재생이 끝날 때까지 대기
-            while pygame.mixer.music.get_busy():
-                pygame.time.Clock().tick(10)
-            self.ignore_stt = False  # ✅ 재생 완료 후 STT 다시 허용
-
-            # 🔥 효과음 재생 완료
-            self.is_sound_playing = False
-            self.start_silence_monitoring()
-
-        except Exception as e:
-            self.get_logger().error(f"Failed to play effect sound: {e}")
-            # 🔥 비상상황: 플래그 해제
-            self.is_sound_playing = False
-
-
-
-
-    def play_effect_sound_trigger(self):
-        """효과음 파일을 재생하며, 재생 중 텍스트 입력을 무시"""
-        # 효과음 파일이 저장된 디렉토리 경로
-        effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_trigger"
-
-        # 디렉토리에서 MP3 파일 목록 가져오기
-        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
-
-        try:
-            self.ignore_stt = True  # 🔇 STT 입력 무시 시작
-            # ✅ 버퍼 초기화 (효과음 재생 중 텍스트 무시)
-            self.audio_buffer = []
-            self.partial_transcript = ""
-            self.audio_stream.queue.clear()
-            # 랜덤으로 하나의 MP3 파일 선택
-            selected_file = random.choice(mp3_files)
-            selected_path = os.path.join(effects_dir, selected_file)
-
-            self.get_logger().info(f"Playing sound: {selected_file}")
-
-            # 🔥 효과음 재생 중 상태 설정
-            self.is_sound_playing = True
-
-            
-
-            # pygame을 사용하여 MP3 파일 재생
-            pygame.mixer.init()
-            pygame.mixer.music.load(selected_path)
-            pygame.mixer.music.play()
-
-            # 🔥 재생이 끝날 때까지 대기
-            while pygame.mixer.music.get_busy():
-                pygame.time.Clock().tick(10)
-
-            # 🔥 효과음 재생 완료 후에 무음 감지 시작
-            self.is_sound_playing = False
-            
-            
-
-            self.get_logger().info("효과음 재생 완료 후 무음 감지 초기화")
-            self.last_speech_time = time.time()  # 🔥 무음 시간 초기화
-            self.start_silence_monitoring()
-            self.ignore_stt = False  # ✅ 재생 완료 후 STT 다시 허용
-
-        except Exception as e:
-            self.get_logger().error(f"Failed to play effect sound: {e}")
-            # 🔥 비상상황: 플래그 해제
-            self.is_sound_playing = False
-
-  
-
-
-
-
-
-    # def play_effect_sound_waiting_1(self):
-    #     """
-    #     질문 확인 TTS 생성 및 재생 (기존 대기음 대신)
-    #     """
-    #     try:
-    #         # 1. 발행된 질문 텍스트 확인
-    #         if not hasattr(self, 'last_published_text') or not self.last_published_text:
-    #             self.get_logger().warning("발행된 질문이 없어 기본 대기음을 재생합니다.")
-    #             self.play_default_waiting_sound()
-    #             return
-
-    #         # 2. 순수 질문 텍스트 추출 (speaker### 부분 제거)
-    #         question_text = self.extract_question_from_published_text(self.last_published_text)
-            
-    #         # 3. 질문 확인 문구 생성
-    #         confirm_text = f"{question_text} 라고 물어본거지?"
-    #         self.get_logger().info(f"🎤 질문 확인 TTS 생성: {confirm_text}")
-    #         self.save_log(f"🎤 질문 확인 TTS 생성: {confirm_text}")
-
-    #         # 4. TTS 생성
-    #         if not self.text2speech_question_confirm(confirm_text):
-    #             self.get_logger().warning("TTS 생성 실패로 기본 대기음을 재생합니다.")
-    #             self.play_default_waiting_sound()
-    #             return
-
-    #         # 5. 생성된 TTS 파일 재생 (기존 스펙트럼 방식 유지)
-    #         if os.path.exists(self.question_confirm_path):
-    #             # pydub을 사용하여 MP3 로드
-    #             sound = AudioSegment.from_file(self.question_confirm_path, format="mp3")
-                
-    #             # 정규화 (기존 방식과 동일)
-    #             target_dBFS = -14.0
-    #             change_in_dBFS = target_dBFS - sound.dBFS
-    #             sound = sound.apply_gain(change_in_dBFS)
-                
-    #             # 임시 WAV로 변환
-    #             temp_wav = "/tmp/question_confirm_audio.wav"
-    #             sound.export(temp_wav, format="wav")
-
-
-    #             # 🆕 핵심 추가: 오디오 재생 직전에 사용자 질문 말풍선 발행
-    #             question_display_msg = String()
-    #             question_display_msg.data = question_text.strip()  # 순수 질문 텍스트
-    #             self.user_question_display_pub.publish(question_display_msg)
-    #             self.get_logger().info(f"🗨️ TTS 재생과 동시에 사용자 질문 말풍선 표시: {question_text.strip()}")
-
-
-
-
-    #             # 기존과 동일한 방식으로 스펙트럼과 재생 병렬 처리
-    #             self.waiting_publish_and_play(temp_wav)
-           
-
-    #             self.get_logger().info("질문 확인 TTS 재생 완료")
-    #             self.save_log("질문 확인 TTS 재생 완료")
-
-    #             # 🔧 핵심: 스레드 기반으로 Realtime 실행
-    #             def start_realtime_async():
-    #                 try:
-    #                     asyncio.run(self.start_realtime_response(question_text))
-    #                 except Exception as e:
-    #                     self.get_logger().error(f"❌ Realtime 실행 실패: {e}")
-                
-    #             realtime_thread = threading.Thread(target=start_realtime_async, daemon=True)
-    #             realtime_thread.start()
-    #             self.get_logger().info("🚀 Realtime 응답 스레드 시작")
-
-
-
-
-
-
-    #         else:
-    #             self.get_logger().error(f"TTS 파일이 생성되지 않음: {self.question_confirm_path}")
-    #             self.play_default_waiting_sound()
-
-    #     except Exception as e:
-    #         self.get_logger().error(f"질문 확인 TTS 처리 실패: {e}")
-    #         self.save_log(f"질문 확인 TTS 처리 실패: {e}")
-    #         self.play_default_waiting_sound()
-
-
-
-    # 🔧 수정된 대기 효과 실행 함수
-    def play_effect_sound_waiting_1(self):
-        """GPT-4.1 nano + ElevenLabs TTS 방식으로 질문 확인"""
-        try:
-            # 1. 발행된 질문 텍스트 확인
-            if not hasattr(self, 'last_published_text') or not self.last_published_text:
-                self.get_logger().warning("발행된 질문이 없습니다.")
-                return
-
-            # 2. 순수 질문 텍스트 추출
-            question_text = self.extract_question_from_published_text(self.last_published_text)
-            
-            # 3. 사용자 질문 말풍선 표시
-            question_display_msg = String()
-            question_display_msg.data = question_text.strip()
-            self.user_question_display_pub.publish(question_display_msg)
-            self.get_logger().info(f"🗨️ 사용자 질문 말풍선 표시: {question_text.strip()}")
-
-            # 4. GPT-4.1 nano로 질문 확인 문구 생성
-            confirmation_text = self.generate_question_confirmation(question_text)
-            
-            # 5. ElevenLabs TTS로 음성 생성
-            if self.text2speech_question_confirm(confirmation_text):
-                # 6. TTS 재생 (완료 시 자동으로 상태 퍼블리시됨)
-                self.play_question_confirm_tts(self.question_confirm_path)
-            else:
-                self.get_logger().error("❌ TTS 생성 실패")
-                # 실패 시에도 완료 상태 전송
-                self.publish_question_confirm_status("completed")
-
-        except Exception as e:
-            self.get_logger().error(f"❌ 질문 확인 처리 실패: {e}")
-            self.publish_question_confirm_status("completed")
-
-
-
-
-
-
-
-
-
-
-
-    # def play_default_waiting_sound(self):
-    #     """
-    #     TTS 생성 실패 시 기본 대기음 재생 (백업용)
-    #     """
-    #     try:
-    #         # 🆕 기본 대기음 재생 시에도 말풍선 표시
-    #         if hasattr(self, 'last_published_text') and self.last_published_text:
-    #             question_text = self.extract_question_from_published_text(self.last_published_text)
-    #             question_display_msg = String()
-    #             question_display_msg.data = question_text.strip()
-    #             self.user_question_display_pub.publish(question_display_msg)
-    #             self.get_logger().info(f"🗨️ 기본 대기음과 함께 사용자 질문 말풍선 표시: {question_text.strip()}")
-
-
-    #         effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting1"
-            
-    #         if not os.path.exists(effects_dir):
-    #             self.get_logger().error(f"기본 대기음 디렉토리 없음: {effects_dir}")
-    #             return
-                
-    #         mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
-
-    #         if not mp3_files:
-    #             self.get_logger().error("기본 대기음 파일이 없습니다.")
-    #             return
-
-    #         # 랜덤으로 하나의 MP3 파일 선택
-    #         selected_file = random.choice(mp3_files)
-    #         selected_path = os.path.join(effects_dir, selected_file)
-
-    #         self.get_logger().info(f"기본 대기음 재생: {selected_file}")
-
-    #         # 기존 방식과 동일하게 재생
-    #         sound = AudioSegment.from_file(selected_path, format="mp3")
-    #         target_dBFS = -14.0
-    #         change_in_dBFS = target_dBFS - sound.dBFS
-    #         sound = sound.apply_gain(change_in_dBFS)
-            
-    #         temp_wav = "/tmp/default_waiting_audio.wav"
-    #         sound.export(temp_wav, format="wav")
-
-    #         self.waiting_publish_and_play(temp_wav)
-    #         # time.sleep(1)
-
-    #     except Exception as e:
-    #         self.get_logger().error(f"기본 대기음 재생 실패: {e}")
-
-
-
-
-
-
-
-
-
-
-
-   
-
-    def direction_callback(self, msg):
-        """실시간 각도 업데이트"""
-        self.current_direction = msg.data
-
-    def publish_transcription(self, text: str):
-
-
-        # 🆕 중복 실행 방지
-        if self.waiting_sequence_running:
-            self.get_logger().info("대기 시퀀스가 이미 실행 중입니다. 중복 실행을 방지합니다.")
-            return
-
-
-        if text.strip():
-            if self.timer_30s and self.timer_30s.is_alive():
-                self.timer_30s.cancel()  # ✅ 퍼블리시 후 타이머 종료
-
-            self.force_published = True
-
-
-            # 🆕 2단계: searching 상태 신호 전송 (기존 gif_status_pub 활용)
-            status_msg = String()
-            status_msg.data = "searching"  # gif_status 대신 searching으로 통일
-            self.gif_status_pub.publish(status_msg)
-            self.get_logger().info("📊 UserQuestion에서 searching 상태 전송")
-            # time.sleep(0.5)
-
-
-            # 🆕 질문 퍼블리시와 동시에 현재 각도를 고정 각도로 전송
-            fixed_msg = Float32()
-            fixed_msg.data = self.current_direction
-            self.fixed_direction_pub.publish(fixed_msg)
-            self.get_logger().info(f"🔒 고정 각도 설정: {self.current_direction}도")
-            
-
-            msg = String()
-            msg.data = f"speaker{self.current_speaker_id:03d}|{text}"
-            self.publisher_.publish(msg)
-            self.last_published_text = msg.data
-
-
-            # # 🆕 순수 질문 텍스트만 별도로 발행 (말풍선 표시용)
-            # question_display_msg = String()
-            # question_display_msg.data = text.strip()  # speaker ID 없이 순수 질문만
-            # self.user_question_display_pub.publish(question_display_msg)
-            # self.get_logger().info(f"🗨️ 사용자 질문 표시용 발행: {text.strip()}")
-
-
-
-            self.get_logger().info(f'Transcription published: "{msg.data}"')
-            self.save_log(f'Transcription published: "{msg.data}"')
-            self.partial_transcript = ""  # ✅ 퍼블리시 후 즉시 초기화
-            self.trigger_detected = False  # ✅ 퍼블리시 후 trigger 상태 초기화
-            self.waiting_for_input_after_music = False  # ✅ 입력 대기 상태 해제
      
+    // const maxBarHeight = height * 0.3;
+    // const totalWidth = numBars * barWidth + (numBars - 1) * gap;
+    const totalWidth = numBars * barWidth + totalGaps * gap;
+    const xOffset = (width - totalWidth) / 2;
+    const centerY = height / 2;
 
 
 
-
-            # 🆕 플래그 설정 후 실행
-            self.waiting_sequence_running = True
-            threading.Thread(target=self.execute_waiting_sequence, daemon=False).start()    
-
-
-  
-
-    
-
-    # def play_effect_sound_rag(self):
-    #     # 효과음 파일이 저장된 디렉토리 경로
-    #     effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_rag"
-
-    #     # 디렉토리에서 MP3 파일 목록 가져오기
-    #     mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
-
-    #     if not mp3_files:
-    #         self.get_logger().info("No MP3 files found in the effects directory.")
-    #         return
-
-    #     # 랜덤으로 하나의 MP3 파일 선택
-    #     selected_file = random.choice(mp3_files)
-    #     selected_path = os.path.join(effects_dir, selected_file)
-
-    #     self.get_logger().info(f"Playing sound: {selected_file}")
-
-    #     # pygame을 사용하여 MP3 파일 재생
-    #     pygame.mixer.init()
-    #     pygame.mixer.music.load(selected_path)
-    #     pygame.mixer.music.play()
-        
-    #     # 재생이 끝날 때까지 대기
-    #     while pygame.mixer.music.get_busy():
-    #         pygame.time.Clock().tick(10)
-
-
-
-
-    # def execute_waiting_sequence(self):
-    #     """새로운 대기 효과들을 순차 실행 (중복 방지 포함)"""
-    #     try:
-    #         # 🆕 중복 실행 체크
-    #         if not self.waiting_sequence_running:
-    #             self.get_logger().info("대기 시퀀스가 이미 완료되었습니다.")
-    #             return
-                
-    #         self.get_logger().info("질문 확인 시퀀스 시작")
-            
-    #         # 첫 번째 대기 효과 (스펙트럼 시각화)
-    #         self.play_effect_sound_waiting_1()
-            
-       
-            
-    #         self.get_logger().info("질문 확인 시퀀스 완료")
-            
-    #     except Exception as e:
-    #         self.get_logger().error(f"대기 효과 실행 중 오류: {e}")
-    #     finally:
-    #         # 🆕 플래그 해제
-    #         self.waiting_sequence_running = False
-
-
-
-    def execute_waiting_sequence(self):
-        """대기 효과 실행 - 간소화된 버전"""
-        try:
-            if not self.waiting_sequence_running:
-                self.get_logger().info("대기 시퀀스가 이미 완료되었습니다.")
-                return
-                    
-            self.get_logger().info("즉시 Realtime 시퀀스 시작")
-            
-            # 🚀 즉시 Realtime 실행 (TTS 과정 생략)
-            self.play_effect_sound_waiting_1()
-            
-            self.get_logger().info("Realtime 시퀀스 완료")
-            
-        except Exception as e:
-            self.get_logger().error(f"Realtime 실행 중 오류: {e}")
-        finally:
-            self.waiting_sequence_running = False
-
-
-
-
-
-
-
-
-    # def waiting_publish_and_play(self, wav_path):
-    #     """Mp3Player.py의 publish_and_play와 동일한 방식"""
-    #     import wave
-        
-    #     wf = wave.open(wav_path, 'rb')
-    #     chunk_size = 2024
-
-    #     def publish_spectrum():
-    #         data = wf.readframes(chunk_size)
-    #         while data:
-    #             samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-    #             if wf.getnchannels() == 2:
-    #                 samples = samples.reshape((-1, 2)).mean(axis=1)
-            
-                
-
-    #             fft = np.fft.fft(samples)
-    #             spectrum = np.abs(fft[:len(fft)//2])
-    #             #spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-    #             msg = String()
-    #             msg.data = json.dumps({"spectrum": spectrum.tolist()})
-    #             self.waiting_spectrum_pub.publish(msg)
-    #             data = wf.readframes(chunk_size)
-    #             time.sleep(chunk_size / wf.getframerate())
-
-
-
-
-
-
-
-    #     spectrum_thread = threading.Thread(target=publish_spectrum)
-    #     spectrum_thread.start()
-
-    #     # 시스템 명령어로 재생 (Mp3Player.py와 동일)
-    #     os.system(f"aplay {wav_path}")
-    #     spectrum_thread.join()
-    #     wf.close()
-
-
-            
-
-
-
-    def save_audio_clip(self):
-        """ "안녕!" 이후의 오디오를 WAV 파일로 저장 """
-        if not self.audio_buffer:
-            return
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"/home/nvidia/ros2_ws/audio_files/{timestamp}.wav"
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-
-        with wave.open(filename, 'wb') as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(self.p.get_sample_size(pyaudio.paInt16))
-            wf.setframerate(16000)
-            wf.writeframes(b''.join(self.audio_buffer))
-
-        self.get_logger().info(f"Saved audio: {filename}")
-        self.save_log(f"Saved audio: {filename}")
-        self.audio_buffer = []  
-        
-        
-  
-
-    def force_restart_stt(self):
-        self.get_logger().info("Forcing STT restart...")
-
-        # ✅ STT 세션 종료 표시
-        self.transcribing = False
-
-        # ✅ 세션 강제 중지
-        self.stop_audio_stream()
-
-        # ✅ 대기 시간 조금 여유롭게
-        # time.sleep(2.5)
-
-        # ✅ 입력 스트림 재시작
-        self.start_audio_stream()
-
-        # ✅ STT 재시작 – 쓰레드로 안전하게 분리
-        threading.Thread(target=self.transcribe_streaming, daemon=True).start()
-
-
-    def save_log(self, message):
-        """ 로그를 파일에 저장 """
-        log_file_path = "/home/nvidia/ros2_ws/_logs/UserQuestion_log.txt"
-        log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
-        with open(log_file_path, "a", encoding="utf-8") as log_file:
-            log_file.write(log_message)
 
 
     
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = barThickness;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 메인 루프
-# ──────────────────────────────────────────────────────────────────────────────
+  
+    for (let i = 0; i < numBars; i++) {
+      const x = xOffset + i * (barWidth + gap) + barWidth / 2;
+      const barHeight = bars[i] * maxBarHeight;
+      ctx.beginPath();
+      ctx.moveTo(x, centerY - barHeight);
+      ctx.lineTo(x, centerY + barHeight);
+      ctx.stroke();
+    }
 
-def main(args=None):
-    rclpy.init(args=args)
-    node = UserQuestion()
-    executor = MultiThreadedExecutor()
-    executor.add_node(node)
 
-    async def spin():
-        while rclpy.ok():
-            executor.spin_once(timeout_sec=0.1)
-            await asyncio.sleep(0.1)
+
+
+
+    
+  }, [micSpectrum, musicPlaying, recommendStatus, canvasSize, triggerDetected, videoVisible, isTransitioning]);
+
+ 
+
+
+
+
+//===============================================================================================
+
+
+
+  // 🆕 UserQuestion 대기 스펙트럼 렌더링 (개선된 부드러운 버전) - UserQuestion 노드
+  useEffect(() => {
+    if (!isWaitingAudioMode || waitingSpectrum.length === 0) return;
+
+    
+    
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const { width, height } = canvasSize;
+    
+    canvas.width = width;
+    canvas.height = height;
+    
+      // 🆕 배경색 흰색으로 변경
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, width, height);
+
+    const numBars = 64;
+    const limitedSpectrum = waitingSpectrum.slice(10, 200); // 0~300 인덱스 추출
+    let bars = downsampleArray(limitedSpectrum, numBars);
+    bars = bars.map(v => Math.min(1, v * 0.0000005));
+    
+
+    
+
+
+// 🆕 원형 스펙트럼 설정
+const centerX = width / 2;
+const centerY = height / 2;
+const baseRadius = Math.min(width, height) * 0.2;    // 기본 원 반지름
+const maxBarLength = Math.min(width, height) * 0.15; // 최대 바 길이
+
+// 🆕 원형 스펙트럼 스타일 (검정색)
+ctx.strokeStyle = '#000';
+ctx.lineWidth = 4; // 바 두께
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
+
+// 🆕 원형 스펙트럼 그리기
+for (let i = 0; i < numBars; i++) {
+  const angle = (i / numBars) * 2 * Math.PI; // 각도 계산
+  const barLength = bars[i] * maxBarLength;  // 바 길이
+  const radius = baseRadius + barLength;     // 최종 반지름
+  
+  // 바의 시작점 (기본 원 위의 점)
+  const startX = centerX + Math.cos(angle) * baseRadius;
+  const startY = centerY + Math.sin(angle) * baseRadius;
+  
+  // 바의 끝점 (확장된 반지름의 점)
+  const endX = centerX + Math.cos(angle) * radius;
+  const endY = centerY + Math.sin(angle) * radius;
+
+  // 바 그리기
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.lineTo(endX, endY);
+  ctx.stroke();
+    
+}
+  }, [waitingSpectrum, isWaitingAudioMode, canvasSize]);
+
+
+
+
+
+
+ //--------------------------------------------------------------------------------------------------------- 
+ // 🆕 Mp3Player waiting 스펙트럼 렌더링 (현재는 UserQuestion과 동일, 나중에 커스터마이징 가능)
+ //--------------------------------------------------------------------------------------------------------- 
+  useEffect(() => {
+    if (!isMp3WaitingMode  || mp3WaitingSpectrum.length === 0) return;
+    
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const { width, height } = canvasSize;
+    
+    canvas.width = width;
+    canvas.height = height;
+    
+    // 🆕 배경색 흰색으로 변경
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, width, height);
+
+
+
+    // // 🎨 Mp3Player waiting용 배경 (나중에 차별화 가능)
+    // ctx.fillStyle = 'rgb(255, 255, 255)';
+    // ctx.fillRect(0, 0, width, height);
+    
+    // // 원형 스펙트럼 설정 (UserQuestion waiting과 현재는 동일)
+    // const centerX = width / 2;
+    // const centerY = height / 2;
+    // const baseRadius = Math.min(width, height) * 0.2;
+    // const maxBarLength = Math.min(width, height) * 0.15;
+    
+    // // 스펙트럼 데이터 처리 (동일한 방식)
+    // const central = getCentralSlice(mp3WaitingSpectrum, 0.6);
+    const numBars = 64;
+    const limitedSpectrum = mp3WaitingSpectrum.slice(10, 200); // 0~300 인덱스 추출
+    let bars = downsampleArray(limitedSpectrum, numBars);
+    bars = bars.map(v => Math.min(1, v * 0.0000005));
+
+
+
+// 🆕 원형 스펙트럼 설정
+const centerX = width / 2;
+const centerY = height / 2;
+const baseRadius = Math.min(width, height) * 0.2;    // 기본 원 반지름
+const maxBarLength = Math.min(width, height) * 0.15; // 최대 바 길이
+
+// 🆕 원형 스펙트럼 스타일 (검정색)
+ctx.strokeStyle = '#000';
+ctx.lineWidth = 4; // 바 두께
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
+
+// 🆕 원형 스펙트럼 그리기
+for (let i = 0; i < numBars; i++) {
+  const angle = (i / numBars) * 2 * Math.PI; // 각도 계산
+  const barLength = bars[i] * maxBarLength;  // 바 길이
+  const radius = baseRadius + barLength;     // 최종 반지름
+  
+  // 바의 시작점 (기본 원 위의 점)
+  const startX = centerX + Math.cos(angle) * baseRadius;
+  const startY = centerY + Math.sin(angle) * baseRadius;
+  
+  // 바의 끝점 (확장된 반지름의 점)
+  const endX = centerX + Math.cos(angle) * radius;
+  const endY = centerY + Math.sin(angle) * radius;
+
+  // 바 그리기
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.lineTo(endX, endY);
+  ctx.stroke();
+    
+}
+
+    
+  }, [mp3WaitingSpectrum, isMp3WaitingMode , canvasSize]);
+
+
+
+
+
 
   
 
-    loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(spin())
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+
+  useEffect(() => {
+    const updateCanvasSize = () => {
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+  
+      // 🔧 모든 모드에서 전체화면 사용 (musicPlaying 조건 제거)
+      setCanvasSize({ 
+        width: viewportWidth, 
+        height: viewportHeight 
+      });
+    };
+  
+    updateCanvasSize();
+    window.addEventListener('resize', updateCanvasSize);
+    
+    return () => window.removeEventListener('resize', updateCanvasSize);
+  }, [isWaitingAudioMode, isMp3WaitingMode]);
+  
 
 
-if __name__ == "__main__":
-    main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const getScreenTransform = () => {
+  if (screenFlipped) {
+    return 'scaleY(-1) scaleX(-1)'; // 상하반전
+  }
+  return 'scaleY(1) scaleX(1)'; // 정상
+};
+
+
+
+  
+
+
+
+
+
+
+
+  return (
+    <div style={{ 
+      width: '100vw', 
+      height: '100vh', 
+      display: 'flex', 
+      justifyContent: 'center', 
+      alignItems: 'center',
+      margin: 0,
+      padding: 0,
+      boxSizing: 'border-box',
+      position: 'relative',
+      // backgroundColor: (recommendStatus === 'searching' && !imageVisible) ? '#fff' : 
+      //            (musicPlaying || imageVisible) ? '#000' : '#222222',
+      // 🆕 대기 모드 고려한 배경색 로직
+      backgroundColor: isTtsPlaying ? '#1a1a1a' :  (recommendStatus === 'searching' && !videoVisible && !isWaitingAudioMode) ? '#fff' : 
+      (isWaitingAudioMode) ? '#fff' :
+      (musicPlaying || videoVisible) ? '#000' : '#222222',
+
+      // 🆕 화면 변환 적용
+      transform: getScreenTransform(),
+      transition: 'transform 0.5s ease-in-out' // 부드러운 전환 효과
+    }}>
+
+      {/* 🆕 방향 정보 표시 (디버깅용 - 원하면 제거) */}
+      <div style={{
+        position: 'absolute',
+        top: '10px',
+        right: '10px',
+        color: screenFlipped ? '#ff6b6b' : '#4ecdc4',
+        fontSize: '16px',
+        fontWeight: 'bold',
+        zIndex: 100,
+        transform: screenFlipped ? 'scaleY(-1)' : 'scaleY(1)', // 텍스트는 정상 방향 유지
+        backgroundColor: 'rgba(0,0,0,0.7)',
+        padding: '5px 10px',
+        borderRadius: '5px'
+      }}>
+        {/* {isDirectionFixed 
+          ? `🔒 고정: ${Math.round(fixedDirection)}° ${screenFlipped ? '(반전)' : '(정상)'}`
+          : `📍 실시간: ${Math.round(soundDirection)}° ${screenFlipped ? '(반전)' : '(정상)'}`
+        } */}
+      </div>
+
+      
+
+
+
+
+
+
+
+   {/* 캔버스 표시 조건 수정 */}
+   {!videoVisible && !showReply  && !shouldShowVoiceSpectrum() && !isTtsPlaying &&!waitingForQuestionConfirm && (
+      <canvas 
+        ref={canvasRef}
+        style={{
+          width: '100vw',
+          height: '100vh',
+          position: 'fixed',
+          top: '0',
+          left: '0',
+          zIndex: 10,
+          border: 'none',
+          outline: 'none',
+          display: 'block',
+          WebkitTapHighlightColor: 'transparent'
+        }}
+      />
+    )}
+
+    {/* 🆕 음성 원형 스펙트럼 표시 추가 */}
+    {renderVoiceSpectrum()}
+
+    {/* 🆕 비디오 대기 중 표시 */}
+    {renderVideoPending()}
+
+
+
+    {/* 기존 이미지 표시 */}
+    {videoVisible && renderVideo()}
+    {/* 🆕 TTS 대기 중 표시 */}
+    {renderTtsWaiting()}
+
+    {/* 🆕 사용자 질문 말풍선 추가 - 대기 스펙트럼과 함께 표시 */}
+    {renderUserQuestionBubble()}
+
+    {/* 🆕 TTS 노래방 자막 렌더링 추가 */}
+    {renderTtsKaraokeSubtitle()}
+
+    
+
+  </div>
+);
+  
+}
+
+export default SpectrumVisualizer;
+
+
+
+
+
