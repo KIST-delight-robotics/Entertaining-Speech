@@ -1,6 +1,4 @@
 
-
-
 #whisper local model 도입
 
 import os
@@ -134,7 +132,101 @@ class Mp3Player(Node):
             self.get_logger().error(f"❌ 형태소 분석기 초기화 실패: {e}")
             self.kiwi = None
 
-      
+
+        # 🆕 단일 단어 자막 퍼블리셔 추가
+        self.single_word_publisher = self.create_publisher(String, "/single_word_subtitle", 10)
+
+        
+
+
+
+
+
+    def publish_single_word_subtitle(self, subtitle_data):
+        """
+        자막을 한 단어씩 순차적으로 퍼블리시 (다음 단어까지 현재 단어 유지)
+        """
+        if not subtitle_data or 'words' not in subtitle_data:
+            return
+        
+        def subtitle_worker():
+            try:
+                words = subtitle_data['words']
+                start_time = time.time()
+                
+                self.get_logger().info(f"📺 순차 단일 자막 시작: {len(words)}개 단어")
+                
+                for i, word_info in enumerate(words):
+                    # 단어 시작 시간까지 대기
+                    elapsed_time = time.time() - start_time
+                    target_time = word_info['start']
+                    
+                    if target_time > elapsed_time:
+                        sleep_duration = target_time - elapsed_time
+                        time.sleep(sleep_duration)
+                    
+                    # 🔑 현재 단어 표시
+                    current_word_data = {
+                        "word": word_info['word'],
+                        "start": word_info['start'],
+                        "end": word_info['end'],
+                        "confidence": word_info['confidence'],
+                        "index": i,
+                        "total": len(words),
+                        "display_mode": "single_word"
+                    }
+                    
+                    msg = String()
+                    msg.data = json.dumps(current_word_data, ensure_ascii=False)
+                    self.single_word_publisher.publish(msg)
+                    
+                    self.get_logger().info(f"📺 [{i+1}/{len(words)}] 표시: '{word_info['word']}' ({word_info['start']:.2f}s-{word_info['end']:.2f}s)")
+                    
+                    # 🔑 핵심 수정: 다음 단어 시작 시간까지 대기 (빈 화면 없이)
+                    if i < len(words) - 1:
+                        # 다음 단어가 있는 경우: 다음 단어 시작 시간까지 현재 단어 유지
+                        next_word_start = words[i + 1]['start']
+                        current_time_in_audio = time.time() - start_time
+                        remaining_time = next_word_start - current_time_in_audio
+                        
+                        if remaining_time > 0:
+                            time.sleep(remaining_time)
+                    else:
+                        # 마지막 단어인 경우: 단어의 지속 시간만큼 대기
+                        word_duration = word_info['end'] - word_info['start']
+                        time.sleep(word_duration)
+                
+                # 🔑 모든 자막 종료
+                final_data = {
+                    "word": "",
+                    "display_mode": "finished"
+                }
+                final_msg = String()
+                final_msg.data = json.dumps(final_data, ensure_ascii=False)
+                self.single_word_publisher.publish(final_msg)
+                
+                self.get_logger().info("📺 순차 단일 자막 완료")
+                
+            except Exception as e:
+                self.get_logger().error(f"❌ 순차 자막 퍼블리시 실패: {e}")
+        
+        # 별도 스레드에서 실행
+        subtitle_thread = threading.Thread(target=subtitle_worker, daemon=True)
+        subtitle_thread.start()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1204,6 +1296,9 @@ class Mp3Player(Node):
                         "words": corrected_timestamps,
                         "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
                     }
+
+                    # 🆕 순차 단일 단어 자막 시작
+                    self.publish_single_word_subtitle(subtitle_data)
                     
                     msg = String()
                     msg.data = json.dumps(subtitle_data, ensure_ascii=False)
@@ -1737,79 +1832,44 @@ class Mp3Player(Node):
 
 
 
-    #원본 RMS 값 기반 상대적 스케일링
     def tts_publish_and_play(self, wav_path):
-        """TTS 재생 시간 + 원본 RMS 기반 음량 정보 퍼블리시"""
+        """TTS 재생 시간 정보만 퍼블리시 (음량 정보 제거)"""
         wf = wave.open(wav_path, 'rb')
         chunk_size = 1024
         frame_rate = wf.getframerate()
         start_time = time.time()
-        
-        # 🆕 전체 오디오의 RMS 값들을 저장할 리스트
-        all_rms_values = []
 
-        def publish_tts_time_and_volume():
-            nonlocal all_rms_values
+        def publish_tts_time_only():
             data = wf.readframes(chunk_size)
             
             while data:
                 current_time = round(time.time() - start_time, 3)
                 
-                # 실시간 음량 계산
-                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-                if wf.getnchannels() == 2:
-                    samples = samples.reshape((-1, 2)).mean(axis=1)
-                
-                # 🔑 핵심: 원본 RMS 값 사용 (정규화 없음)
-                raw_rms = np.sqrt(np.mean(samples**2)) if len(samples) > 0 else 0
-                all_rms_values.append(raw_rms)
-                
-                # 🆕 로그 스케일 적용 (선택적, 더 자연스러운 음량 차이)
-                if raw_rms > 0:
-                    log_scaled_rms = np.log1p(raw_rms) / np.log1p(10000)  # log(1+x) 스케일링
-                else:
-                    log_scaled_rms = 0
-                
-                # 🆕 단순 스케일링 (정규화 대신)
-                scaled_volume = min(1.0, raw_rms / 5000.0)  # 5000으로 나누되 1.0으로 제한하지 않음
-                
-                time_volume_data = {
+                # 🔑 음량 정보 완전 제거 - 시간 정보만 전송
+                time_data = {
                     "current_time": current_time,
                     "status": "playing",
-                    "raw_rms": float(raw_rms),           # 🔑 원본 RMS 값 추가
-                    "volume": float(scaled_volume),       # 기존 호환성용
-                    "log_volume": float(log_scaled_rms),  # 로그 스케일 버전
                     "timestamp": time.time()
                 }
 
                 msg = String()
-                msg.data = json.dumps(time_volume_data)
+                msg.data = json.dumps(time_data)
                 self.tts_spectrum_publisher.publish(msg)
                 
                 data = wf.readframes(chunk_size)
                 time.sleep(chunk_size / frame_rate)
             
-            # 🆕 재생 완료 시 통계 정보 로깅
-            if all_rms_values:
-                min_rms = min(all_rms_values)
-                max_rms = max(all_rms_values)
-                avg_rms = sum(all_rms_values) / len(all_rms_values)
-                self.get_logger().info(f"🔊 RMS 통계 - 최소: {min_rms:.1f}, 최대: {max_rms:.1f}, 평균: {avg_rms:.1f}")
-            
             # 재생 완료 신호
             final_data = {
                 "current_time": current_time,
                 "status": "finished",
-                "raw_rms": 0.0,
-                "volume": 0.0,
-                "log_volume": 0.0,
                 "timestamp": time.time()
             }
             msg = String()
             msg.data = json.dumps(final_data)
             self.tts_spectrum_publisher.publish(msg)
 
-        time_thread = threading.Thread(target=publish_tts_time_and_volume)
+        time_thread = threading.Thread(target=publish_tts_time_only)
         time_thread.start()
         os.system(f"aplay {wav_path}")
         time_thread.join()
