@@ -1,5 +1,4 @@
 
-
 import os
 import requests
 import threading
@@ -24,9 +23,10 @@ import io
 import os
 import re
 
-import openai
-from openai import OpenAI, AsyncOpenAI
-from dotenv import load_dotenv
+import torch
+import whisper_timestamped as whisper
+
+
 
 class Mp3Player(Node):
     def __init__(self):
@@ -91,21 +91,117 @@ class Mp3Player(Node):
         # 🆕 TTS 자막 데이터 퍼블리셔 추가
         self.tts_subtitle_publisher = self.create_publisher(String, "/tts_subtitle", 10)
         
-        # # Google Cloud 인증 설정
-        # os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/home/nvidia/ros2_ws/my-service-account.json'
-
-
-        # 🆕 OpenAI API 클라이언트 설정
-        load_dotenv("/home/nvidia/ros2_ws/src/.env")
-        openai.api_key = os.getenv("OPENAI_API_KEY")
-        self.openai_client = OpenAI(api_key=openai.api_key)
-
+        # Google Cloud 인증 설정
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/home/nvidia/ros2_ws/my-service-account.json'
 
         # 🆕 STT 재시작 신호 퍼블리셔 추가 (music_done 대신)
         self.stt_restart_publisher = self.create_publisher(String, "stt_restart", 10)
 
 
-     
+         # 🆕 whisper 관련 초기화 추가
+        self.whisper_model = None
+        self.whisper_device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model_loading_lock = threading.Lock()  # 🆕 스레드 안전성
+        
+        # 🆕 whisper 환경 설정
+        self.setup_whisper_environment()
+
+
+        # 🆕 모델 사전 로딩 (비동기)
+        self.preload_whisper_model()
+
+
+
+    def setup_whisper_environment(self):
+        """whisper-timestamped GPU 환경 설정"""
+        try:
+            if torch.cuda.is_available():
+                # cuDNN 비활성화 모드 설정
+                torch.backends.cudnn.enabled = False
+                os.environ['CUDNN_DISABLED'] = '1'
+                os.environ['PYTORCH_DISABLE_CUDNN_CONV'] = '1'
+                os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
+                
+                # GPU 메모리 정리
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                
+                self.get_logger().info("✅ whisper GPU 환경 설정 완료")
+            else:
+                self.get_logger().info("⚠️ CUDA 사용 불가 - CPU 모드로 설정")
+                self.whisper_device = "cpu"
+                
+        except Exception as e:
+            self.get_logger().error(f"❌ whisper 환경 설정 실패: {e}")
+            self.whisper_device = "cpu"
+            
+
+
+    def preload_whisper_model(self):
+            """노드 시작 시 whisper 모델 사전 로딩"""
+            
+            def load_model_async():
+                try:
+                    preload_start = time.time()
+                    self.get_logger().info("🚀 whisper 모델 사전 로딩 시작...")
+                    
+                    with self.model_loading_lock:
+                        if self.whisper_model is None:
+                            self.whisper_model = whisper.load_model("tiny", device=self.whisper_device)
+                    
+                    preload_end = time.time()
+                    preload_time = preload_end - preload_start
+                    
+                    self.get_logger().info(f"✅ whisper 모델 사전 로딩 완료! (소요시간: {preload_time:.2f}초, device: {self.whisper_device})")
+                    self.save_log(f"✅ whisper 모델 사전 로딩 완료: {preload_time:.2f}초")
+                    
+                    # 🆕 간단한 테스트 추론으로 모델 워밍업
+                    self._warmup_model()
+                    
+                except Exception as e:
+                    error_msg = f"❌ whisper 모델 사전 로딩 실패: {e}"
+                    self.get_logger().error(error_msg)
+                    self.save_log(error_msg)
+                    
+                    # GPU 실패 시 CPU 폴백
+                    if self.whisper_device == "cuda":
+                        self.get_logger().info("🔄 GPU 로딩 실패 - CPU 모드로 폴백 시도")
+                        self.whisper_device = "cpu"
+                        try:
+                            with self.model_loading_lock:
+                                self.whisper_model = whisper.load_model("tiny", device="cpu")
+                            self.get_logger().info("✅ CPU 모드로 모델 로딩 성공")
+                        except Exception as e2:
+                            self.get_logger().error(f"❌ CPU 모드도 실패: {e2}")
+                            self.whisper_model = None
+
+            # 🆕 비동기로 모델 로딩 (노드 시작 차단 방지)
+            loading_thread = threading.Thread(target=load_model_async, daemon=True)
+            loading_thread.start()
+
+
+    def _warmup_model(self):
+            """모델 워밍업 (첫 추론 지연 방지)"""
+            try:
+                if self.whisper_model is not None:
+                    self.get_logger().info("🔥 모델 워밍업 중...")
+                    
+                    # 더미 오디오로 워밍업
+                    import numpy as np
+                    dummy_audio = np.random.randn(8000).astype(np.float32)  # 0.5초 더미 오디오
+                    
+                    _ = whisper.transcribe(
+                        self.whisper_model, 
+                        dummy_audio, 
+                        language="ko", 
+                        verbose=False
+                    )
+                    
+                    self.get_logger().info("✅ 모델 워밍업 완료")
+                    
+            except Exception as e:
+                self.get_logger().warning(f"⚠️ 모델 워밍업 실패 (정상 동작에는 영향 없음): {e}")
+            
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -114,183 +210,166 @@ class Mp3Player(Node):
 
 
 
-    # def extract_word_timestamps(self, audio_path, original_text):
-    #     """
-    #     Google Cloud Speech-to-Text API를 사용하여 단어별 타임스탬프 추출
-    #     """
 
-    #     # 🆕 동적자막 생성 시간 측정
-    #     stt_start_time = time.time()
-    #     self.get_logger().info("⏳ Google STT API를 통한 동적자막 생성 시작")
+#whisper 버전
 
 
-
-    #     try:
-    #         client = speech.SpeechClient()
-            
-    #         with io.open(audio_path, "rb") as audio_file:
-    #             content = audio_file.read()
-            
-    #         # audio = speech.RecognitionAudio(content=content)
-    #         # config = speech.RecognitionConfig(
-    #         #     encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-    #         #     sample_rate_hertz=16000,
-    #         #     language_code="ko-KR",
-    #         #     enable_word_time_offsets=True,
-    #         #     enable_word_confidence=True,
-    #         #     model="default",
-    #         # )
-
-
-    #         audio = speech.RecognitionAudio(content=content)
-    #         config = speech.RecognitionConfig(
-    #             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-    #             sample_rate_hertz=16000,
-    #             language_code="ko-KR",
-    #             enable_word_time_offsets=True,
-    #             enable_word_confidence=True,
-    #             model="latest_short",  # 🔑 더 빠른 모델 사용
-    #             use_enhanced=False,    # 🔑 향상된 모델 비활성화로 속도 증가
-    #             # audio_channel_count=1, # 🔑 명시적 채널 수 설정
-    #         )
-
-            
-            
-    #         self.get_logger().info("🗣️ Google STT API 요청 시작...")
-    #         # 🆕 실제 STT API 호출 시간 측정
-    #         stt_api_start = time.time()
-
-    #         response = client.recognize(config=config, audio=audio)
-
-    #         stt_api_end = time.time()
-    #         stt_api_duration = stt_api_end - stt_api_start
-    #         self.get_logger().info(f"✅ Google STT API 응답 완료, API 호출시간: {stt_api_duration:.2f}초")
-
-
-            
-    #         word_timestamps = []
-            
-    #         for result in response.results:
-    #             alternative = result.alternatives[0]
-    #             stt_text = alternative.transcript
-    #             self.get_logger().info(f"🗣️ STT 인식 결과: '{stt_text}'")
-    #             self.get_logger().info(f"🔍 원본 텍스트: '{original_text}'")
-                
-    #             for word_info in alternative.words:
-    #                 word = word_info.word
-    #                 start_time = word_info.start_time.total_seconds()
-    #                 end_time = word_info.end_time.total_seconds()
-    #                 confidence = word_info.confidence
-                    
-    #                 word_timestamps.append({
-    #                     "word": word,
-    #                     "start": round(start_time, 3),
-    #                     "end": round(end_time, 3),
-    #                     "confidence": round(confidence, 3)
-    #                 })
-
-    #         # 🆕 동적자막 생성 완료 시간 계산
-    #         stt_end_time = time.time()
-    #         stt_total_duration = stt_end_time - stt_start_time
-            
-    #         # 🆕 시간 정보를 클래스 변수에 저장 (전체 시간 분석용)
-    #         self._last_stt_duration = stt_total_duration
-            
-    #         self.get_logger().info(f"🎯 STT 타임스탬프 추출 완료: {len(word_timestamps)}개 단어")
-    #         self.get_logger().info(f"✅ 동적자막 생성 총 소요시간: {stt_total_duration:.2f}초")
-    #         self.get_logger().info(f"   - Google STT API 시간: {stt_api_duration:.2f}초")
-    #         self.get_logger().info(f"   - 전처리/후처리 시간: {stt_total_duration - stt_api_duration:.2f}초")
-
-
-            
-    #         self.get_logger().info(f"🎯 STT 타임스탬프 추출 완료: {len(word_timestamps)}개 단어")
-    #         return word_timestamps
-            
-    #     except Exception as e:
-    #         stt_end_time = time.time()
-    #         stt_total_duration = stt_end_time - stt_start_time
-
-
-    #         self.get_logger().error(f"❌ STT 타임스탬프 추출 실패: {e}")
-    #         self.get_logger().error(f"❌ 실패까지 소요시간: {stt_total_duration:.2f}초")
+    def extract_word_timestamps(self, audio_path, original_text):
+        """
+        whisper-timestamped를 사용하여 단어별 타임스탬프 추출 (사전 로딩된 모델 사용)
+        """
         
-    #         # 실패시에도 시간 정보 저장
-    #         self._last_stt_duration = stt_total_duration
-            
-    #         return []
-
-
-
-
-    def extract_word_timestamps_whisper(self, audio_path, original_text):
-        """
-        OpenAI Whisper-1 API를 사용한 단어별 타임스탬프 추출
-        """
         stt_start_time = time.time()
-        self.get_logger().info("⏳ OpenAI Whisper API를 통한 동적자막 생성 시작")
+        self.get_logger().info("⏳ whisper-timestamped를 통한 동적자막 생성 시작")
         
         try:
-            # 🆕 Whisper API 호출 (단어별 타임스탬프 포함)
-            with open(audio_path, "rb") as audio_file:
-                response = self.openai_client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                    language="ko",  # 한국어 지정
-                    response_format="verbose_json",  # 🔑 상세 JSON 응답
-                    timestamp_granularities=["word"]  # 🔑 단어별 타임스탬프
-                )
+            # 🆕 모델 준비 확인 (사전 로딩 완료 대기)
+            model_ready_start = time.time()
             
-            stt_api_end = time.time()
-            stt_api_duration = stt_api_end - stt_start_time
-            self.get_logger().info(f"✅ Whisper API 응답 완료, 소요시간: {stt_api_duration:.2f}초")
-
-            # Google STT 호환 형식으로 변환
-            word_timestamps = self._convert_whisper_to_google_format(response, original_text)
-
-            # 🔑 핵심: 기존 정렬 알고리즘으로 정확도 향상
-            if word_timestamps:
-                aligned_timestamps = self.align_words_with_dynamic_programming(
-                    original_text.split(), word_timestamps
-                )
-                return self.smooth_timestamps(aligned_timestamps)
+            # 모델이 로딩 중이면 대기
+            max_wait_time = 10.0  # 최대 10초 대기
+            wait_interval = 0.1   # 100ms 간격으로 확인
             
-
-            stt_total_duration = time.time() - stt_start_time
+            while self.whisper_model is None and (time.time() - model_ready_start) < max_wait_time:
+                self.get_logger().info("⏳ whisper 모델 로딩 완료 대기 중...")
+                time.sleep(wait_interval)
+            
+            # 모델이 여전히 없으면 즉시 로딩
+            if self.whisper_model is None:
+                self.get_logger().warning("⚠️ 사전 로딩 실패 - 즉시 로딩 시도")
+                
+                immediate_load_start = time.time()
+                with self.model_loading_lock:
+                    if self.whisper_model is None:
+                        self.whisper_model = whisper.load_model("tiny", device=self.whisper_device)
+                immediate_load_time = time.time() - immediate_load_start
+                
+                self.get_logger().info(f"🔄 즉시 로딩 완료: {immediate_load_time:.2f}초")
+            else:
+                self.get_logger().info("✅ 사전 로딩된 모델 사용")
+            
+            model_ready_time = time.time() - model_ready_start
+            
+            # 🆕 오디오 로딩 및 추론 (기존 로직)
+            audio_start = time.time()
+            self.get_logger().info("🗣️ whisper 추론 시작...")
+            
+            audio = whisper.load_audio(audio_path)
+            
+            result = whisper.transcribe(
+                self.whisper_model, 
+                audio, 
+                language="ko",
+                verbose=False,
+                temperature=0
+            )
+            
+            audio_end = time.time()
+            inference_duration = audio_end - audio_start
+            
+            # 결과 처리 (기존과 동일)
+            word_timestamps = []
+            
+            for segment in result.get("segments", []):
+                segment_text = segment.get("text", "")
+                self.get_logger().info(f"🗣️ whisper 인식 결과: '{segment_text}'")
+                
+                for word_info in segment.get("words", []):
+                    word = word_info.get("text", "").strip()
+                    start_time = word_info.get("start", 0.0)
+                    end_time = word_info.get("end", 0.0)
+                    confidence = word_info.get("confidence", 1.0)
+                    
+                    word_timestamps.append({
+                        "word": word,
+                        "start": round(start_time, 3),
+                        "end": round(end_time, 3),
+                        "confidence": round(confidence, 3)
+                    })
+            
+            # 전체 시간 계산 및 로깅
+            stt_end_time = time.time()
+            stt_total_duration = stt_end_time - stt_start_time
             self._last_stt_duration = stt_total_duration
             
-            self.get_logger().info(f"🎯 Whisper 타임스탬프 변환 완료: {len(word_timestamps)}개 단어")
+            self.get_logger().info(f"🎯 whisper 타임스탬프 추출 완료: {len(word_timestamps)}개 단어")
+            self.get_logger().info(f"✅ 동적자막 생성 총 소요시간: {stt_total_duration:.2f}초")
+            self.get_logger().info(f"   - 모델 준비 시간: {model_ready_time:.2f}초")  # 🆕 사전 로딩 시 거의 0초
+            self.get_logger().info(f"   - 추론 시간: {inference_duration:.2f}초")
+            self.get_logger().info(f"   - 후처리 시간: {stt_total_duration - model_ready_time - inference_duration:.2f}초")
+            
             return word_timestamps
             
         except Exception as e:
-            self.get_logger().error(f"❌ Whisper API 호출 실패: {e}")
-            # 실패시 기본 타임스탬프 반환
-            return self._create_default_timestamps(original_text.split())
+            if self.whisper_device == "cuda" and "cuda" in str(e).lower():
+                self.get_logger().warning(f"⚠️ GPU 모드 실패, CPU 폴백 시도: {e}")
+                return self._extract_with_cpu_fallback(audio_path, original_text)
+            
+            stt_end_time = time.time()
+            stt_total_duration = stt_end_time - stt_start_time
+            
+            self.get_logger().error(f"❌ whisper 타임스탬프 추출 실패: {e}")
+            self.get_logger().error(f"❌ 실패까지 소요시간: {stt_total_duration:.2f}초")
+            
+            self._last_stt_duration = stt_total_duration
+            return []
 
-
-
-    def _convert_whisper_to_google_format(self, whisper_response, original_text):
-        """
-        Whisper API 응답을 Google STT 호환 형식으로 변환
-        """
-        word_timestamps = []
         
-        # 🆕 Whisper 응답에서 단어별 정보 추출
-        if hasattr(whisper_response, 'words') and whisper_response.words:
-            for word_info in whisper_response.words:
-                word_timestamps.append({
-                    "word": word_info.word.strip(),  # 공백 제거
-                    "start": round(word_info.start, 3),
-                    "end": round(word_info.end, 3),
-                    "confidence": getattr(word_info, 'confidence', 0.8),  # 기본값 0.8
-                    "match_type": "whisper_api"  # 구분용 태그
-                })
-        
-        # 🆕 디버깅 로그
-        self.get_logger().info(f"🗣️ Whisper 인식 결과: '{whisper_response.text}'")
-        self.get_logger().info(f"🔍 원본 텍스트: '{original_text}'")
-        
-        return word_timestamps
 
+
+
+
+
+
+
+    def _extract_with_cpu_fallback(self, audio_path, original_text):
+        """CPU 폴백 모드"""
+        try:
+            self.get_logger().info("🔄 CPU 폴백 모드로 재시도...")
+            
+            # CPU 모델 로딩
+            cpu_model = whisper.load_model("tiny", device="cpu")
+            audio = whisper.load_audio(audio_path)
+            
+            result = whisper.transcribe(
+                cpu_model, audio, 
+                language="ko", 
+                verbose=False
+            )
+            
+            # 결과 처리 (동일한 로직)
+            word_timestamps = []
+            for segment in result.get("segments", []):
+                for word_info in segment.get("words", []):
+                    word_timestamps.append({
+                        "word": word_info.get("text", "").strip(),
+                        "start": round(word_info.get("start", 0.0), 3),
+                        "end": round(word_info.get("end", 0.0), 3),
+                        "confidence": round(word_info.get("confidence", 0.8), 3)
+                    })
+            
+            self.get_logger().info(f"✅ CPU 폴백 성공: {len(word_timestamps)}개 단어")
+            return word_timestamps
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ CPU 폴백도 실패: {e}")
+            return []
+
+
+    def cleanup_whisper_model(self):
+        """whisper 모델 메모리 정리"""
+        if self.whisper_model is not None:
+            del self.whisper_model
+            self.whisper_model = None
+            
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            self.get_logger().info("🧹 whisper 모델 메모리 정리 완료")
+
+    def __del__(self):
+        """소멸자에서 메모리 정리"""
+        self.cleanup_whisper_model()
 
 
 
@@ -569,7 +648,7 @@ class Mp3Player(Node):
                 "style": 0.25,
                 "speed": 0.9
             },
-            "apply_text_normalization": "off",
+            "apply_text_normalization": "on",
             "output_format": "mp3_22050_32"
         }
 
@@ -619,7 +698,7 @@ class Mp3Player(Node):
 
                 
                 # 🆕 STT 타임스탬프 추출
-                stt_timestamps = self.extract_word_timestamps_whisper(wav_path, cleaned_text)
+                stt_timestamps = self.extract_word_timestamps(wav_path, cleaned_text)
 
                 # 🆕 자막 처리 시간 측정
                 subtitle_process_start = time.time()
@@ -1094,8 +1173,7 @@ class Mp3Player(Node):
             self.get_logger().error(f"❌ TTS 스펙트럼 재생 실패: {file_path} → {e}")
             self.save_log(f"❌ TTS 스펙트럼 재생 실패: {file_path} → {e}")
 
-
-
+   
 
 
 
