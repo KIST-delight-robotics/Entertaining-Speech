@@ -1,6 +1,4 @@
 
-#whisper local model 도입
-
 import os
 import requests
 import threading
@@ -1928,3 +1926,5 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+
+
