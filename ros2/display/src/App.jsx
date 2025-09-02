@@ -96,8 +96,6 @@ function SpectrumVisualizer() {
 
  // 🆕 TTS 관련 상태 추가
  const [ttsStatus, setTtsStatus] = useState('idle'); // idle, generating, ready, playing, done, error
- const [showReply, setShowReply] = useState(false);
-
 
 
 // 🆕 TTS 관련 상태 추가
@@ -105,15 +103,6 @@ const [ttsVolume, setTtsVolume] = useState(0);
 const [isTtsPlaying, setIsTtsPlaying] = useState(false);
 
 
-// // 기존 TTS 상태들 다음에 추가
-// const [ttsSubtitle, setTtsSubtitle] = useState(null); // 자막 데이터
-// const [currentTtsTime, setCurrentTtsTime] = useState(0); // 현재 재생 시간
-// const [currentWordIndex, setCurrentWordIndex] = useState(-1); // 현재 재생 중인 단어 인덱스
-
-// // 기존 TTS 상태들 다음에 추가
-// const [currentTtsVolume, setCurrentTtsVolume] = useState(0); // 🆕 실시간 음량 상태
-
-// const [wordMaxVolumes, setWordMaxVolumes] = useState({}); // 🆕 각 단어별 최대 음량 저장
 
 
 // 🆕 단일 단어 자막용 상태 추가
@@ -123,11 +112,6 @@ const [showSingleWord, setShowSingleWord] = useState(false);
 const [voiceVolume, setVoiceVolume] = useState(0);
 const [isVoiceActive, setIsVoiceActive] = useState(false);
 
-
-
-// 🆕 사용자 질문 표시용 상태 변수 추가
-const [userQuestionText, setUserQuestionText] = useState('');
-const [showUserQuestion, setShowUserQuestion] = useState(false);
 
 
 
@@ -140,6 +124,143 @@ const [pendingReply, setPendingReply] = useState('');
 // 대기 상태 통합 관리
 const [pendingContent, setPendingContent] = useState(null); // { type: 'video'|'tts_only', videoPath?, reply }
 const [waitingForQuestionConfirm, setWaitingForQuestionConfirm] = useState(false);
+
+
+
+
+
+
+
+
+// 🆕 통합 응답 준비 화면 상태 추가
+const [responsePreparation, setResponsePreparation] = useState({
+  show: false,
+  question: '',
+  status: 'preparing' // 'preparing', 'ready'
+});
+
+// 🆕 통합 응답 준비 화면 구독 추가  
+useEffect(() => {
+  const responsePreparationListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/response_preparation',
+    messageType: 'std_msgs/String'
+  });
+  
+  responsePreparationListener.subscribe((message) => {
+    try {
+      const data = JSON.parse(message.data);
+      console.log('🎬 응답 준비 화면 데이터 수신:', data);
+      
+      if (data.action === 'show') {
+        setResponsePreparation({
+          show: true,
+          question: data.question,
+          status: 'preparing'
+        });
+      } else if (data.action === 'hide') {
+        setResponsePreparation({
+          show: false,
+          question: '',
+          status: 'preparing'
+        });
+      }
+    } catch (e) {
+      console.error('응답 준비 화면 JSON parse error:', e);
+    }
+  });
+  
+  return () => {
+    responsePreparationListener.unsubscribe();
+  };
+}, []);
+
+// 🆕 통합 응답 준비 화면 렌더링 함수
+const renderResponsePreparation = () => {
+  if (!responsePreparation.show || !responsePreparation.question) {
+    return null;
+  }
+
+  return (
+    <div style={{
+      position: 'absolute',
+      top: '0',
+      left: '0',
+      width: '100vw',
+      height: '100vh',
+      zIndex: 25,
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: 'rgba(26, 26, 26, 0.95)'
+    }}>
+      <div style={{
+        maxWidth: '80vw',
+        textAlign: 'center',
+        padding: '40px 20px',
+        color: '#fff'
+      }}>
+        {/* 질문 표시 */}
+        <div style={{
+          fontSize: '2.2rem',
+          fontWeight: '600',
+          marginBottom: '30px',
+          color: '#FFD700',
+          lineHeight: '1.4'
+        }}>
+          "{responsePreparation.question}"
+        </div>
+        
+        {/* 답변 준비 메시지 */}
+        <div style={{
+          fontSize: '1.8rem',
+          fontWeight: '500',
+          color: '#FFFFFF',
+          animation: 'pulse 2s infinite'
+        }}>
+          에 대해 답변 해드릴게요.
+        </div>
+        
+        {/* 로딩 인디케이터 */}
+        <div style={{
+          marginTop: '30px',
+          display: 'flex',
+          justifyContent: 'center',
+          gap: '8px'
+        }}>
+          {[0, 1, 2].map(i => (
+            <div key={i} style={{
+              width: '12px',
+              height: '12px',
+              borderRadius: '50%',
+              backgroundColor: '#FFD700',
+              animation: `bounce 1.5s infinite ${i * 0.2}s`
+            }} />
+          ))}
+        </div>
+      </div>
+      
+      <style>
+        {`
+          @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+          }
+          
+          @keyframes bounce {
+            0%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-10px); }
+          }
+        `}
+      </style>
+    </div>
+  );
+};
+
+
+
+
+
 
 
 
@@ -291,133 +412,6 @@ useEffect(() => {
 }, [questionConfirmStatus, waitingForQuestionConfirm, pendingContent]);
 
 
- // 🆕 사용자 질문 표시용 구독 추가
- useEffect(() => {
-  const userQuestionDisplayListener = new ROSLIB.Topic({
-    ros: ros,
-    name: '/user_question_display',
-    messageType: 'std_msgs/String'
-  });
-  
-  userQuestionDisplayListener.subscribe((message) => {
-    console.log('🗨️ 사용자 질문 표시 데이터 수신:', message.data);
-    
-    if (message.data && message.data.trim() !== "") {
-      setUserQuestionText(message.data.trim());
-      setShowUserQuestion(true);
-      console.log('✅ 사용자 질문 말풍선 표시:', message.data);
-    } else {
-      setUserQuestionText('');
-      setShowUserQuestion(false);
-      console.log('❌ 사용자 질문 말풍선 숨김');
-    }
-  });
-  
-  return () => {
-    console.log('🗨️ 사용자 질문 표시 리스너 해제');
-    userQuestionDisplayListener.unsubscribe();
-  };
-}, []);
-
-// 🔧 수정된 renderUserQuestionBubble 함수
-const renderUserQuestionBubble = () => {
-  // 🆕 조건 완화: isWaitingAudioMode 조건 제거
-  if (!showUserQuestion || !userQuestionText) {
-    return null;
-  }
-
-  // 🆕 대기 상태 추가 고려
-  if (isTtsPlaying || videoVisible || waitingForQuestionConfirm) {
-    return null;
-  }
-
-
-  return (
-    <div style={{
-      position: 'absolute',
-      top: '20%',
-      left: '50%',
-      transform: 'translateX(-50%)',
-      zIndex: 40, // 🔧 z-index 상향 조정 (기존 35 → 40)
-      maxWidth: '90vw',
-      padding: '0',
-      pointerEvents: 'none'
-    }}>
-      {/* 기존 말풍선 UI 코드 동일 */}
-      <div style={{
-        backgroundColor: 'rgba(255, 255, 255, 0.95)',
-        color: '#333',
-        padding: '30px 40px',
-        borderRadius: '35px',
-        fontSize: '2.2rem',
-        fontWeight: '600',
-        textAlign: 'center',
-        boxShadow: '0 12px 48px rgba(0, 0, 0, 0.4)',
-        border: '4px solid rgba(100, 200, 255, 0.8)',
-        position: 'relative',
-        maxWidth: '800px',
-        wordWrap: 'break-word',
-        lineHeight: '1.4',
-        animation: 'bubbleAppear 0.3s ease-out'
-      }}>
-        {/* 말풍선 꼬리들과 내용은 기존과 동일 */}
-        <div style={{
-          position: 'absolute',
-          bottom: '-20px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: '0',
-          height: '0',
-          borderLeft: '20px solid transparent',
-          borderRight: '20px solid transparent',
-          borderTop: '20px solid rgba(255, 255, 255, 0.95)'
-        }} />
-        
-        <div style={{
-          position: 'absolute',
-          bottom: '-24px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: '0',
-          height: '0',
-          borderLeft: '27px solid transparent',
-          borderRight: '27px solid transparent',
-          borderTop: '27px solid rgba(100, 200, 255, 0.8)',
-          zIndex: -1
-        }} />
-        
-        <div style={{
-          marginBottom: '10px'
-        }}>
-          "{userQuestionText}"
-        </div>
-        
-        <div style={{
-          fontSize: '1.4rem',
-          color: '#666',
-          fontWeight: '400'
-        }}>
-          이렇게 들었어!
-        </div>
-      </div>
-
-      <style>
-        {`
-          @keyframes bubbleAppear {
-            0% { 
-              transform: translateX(-50%) translateY(-20px) scale(0.8);
-              opacity: 0;
-            }
-            100% { 
-              transform: translateX(-50%) translateY(0) scale(1);
-              opacity: 1;
-            }
-          }
-        `}
-      </style>
-    </div>
-  );
-};
 
 
 
@@ -602,7 +596,7 @@ const processPendingContent = (content) => {
     setVideoVisible(false);
     setCurrentVideo(null);
     setCurrentReply(content.reply);
-    setShowReply(true);
+
   }
   
   // 공통 처리
@@ -772,7 +766,7 @@ const createSafeUrl = (path) => {
             requestTtsPlay();
           } else {
             console.log('🗣️ TTS 준비 대기 중...');
-            setShowReply(true); // TTS 대기 중 표시
+           
           }
         }}
 
@@ -826,46 +820,6 @@ const requestTtsPlay = () => {
 
 
 
-
-
-
-// 🆕 TTS 대기 중 표시 함수
-const renderTtsWaiting = () => {
-  if (!showReply || !currentReply|| isTtsPlaying) {
-    return null;
-  }
-
-  return (
-    <div style={{
-      position: 'absolute',
-      top: '0',
-      left: '0',
-      width: '100vw',
-      height: '100vh',
-      zIndex: 20,
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center',
-      backgroundColor: 'rgba(0, 0, 0, 0.8)'
-    }}>
-      <div style={{
-        color: '#fff',
-        fontSize: '1.5rem',
-        textAlign: 'center',
-        padding: '20px'
-      }}>
-        <div>음성을 준비하는 중...</div>
-        <div style={{ 
-          fontSize: '1rem', 
-          marginTop: '10px',
-          opacity: 0.7 
-        }}>
-          {currentReply}
-        </div>
-      </div>
-    </div>
-  );
-};
 
 
 
@@ -929,7 +883,7 @@ const shouldShowVoiceSpectrum = () => {
          !isMp3WaitingMode && 
          !videoVisible &&
          !isTtsPlaying &&
-         !showUserQuestion && 
+         !responsePreparation.show && 
          isVoiceActive;
 };
 
@@ -1160,7 +1114,7 @@ useEffect(() => {
   console.log('🔄 TTS 상태 변화 감지:', {
     ttsStatus,
     videoVisible,
-    showReply,
+    responsePreparation: responsePreparation.show,
     currentReply,
     isTtsPlaying
   });
@@ -1170,11 +1124,11 @@ useEffect(() => {
       // 비디오가 있는 경우: 비디오 재생 시작
       console.log('🎬 TTS 준비 완료 - 비디오 재생 시작');
       setVideoVisible(true);
-      setShowReply(false);
+      setResponsePreparation(prev => ({ ...prev, show: false }));
       setIsWaitingAudioMode(false);
       setIsMp3WaitingMode(false);
       
-    } else if (!currentVideo && showReply) {
+    } else if (!currentVideo && responsePreparation.show) {
       // 비디오가 없는 경우: TTS 재생 시작
       console.log('🗣️ TTS 준비 완료 - TTS 전용 재생 시작');
       
@@ -1183,31 +1137,33 @@ useEffect(() => {
         return;
       }
 
-      setShowUserQuestion(false);
-      setUserQuestionText('');
-      setIsWaitingAudioMode(false);
-      setIsMp3WaitingMode(false);
-      setShowReply(false);
+      // 🔧 수정: 기존 상태들 대신 responsePreparation만 처리
+      setResponsePreparation(prev => ({ ...prev, show: false }));
       setIsTtsPlaying(true);
+ 
       requestTtsPlay();
     }
 
-  } else if (ttsStatus === 'tts_playing') {
-    setIsTtsPlaying(true);
+
   } else if (ttsStatus === 'tts_done') {
     console.log('🗣️ TTS 재생 완료 - 초기화');
     
     // ✅ TTS 관련 상태만 초기화
-    setShowReply(false);
-    setIsTtsPlaying(false);
-    setShowUserQuestion(false);
-    setUserQuestionText('');
-    setCurrentReply('');
-    setVideoVisible(false);
-    
-    // 🆕 단일 단어 자막 상태 초기화
-    setSingleWordSubtitle(null);
-    setShowSingleWord(false);
+  setIsTtsPlaying(false);
+  setTtsVolume(0);
+  setCurrentReply('');
+  setVideoVisible(false);
+  
+  // ✅ 응답 준비 화면 숨김 추가
+  setResponsePreparation({
+    show: false,
+    question: '',
+    status: 'preparing'
+  });
+  
+  // 🆕 단일 단어 자막 상태 초기화
+  setSingleWordSubtitle(null);
+  setShowSingleWord(false);
     
     // ✅ 새 질문을 위한 초기화
     setCanShowSpectrum(false);
@@ -1222,7 +1178,10 @@ useEffect(() => {
     
     console.log('✅ TTS 완료 후 상태 초기화');
   }
-}, [ttsStatus, videoVisible, showReply, currentReply, currentVideo, isTtsPlaying]);
+}, [ttsStatus, videoVisible, responsePreparation.show, currentReply, currentVideo, isTtsPlaying]);
+
+
+
 
 
 
@@ -1904,7 +1863,7 @@ const getScreenTransform = () => {
 
 
    {/* 캔버스 표시 조건 수정 */}
-   {!videoVisible && !showReply  && !shouldShowVoiceSpectrum() && !isTtsPlaying &&!waitingForQuestionConfirm && (
+   {!videoVisible && !responsePreparation.show  && !shouldShowVoiceSpectrum() && !isTtsPlaying &&!waitingForQuestionConfirm && (
       <canvas 
         ref={canvasRef}
         style={{
@@ -1926,17 +1885,21 @@ const getScreenTransform = () => {
     {renderVoiceSpectrum()}
 
     {/* 🆕 비디오 대기 중 표시 */}
-    {renderVideoPending()}
+    {/* {renderVideoPending()}
+ */}
 
 
+
+      {/* 🔧 수정: 기존 말풍선과 TTS 대기 화면 대신 통합 화면 */}
+    {renderResponsePreparation()}
 
     {/* 기존 이미지 표시 */}
     {videoVisible && renderVideo()}
     {/* 🆕 TTS 대기 중 표시 */}
-    {renderTtsWaiting()}
+    {/* {renderTtsWaiting()} */}
 
     {/* 🆕 사용자 질문 말풍선 추가 - 대기 스펙트럼과 함께 표시 */}
-    {renderUserQuestionBubble()}
+    {/* {renderUserQuestionBubble()} */}
 
 
   {/* 🔧 기존 TTS 노래방 자막 대신 단일 단어 자막 사용 */}
@@ -1950,6 +1913,7 @@ const getScreenTransform = () => {
 }
 
 export default SpectrumVisualizer;
+
 
 
 
