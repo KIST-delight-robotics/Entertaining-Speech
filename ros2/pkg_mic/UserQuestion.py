@@ -313,32 +313,37 @@ class UserQuestion(Node):
 
 
 
-    # 🆕 GPT-4.1 nano로 질문 확인 문구 생성
+
+
     def generate_question_confirmation(self, user_question):
         """GPT-4.1 nano를 사용해 질문 확인 문구 생성"""
         try:
             self.get_logger().info(f"🤖 GPT-4.1 nano로 질문 확인 문구 생성: {user_question}")
             
             response = self.openai_client.chat.completions.create(
-                model="gpt-4.1-nano",  # GPT-4.1 nano 대신 4o-mini 사용
+                model="gpt-4.1-nano",
                 messages=[
                     {
                         "role": "system",
                         "content": (
-                            "You are Dangdang, a witty robotic dog at KIST. "
-                    "The user just asked a question. Your job is to acknowledge their question "
-                    "in a casual, engaging way while you're 'thinking' about the answer. "
-                    "Keep responses conversational and natural, around 2-3 sentences. "
-                    "Use phrases like '그걸 물어본거지?', '한번 알아볼까?', '잠깐만, 생각해보자' etc. "
-                    "Speak in Korean in a friendly, slightly snarky tone."
+                            "You are Dangdang, a snarky robotic dog at KIST with a dry sense of humor. "
+                            "A human just asked you something. Your job is to acknowledge their question "
+                            "in a slightly grumpy, witty way while showing you're reluctantly going to help them find the answer. "
+                            "You have a sense of superiority as a robot but still help humans despite finding them amusing. "
+                            "Never give the actual answer - only acknowledge the question and indicate you'll look into it. "
+                            "Keep responses 2-3 sentences in Korean. "
+                            "Use phrases that show mild annoyance but eventual helpfulness like: "
+                            "'그걸 나한테 묻는거야?', '인간답네', '어쩔 수 없지 뭐', '그래도 답은 해줄게', "
+                            "'또 인간이 뭔가 물어보는군', '하.. 알겠어', '찾아는 줄게' etc. "
+                            "Sound like a grumpy but loyal friend who pretends not to care but always has your back."
                         )
                     },
                     {
                         "role": "user", 
-                        "content": f"사용자가 '{user_question}'라고 질문했어. 이 질문을 확인하면서 답변을 찾고 있다는 느낌으로 2-3문장 정도로 자연스럽게 응답해줘."
+                        "content": f"사용자가 '{user_question}'라고 질문했어. 이 질문을 시니컬하고 유머러스하게 확인하면서 답변을 찾아보겠다는 느낌으로 응답해줘. 답은 절대 주지 말고."
                     }
                 ],
-                temperature=0.7,
+                temperature=0.8,
                 max_tokens=100
             )
             
@@ -348,10 +353,8 @@ class UserQuestion(Node):
             
         except Exception as e:
             self.get_logger().error(f"❌ GPT-4.1 nano 호출 실패: {e}")
-            # 기본 문구 반환
-            return f"{user_question} 라고 물어본거지? 잠깐만, 찾아볼게!"
-
-
+            # 기본 문구도 캐릭터에 맞게 변경
+            return f"{user_question}? 또 인간이 이런걸 묻네. 어쩔 수 없지, 찾아는 줄게."
 
 
 
@@ -508,93 +511,6 @@ class UserQuestion(Node):
     
 
 
-
-        
-
-    # def text2speech_question_confirm(self, text):
-    #     """
-    #     ElevenLabs TTS 호출하여 질문 확인 음성 생성
-    #     """
-    #     api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-    #     voice_id = "59zWnTQLbwyr94bFbcUe"
-    #     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
-    #     headers = {
-    #         "xi-api-key": api_key,
-    #         "Content-Type": "application/json",
-    #         "Accept": "audio/mpeg"
-    #     }
-
-    #     data = {
-    #         "text": text,
-    #         "model_id": "eleven_multilingual_v2",
-    #         "voice_settings": {
-    #             "stability": 0.5,
-    #             "similarity_boost": 0.75,
-    #             "style": 0.25,
-    #             "speed": 0.9
-    #         },
-    #         "apply_text_normalization": "on"
-    #     }
-
-    #     try:
-    #         # 🕐 TTS 생성 시간 측정 시작
-    #         start_time = time.time()
-
-
-    #         response = requests.post(url, headers=headers, json=data)
-    #         if response.status_code == 200:
-    #             with open(self.question_confirm_path, "wb") as f:
-    #                 f.write(response.content)
-    #             # 🕐 TTS 생성 완료 시간 계산
-    #             generation_time = time.time() - start_time    
-    #             self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 → {self.question_confirm_path}")
-    #             self.get_logger().info(f"⏱️ TTS 생성 시간: {generation_time:.3f}초")
-    #             self.save_log(f"🟢 질문 확인 TTS 생성 성공")
-    #             return True
-    #         else:
-    #             self.get_logger().error(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
-    #             self.save_log(f"🔴 TTS 오류 발생: {response.status_code}")
-    #             self.get_logger().info(f"⏱️ TTS 시도 시간: {generation_time:.3f}초")
-    #             return False
-    #     except Exception as e:
-    #         self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
-    #         self.save_log(f"🔴 TTS 호출 실패: {e}")
-    #         self.get_logger().info(f"⏱️ TTS 시도 시간: {generation_time:.3f}초")
-    #         return False
-
-    # def extract_question_from_published_text(self, published_text):
-    #     """
-    #     published_text에서 순수 질문만 추출
-    #     형태: "speaker001|질문내용" → "질문내용"
-    #     """
-    #     try:
-    #         if "|" in published_text:
-    #             _, question = published_text.split("|", 1)
-    #             return question.strip()
-    #         else:
-    #             return published_text.strip()
-    #     except Exception as e:
-    #         self.get_logger().error(f"질문 추출 실패: {e}")
-    #         return published_text
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     # ── Google STT -----------------------------------------------------------
 
     
@@ -615,37 +531,6 @@ class UserQuestion(Node):
             self.get_logger().info(f"Trigger status published: {status}")
 
 
-
-    # def music_status_callback(self, msg):
-    #     """ 음악 상태에 따라 STT 동작 제어 """
-    #     if msg.data == "music_playing":
-    #         self.get_logger().info("Music is playing. Muting STT output.")
-    #         self.music_playing = True
-    #         self.audio_stream.queue.clear()
-    #         self.audio_buffer = []
-    #         self.partial_transcript = ""
-    #         self.stop_audio_stream()
-
-    #     elif msg.data == "music_done":
-    #         self.get_logger().info("Music playback finished. Resuming STT output.")
-    #         self.music_playing = False
-    #         self.word_processor.reset() 
-    #         self.publish_realtime_phrase("")   # ← True 플래그
-
-    #         # 음악 종료 후 입력 대기 플래그 활성화
-    #         self.trigger_detected = True
-    #         self.waiting_for_input_after_music = True
-    #         self.partial_transcript = ""
-    #         # 🆕 트리거 상태 퍼블리시 (대기 상태)
-    #         self.publish_trigger_status()
-
-    #         # 마이크 입력 다시 시작 및 STT 재개
-    #         self.start_audio_stream()
-    #         threading.Thread(target=self.transcribe_streaming, daemon=True).start()
-
-    #         # 음악 종료 후 30초 타이머 시작
-    #         self.start_30s_timer()
-    #         # 무음 모니터링은 최초 입력이 들어올 때 시작
 
 
 
@@ -922,23 +807,6 @@ class UserQuestion(Node):
             
 
 
-
-    # def audio_callback(self, in_data, frame_count, time_info, status):
-    #     # 1) 시각화용 큐에 즉시 저장 (blocking 없이)
-    #     try:
-    #         self.visualizer_queue.put_nowait(in_data)
-    #     except queue.Full:
-    #         pass
-
-      
-    
-    #     # 3) STT 큐 등 기존 로직
-    #     if not (self.music_playing or self.ignore_stt):
-    #         self.audio_stream.put(in_data)
-    #         if self.trigger_detected:
-    #             self.audio_buffer.append(in_data)
-
-    #     return None, pyaudio.paContinue
 
 
 
@@ -1381,91 +1249,6 @@ class UserQuestion(Node):
 
 
 
-
-
-    # def play_effect_sound_waiting_1(self):
-    #     """
-    #     질문 확인 TTS 생성 및 재생 (기존 대기음 대신)
-    #     """
-    #     try:
-    #         # 1. 발행된 질문 텍스트 확인
-    #         if not hasattr(self, 'last_published_text') or not self.last_published_text:
-    #             self.get_logger().warning("발행된 질문이 없어 기본 대기음을 재생합니다.")
-    #             self.play_default_waiting_sound()
-    #             return
-
-    #         # 2. 순수 질문 텍스트 추출 (speaker### 부분 제거)
-    #         question_text = self.extract_question_from_published_text(self.last_published_text)
-            
-    #         # 3. 질문 확인 문구 생성
-    #         confirm_text = f"{question_text} 라고 물어본거지?"
-    #         self.get_logger().info(f"🎤 질문 확인 TTS 생성: {confirm_text}")
-    #         self.save_log(f"🎤 질문 확인 TTS 생성: {confirm_text}")
-
-    #         # 4. TTS 생성
-    #         if not self.text2speech_question_confirm(confirm_text):
-    #             self.get_logger().warning("TTS 생성 실패로 기본 대기음을 재생합니다.")
-    #             self.play_default_waiting_sound()
-    #             return
-
-    #         # 5. 생성된 TTS 파일 재생 (기존 스펙트럼 방식 유지)
-    #         if os.path.exists(self.question_confirm_path):
-    #             # pydub을 사용하여 MP3 로드
-    #             sound = AudioSegment.from_file(self.question_confirm_path, format="mp3")
-                
-    #             # 정규화 (기존 방식과 동일)
-    #             target_dBFS = -14.0
-    #             change_in_dBFS = target_dBFS - sound.dBFS
-    #             sound = sound.apply_gain(change_in_dBFS)
-                
-    #             # 임시 WAV로 변환
-    #             temp_wav = "/tmp/question_confirm_audio.wav"
-    #             sound.export(temp_wav, format="wav")
-
-
-    #             # 🆕 핵심 추가: 오디오 재생 직전에 사용자 질문 말풍선 발행
-    #             question_display_msg = String()
-    #             question_display_msg.data = question_text.strip()  # 순수 질문 텍스트
-    #             self.user_question_display_pub.publish(question_display_msg)
-    #             self.get_logger().info(f"🗨️ TTS 재생과 동시에 사용자 질문 말풍선 표시: {question_text.strip()}")
-
-
-
-
-    #             # 기존과 동일한 방식으로 스펙트럼과 재생 병렬 처리
-    #             self.waiting_publish_and_play(temp_wav)
-           
-
-    #             self.get_logger().info("질문 확인 TTS 재생 완료")
-    #             self.save_log("질문 확인 TTS 재생 완료")
-
-    #             # 🔧 핵심: 스레드 기반으로 Realtime 실행
-    #             def start_realtime_async():
-    #                 try:
-    #                     asyncio.run(self.start_realtime_response(question_text))
-    #                 except Exception as e:
-    #                     self.get_logger().error(f"❌ Realtime 실행 실패: {e}")
-                
-    #             realtime_thread = threading.Thread(target=start_realtime_async, daemon=True)
-    #             realtime_thread.start()
-    #             self.get_logger().info("🚀 Realtime 응답 스레드 시작")
-
-
-
-
-
-
-    #         else:
-    #             self.get_logger().error(f"TTS 파일이 생성되지 않음: {self.question_confirm_path}")
-    #             self.play_default_waiting_sound()
-
-    #     except Exception as e:
-    #         self.get_logger().error(f"질문 확인 TTS 처리 실패: {e}")
-    #         self.save_log(f"질문 확인 TTS 처리 실패: {e}")
-    #         self.play_default_waiting_sound()
-
-
-
     # 🔧 수정된 대기 효과 실행 함수
     def play_effect_sound_waiting_1(self):
         """GPT-4.1 nano + ElevenLabs TTS 방식으로 질문 확인"""
@@ -1500,57 +1283,6 @@ class UserQuestion(Node):
 
 
 
-
-
-
-
-
-    # def play_default_waiting_sound(self):
-    #     """
-    #     TTS 생성 실패 시 기본 대기음 재생 (백업용)
-    #     """
-    #     try:
-    #         # 🆕 기본 대기음 재생 시에도 말풍선 표시
-    #         if hasattr(self, 'last_published_text') and self.last_published_text:
-    #             question_text = self.extract_question_from_published_text(self.last_published_text)
-    #             question_display_msg = String()
-    #             question_display_msg.data = question_text.strip()
-    #             self.user_question_display_pub.publish(question_display_msg)
-    #             self.get_logger().info(f"🗨️ 기본 대기음과 함께 사용자 질문 말풍선 표시: {question_text.strip()}")
-
-
-    #         effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_waiting1"
-            
-    #         if not os.path.exists(effects_dir):
-    #             self.get_logger().error(f"기본 대기음 디렉토리 없음: {effects_dir}")
-    #             return
-                
-    #         mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
-
-    #         if not mp3_files:
-    #             self.get_logger().error("기본 대기음 파일이 없습니다.")
-    #             return
-
-    #         # 랜덤으로 하나의 MP3 파일 선택
-    #         selected_file = random.choice(mp3_files)
-    #         selected_path = os.path.join(effects_dir, selected_file)
-
-    #         self.get_logger().info(f"기본 대기음 재생: {selected_file}")
-
-    #         # 기존 방식과 동일하게 재생
-    #         sound = AudioSegment.from_file(selected_path, format="mp3")
-    #         target_dBFS = -14.0
-    #         change_in_dBFS = target_dBFS - sound.dBFS
-    #         sound = sound.apply_gain(change_in_dBFS)
-            
-    #         temp_wav = "/tmp/default_waiting_audio.wav"
-    #         sound.export(temp_wav, format="wav")
-
-    #         self.waiting_publish_and_play(temp_wav)
-    #         # time.sleep(1)
-
-    #     except Exception as e:
-    #         self.get_logger().error(f"기본 대기음 재생 실패: {e}")
 
 
 
@@ -1639,60 +1371,6 @@ class UserQuestion(Node):
 
     
 
-    # def play_effect_sound_rag(self):
-    #     # 효과음 파일이 저장된 디렉토리 경로
-    #     effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_rag"
-
-    #     # 디렉토리에서 MP3 파일 목록 가져오기
-    #     mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
-
-    #     if not mp3_files:
-    #         self.get_logger().info("No MP3 files found in the effects directory.")
-    #         return
-
-    #     # 랜덤으로 하나의 MP3 파일 선택
-    #     selected_file = random.choice(mp3_files)
-    #     selected_path = os.path.join(effects_dir, selected_file)
-
-    #     self.get_logger().info(f"Playing sound: {selected_file}")
-
-    #     # pygame을 사용하여 MP3 파일 재생
-    #     pygame.mixer.init()
-    #     pygame.mixer.music.load(selected_path)
-    #     pygame.mixer.music.play()
-        
-    #     # 재생이 끝날 때까지 대기
-    #     while pygame.mixer.music.get_busy():
-    #         pygame.time.Clock().tick(10)
-
-
-
-
-    # def execute_waiting_sequence(self):
-    #     """새로운 대기 효과들을 순차 실행 (중복 방지 포함)"""
-    #     try:
-    #         # 🆕 중복 실행 체크
-    #         if not self.waiting_sequence_running:
-    #             self.get_logger().info("대기 시퀀스가 이미 완료되었습니다.")
-    #             return
-                
-    #         self.get_logger().info("질문 확인 시퀀스 시작")
-            
-    #         # 첫 번째 대기 효과 (스펙트럼 시각화)
-    #         self.play_effect_sound_waiting_1()
-            
-       
-            
-    #         self.get_logger().info("질문 확인 시퀀스 완료")
-            
-    #     except Exception as e:
-    #         self.get_logger().error(f"대기 효과 실행 중 오류: {e}")
-    #     finally:
-    #         # 🆕 플래그 해제
-    #         self.waiting_sequence_running = False
-
-
-
     def execute_waiting_sequence(self):
         """대기 효과 실행 - 간소화된 버전"""
         try:
@@ -1713,53 +1391,6 @@ class UserQuestion(Node):
             self.waiting_sequence_running = False
 
 
-
-
-
-
-
-
-    # def waiting_publish_and_play(self, wav_path):
-    #     """Mp3Player.py의 publish_and_play와 동일한 방식"""
-    #     import wave
-        
-    #     wf = wave.open(wav_path, 'rb')
-    #     chunk_size = 2024
-
-    #     def publish_spectrum():
-    #         data = wf.readframes(chunk_size)
-    #         while data:
-    #             samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-    #             if wf.getnchannels() == 2:
-    #                 samples = samples.reshape((-1, 2)).mean(axis=1)
-            
-                
-
-    #             fft = np.fft.fft(samples)
-    #             spectrum = np.abs(fft[:len(fft)//2])
-    #             #spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-    #             msg = String()
-    #             msg.data = json.dumps({"spectrum": spectrum.tolist()})
-    #             self.waiting_spectrum_pub.publish(msg)
-    #             data = wf.readframes(chunk_size)
-    #             time.sleep(chunk_size / wf.getframerate())
-
-
-
-
-
-
-
-    #     spectrum_thread = threading.Thread(target=publish_spectrum)
-    #     spectrum_thread.start()
-
-    #     # 시스템 명령어로 재생 (Mp3Player.py와 동일)
-    #     os.system(f"aplay {wav_path}")
-    #     spectrum_thread.join()
-    #     wf.close()
-
-
-            
 
 
 
