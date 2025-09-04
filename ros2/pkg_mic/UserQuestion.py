@@ -48,7 +48,8 @@ import base64
 from openai import OpenAI
 
 
-
+import whisper_timestamped as whisper
+from difflib import SequenceMatcher
 
 
 
@@ -272,7 +273,257 @@ class UserQuestion(Node):
         self.response_preparation_pub = self.create_publisher(String, "/response_preparation", 10)
 
 
+        # 🆕 whisper 모델 관련 추가
+        self.whisper_model = None
+        self.whisper_device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model_loading_lock = threading.Lock()
+        
+        # 🆕 질문확인 자막 퍼블리셔 추가
+        self.question_confirm_subtitle_pub = self.create_publisher(String, "/question_confirm_subtitle", 10)
+        
+        # 🆕 whisper 환경 설정 및 모델 사전 로딩
+        self.setup_whisper_environment()
+        self.preload_whisper_model()
+
+        # 🆕 질문 처리 중 소리 추출 상태 추가
+        self.question_processing = False  # 질문 처리 중 플래그
+        self.waiting_for_tts = False      # TTS 시작 대기 중 플래그
+
+
+
+
+
         self.start_audio_stream()
+
+
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Whisper 모델 설정
+# ──────────────────────────────────────────────────────────────────────────────
+
+    def setup_whisper_environment(self):
+        """whisper-timestamped GPU 환경 설정 (Mp3Player.py와 동일)"""
+        try:
+            if torch.cuda.is_available():
+                torch.backends.cudnn.enabled = False
+                os.environ['CUDNN_DISABLED'] = '1'
+                os.environ['PYTORCH_DISABLE_CUDNN_CONV'] = '1'
+                os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                self.get_logger().info("✅ whisper GPU 환경 설정 완료")
+            else:
+                self.whisper_device = "cpu"
+        except Exception as e:
+            self.get_logger().error(f"❌ whisper 환경 설정 실패: {e}")
+            self.whisper_device = "cpu"
+
+    def preload_whisper_model(self):
+        """노드 시작 시 whisper 모델 사전 로딩 (Mp3Player.py와 동일)"""
+        def load_model_async():
+            try:
+                self.get_logger().info("🚀 whisper 모델 사전 로딩 시작...")
+                with self.model_loading_lock:
+                    if self.whisper_model is None:
+                        self.whisper_model = whisper.load_model("tiny", device=self.whisper_device)
+                self.get_logger().info("✅ whisper 모델 사전 로딩 완료!")
+            except Exception as e:
+                self.get_logger().error(f"❌ whisper 모델 사전 로딩 실패: {e}")
+                if self.whisper_device == "cuda":
+                    self.whisper_device = "cpu"
+                    try:
+                        with self.model_loading_lock:
+                            self.whisper_model = whisper.load_model("tiny", device="cpu")
+                    except Exception as e2:
+                        self.whisper_model = None
+        
+        loading_thread = threading.Thread(target=load_model_async, daemon=True)
+        loading_thread.start()
+
+    def extract_question_confirm_timestamps(self, audio_path, original_text):
+        """질문확인용 타임스탬프 추출 (Mp3Player.py 방식 활용)"""
+        try:
+            self.get_logger().info("⏳ 질문확인 자막용 타임스탬프 추출 시작")
+            
+            # 모델 준비 대기
+            max_wait_time = 10.0
+            wait_start = time.time()
+            while self.whisper_model is None and (time.time() - wait_start) < max_wait_time:
+                time.sleep(0.1)
+            
+            if self.whisper_model is None:
+                with self.model_loading_lock:
+                    self.whisper_model = whisper.load_model("tiny", device=self.whisper_device)
+            
+            # whisper 추론
+            audio = whisper.load_audio(audio_path)
+            result = whisper.transcribe(
+                self.whisper_model, 
+                audio, 
+                language="ko",
+                verbose=False,
+                temperature=0
+            )
+            
+            # 타임스탬프 추출
+            word_timestamps = []
+            for segment in result.get("segments", []):
+                for word_info in segment.get("words", []):
+                    word_timestamps.append({
+                        "word": word_info.get("text", "").strip(),
+                        "start": round(word_info.get("start", 0.0), 3),
+                        "end": round(word_info.get("end", 0.0), 3),
+                        "confidence": round(word_info.get("confidence", 1.0), 3)
+                    })
+            
+            self.get_logger().info(f"✅ 질문확인 타임스탬프 추출 완료: {len(word_timestamps)}개 단어")
+            return word_timestamps
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ 질문확인 타임스탬프 추출 실패: {e}")
+            return []
+
+
+
+
+
+    def merge_original_with_confirm_timestamps(self, original_text, stt_timestamps):
+        """원본 텍스트와 STT 타임스탬프 병합 (Mp3Player.py 방식 활용)"""
+        try:
+            original_words = original_text.split()
+            
+            if not stt_timestamps:
+                return self._create_default_confirm_timestamps(original_words)
+            
+            # 단순한 정렬 방식 사용 (질문확인은 짧은 문장이므로)
+            corrected_timestamps = []
+            
+            if len(original_words) <= len(stt_timestamps):
+                # 원본 단어가 적거나 같은 경우: 직접 매핑
+                for i, orig_word in enumerate(original_words):
+                    if i < len(stt_timestamps):
+                        corrected_timestamps.append({
+                            "word": orig_word,
+                            "start": stt_timestamps[i]["start"],
+                            "end": stt_timestamps[i]["end"],
+                            "confidence": stt_timestamps[i]["confidence"]
+                        })
+            else:
+                # 원본 단어가 더 많은 경우: 시간 분할
+                total_duration = stt_timestamps[-1]["end"] - stt_timestamps[0]["start"]
+                time_per_word = total_duration / len(original_words)
+                start_time = stt_timestamps[0]["start"]
+                
+                for i, orig_word in enumerate(original_words):
+                    word_start = start_time + (i * time_per_word)
+                    word_end = word_start + time_per_word
+                    
+                    corrected_timestamps.append({
+                        "word": orig_word,
+                        "start": round(word_start, 3),
+                        "end": round(word_end, 3),
+                        "confidence": 0.9
+                    })
+            
+            return corrected_timestamps
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ 질문확인 타임스탬프 병합 실패: {e}")
+            return self._create_default_confirm_timestamps(original_text.split())
+
+
+
+
+
+
+
+    def _create_default_confirm_timestamps(self, words):
+        """기본 질문확인 타임스탬프 생성"""
+        timestamps = []
+        current_time = 0.0
+        
+        for word in words:
+            duration = max(0.3, len(word) * 0.15)
+            timestamps.append({
+                "word": word,
+                "start": round(current_time, 3),
+                "end": round(current_time + duration, 3),
+                "confidence": 1.0
+            })
+            current_time += duration
+        
+        return timestamps
+
+    def publish_question_confirm_subtitle(self, subtitle_data):
+        """질문확인 자막 순차 퍼블리시 (Mp3Player.py 방식 활용)"""
+        if not subtitle_data or 'words' not in subtitle_data:
+            return
+        
+        def subtitle_worker():
+            try:
+                words = subtitle_data['words']
+                start_time = time.time()
+                
+                self.get_logger().info(f"📺 질문확인 자막 시작: {len(words)}개 단어")
+                
+                for i, word_info in enumerate(words):
+                    # 단어 시작 시간까지 대기
+                    elapsed_time = time.time() - start_time
+                    target_time = word_info['start']
+                    
+                    if target_time > elapsed_time:
+                        sleep_duration = target_time - elapsed_time
+                        time.sleep(sleep_duration)
+                    
+                    # 현재 단어 표시
+                    current_word_data = {
+                        "word": word_info['word'],
+                        "start": word_info['start'],
+                        "end": word_info['end'],
+                        "confidence": word_info['confidence'],
+                        "index": i,
+                        "total": len(words),
+                        "display_mode": "question_confirm_word"
+                    }
+                    
+                    msg = String()
+                    msg.data = json.dumps(current_word_data, ensure_ascii=False)
+                    self.question_confirm_subtitle_pub.publish(msg)
+                    
+                    # 다음 단어까지 대기
+                    if i < len(words) - 1:
+                        next_word_start = words[i + 1]['start']
+                        current_time_in_audio = time.time() - start_time
+                        remaining_time = next_word_start - current_time_in_audio
+                        if remaining_time > 0:
+                            time.sleep(remaining_time)
+                    else:
+                        word_duration = word_info['end'] - word_info['start']
+                        time.sleep(word_duration)
+                
+                # 질문확인 자막 완료 후 응답준비 화면 표시
+                self.publish_response_preparation_show(self.extract_question_from_published_text(self.last_published_text))
+                
+                # 자막 종료
+                final_data = {"word": "", "display_mode": "question_confirm_finished"}
+                final_msg = String()
+                final_msg.data = json.dumps(final_data, ensure_ascii=False)
+                self.question_confirm_subtitle_pub.publish(final_msg)
+                
+                self.get_logger().info("📺 질문확인 자막 완료")
+                
+            except Exception as e:
+                self.get_logger().error(f"❌ 질문확인 자막 퍼블리시 실패: {e}")
+        
+        subtitle_thread = threading.Thread(target=subtitle_worker, daemon=True)
+        subtitle_thread.start()
+
+
+
+
+
 
 
 
@@ -425,6 +676,36 @@ class UserQuestion(Node):
                 generation_time = time.time() - start_time    
                 self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 → {self.question_confirm_path}")
                 self.get_logger().info(f"⏱️ TTS 생성 시간: {generation_time:.3f}초")
+
+
+
+                # 🆕 타임스탬프 추출을 위한 WAV 변환
+                sound = AudioSegment.from_file(self.question_confirm_path, format="mp3")
+                wav_path = "/tmp/question_confirm_for_stt.wav"
+                sound = sound.set_frame_rate(16000).set_channels(1)
+                sound.export(wav_path, format="wav")
+                
+                # 🆕 타임스탬프 추출
+                stt_timestamps = self.extract_question_confirm_timestamps(wav_path, text)
+                
+                # 🆕 원본 텍스트와 병합
+                corrected_timestamps = self.merge_original_with_confirm_timestamps(text, stt_timestamps)
+                
+                # 🆕 자막 데이터 저장 (재생 시 사용)
+                self.question_confirm_subtitle_data = {
+                    "original_text": text,
+                    "words": corrected_timestamps,
+                    "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
+                }
+
+
+
+
+
+
+
+
+
                 return True
             else:
                 self.get_logger().error(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
@@ -456,10 +737,23 @@ class UserQuestion(Node):
         """질문 확인 TTS를 재생하고 완료 시 상태 퍼블리시"""
         def play_audio():
             try:
+                # 🔧 수정: TTS 시작 시 소리 추출 중단
+                self.question_processing = False
+                self.waiting_for_tts = False
+                self.trigger_detected = False  # 여기서 최종적으로 False
+
                 self.question_confirm_playing = True
                 
                 # 재생 시작 상태 퍼블리시
                 self.publish_question_confirm_status("playing")
+
+
+                # 🆕 자막 퍼블리시 시작
+                if hasattr(self, 'question_confirm_subtitle_data'):
+                    self.publish_question_confirm_subtitle(self.question_confirm_subtitle_data)
+                
+
+
                 
                 # pygame으로 MP3 재생
                 pygame.mixer.init()
@@ -824,8 +1118,22 @@ class UserQuestion(Node):
             except queue.Empty:
                 pass
 
-        # 🆕 2. 원형 스펙트럼용 음량 계산 및 전송 (trigger_detected 상태에서만)
-        if self.trigger_detected and not self.music_playing and not self.ignore_stt:
+        # # 🆕 2. 원형 스펙트럼용 음량 계산 및 전송 (trigger_detected 상태에서만)
+        # if self.trigger_detected and not self.music_playing and not self.ignore_stt:
+        #     volume = self.voice_spectrum.calculate_volume(in_data)
+        #     self.publish_voice_spectrum(volume)
+
+        # 🔧 수정: 원형 스펙트럼용 음량 계산 조건 확장
+        # 기존: trigger_detected 상태에서만
+        # 신규: trigger_detected 또는 question_processing 상태에서
+        should_extract_voice = (
+            (self.trigger_detected or self.question_processing) and 
+            not self.music_playing and 
+            not self.ignore_stt and
+            not self.question_confirm_playing  # TTS 재생 중에는 중단
+        )
+        
+        if should_extract_voice:
             volume = self.voice_spectrum.calculate_volume(in_data)
             self.publish_voice_spectrum(volume)
 
@@ -1316,6 +1624,11 @@ class UserQuestion(Node):
 
             self.force_published = True
 
+            # 🔧 수정: 질문 처리 상태로 전환 (trigger_detected는 유지)
+            self.question_processing = True
+            self.waiting_for_tts = True
+
+
 
             # 🆕 2단계: searching 상태 신호 전송 (기존 gif_status_pub 활용)
             status_msg = String()
@@ -1338,8 +1651,8 @@ class UserQuestion(Node):
             self.last_published_text = msg.data
 
 
-            # 🆕 추가: 즉시 통합 응답 준비 화면 표시
-            self.publish_response_preparation_show(text)
+            # # 🆕 추가: 즉시 통합 응답 준비 화면 표시
+            # self.publish_response_preparation_show(text)
 
 
 
@@ -1355,7 +1668,8 @@ class UserQuestion(Node):
             self.get_logger().info(f'Transcription published: "{msg.data}"')
             self.save_log(f'Transcription published: "{msg.data}"')
             self.partial_transcript = ""  # ✅ 퍼블리시 후 즉시 초기화
-            self.trigger_detected = False  # ✅ 퍼블리시 후 trigger 상태 초기화
+           # self.trigger_detected = False  # ✅ 퍼블리시 후 trigger 상태 초기화
+            
             self.waiting_for_input_after_music = False  # ✅ 입력 대기 상태 해제
      
 
@@ -1425,7 +1739,7 @@ class UserQuestion(Node):
         # ✅ 세션 강제 중지
         self.stop_audio_stream()
 
-        # ✅ 대기 시간 조금 여유롭게
+        # #✅ 대기 시간 조금 여유롭게
         # time.sleep(2.5)
 
         # ✅ 입력 스트림 재시작
