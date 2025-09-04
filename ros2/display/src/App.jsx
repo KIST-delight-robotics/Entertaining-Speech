@@ -1,7 +1,4 @@
 
-
-//동적자막(google-stt 이용)
-
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
@@ -126,6 +123,98 @@ const [pendingContent, setPendingContent] = useState(null); // { type: 'video'|'
 const [waitingForQuestionConfirm, setWaitingForQuestionConfirm] = useState(false);
 
 
+// 🆕 질문확인 자막 관련 상태 추가
+const [questionConfirmSubtitle, setQuestionConfirmSubtitle] = useState(null);
+const [showQuestionConfirmSubtitle, setShowQuestionConfirmSubtitle] = useState(false);
+
+
+
+ // 🆕 질문확인 자막 구독
+ useEffect(() => {
+  const questionConfirmSubtitleListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/question_confirm_subtitle',
+    messageType: 'std_msgs/String'
+  });
+  
+  questionConfirmSubtitleListener.subscribe((message) => {
+    try {
+      const data = JSON.parse(message.data);
+      console.log('📺 질문확인 자막 수신:', data);
+      
+      if (data.display_mode === 'question_confirm_word') {
+        setQuestionConfirmSubtitle(data);
+        setShowQuestionConfirmSubtitle(true);
+      } else if (data.display_mode === 'question_confirm_finished') {
+        setQuestionConfirmSubtitle(null);
+        setShowQuestionConfirmSubtitle(false);
+      }
+    } catch (e) {
+      console.error('질문확인 자막 JSON parse error:', e);
+    }
+  });
+  
+  return () => {
+    questionConfirmSubtitleListener.unsubscribe();
+  };
+}, []);
+
+
+
+
+
+ // 🆕 질문확인 자막 렌더링 함수
+ const renderQuestionConfirmSubtitle = () => {
+  if (!showQuestionConfirmSubtitle || questionConfirmStatus !== 'playing') {
+    return null;
+  }
+
+  return (
+    <div style={{
+      position: 'absolute',
+      top: '0',
+      left: '0',
+      width: '100vw',
+      height: '100vh',
+      zIndex: 35, // 응답준비 화면보다 높은 우선순위
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: 'rgba(26, 26, 26, 0.95)'
+    }}>
+      <div style={{
+        maxWidth: '90vw',
+        textAlign: 'center',
+        padding: '40px 20px'
+      }}>
+        {/* 질문확인 단어 표시 */}
+        <div style={{
+          fontSize: '4rem',
+          fontWeight: 'bold',
+          color: '#FFD700',
+          textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
+          minHeight: '6rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          letterSpacing: '0.05em'
+        }}>
+          {questionConfirmSubtitle ? questionConfirmSubtitle.word : ''}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+
+
+
+
+
+
+
 
 
 
@@ -177,7 +266,7 @@ useEffect(() => {
 
 // 🆕 통합 응답 준비 화면 렌더링 함수
 const renderResponsePreparation = () => {
-  if (!responsePreparation.show || !responsePreparation.question) {
+  if (!responsePreparation.show || !responsePreparation.question || showQuestionConfirmSubtitle || questionConfirmStatus === 'playing') {
     return null;
   }
 
@@ -218,7 +307,7 @@ const renderResponsePreparation = () => {
           color: '#FFFFFF',
           animation: 'pulse 2s infinite'
         }}>
-          에 대해 답변 해드릴게요.
+          에 대해 생각중이야. 
         </div>
         
         {/* 로딩 인디케이터 */}
@@ -761,10 +850,25 @@ const createSafeUrl = (path) => {
           setVideoVisible(false);
           setCurrentVideo(null); // ⭐ 핵심 추가
           // TTS가 준비된 경우 즉시 재생, 아니면 대기
+          
+          // 🆕 TTS 재생 상태 즉시 설정
+          if (currentReply && currentReply.trim() !== '') {
+            setIsTtsPlaying(true);
+          }
+          
+                  
           if (ttsStatus === 'tts_ready') {
             console.log('🗣️ TTS 준비 완료 - 즉시 재생');
             requestTtsPlay();
-          } else {
+          } 
+          // 2. TTS 상태 감지 로직에 동영상 후 조건 추가
+          else if (!currentVideo && currentReply && currentReply.trim() !== '') {
+            console.log('🗣️ TTS 준비 완료 - TTS 재생 시작 (동영상 후)');
+            setResponsePreparation(prev => ({ ...prev, show: false }));
+            setIsTtsPlaying(true);
+            requestTtsPlay();
+          }
+          else {
             console.log('🗣️ TTS 준비 대기 중...');
            
           }
@@ -883,13 +987,17 @@ const shouldShowVoiceSpectrum = () => {
          !isMp3WaitingMode && 
          !videoVisible &&
          !isTtsPlaying &&
-         !responsePreparation.show && 
+        
+     //  !responsePreparation.show &&
+         !showQuestionConfirmSubtitle &&  // 🆕 질문확인 자막 표시 중이면 숨김
+         questionConfirmStatus !== 'playing' && // 🆕 질문확인 TTS 재생 중이면 숨김
+
          isVoiceActive;
 };
 
 // 🚀 더 즉각적인 렌더링
 const renderVoiceSpectrum = () => {
-  if (!shouldShowVoiceSpectrum()) {
+  if (!shouldShowVoiceSpectrum() ) {
     return null;
   }
 
@@ -917,8 +1025,8 @@ const renderVoiceSpectrum = () => {
         width: `${radius * 2}px`,
         height: `${radius * 2}px`,
         borderRadius: '50%',
-        background: `radial-gradient(circle, rgba(100, 200, 255, ${opacity}) 0%, rgba(50, 150, 255, ${opacity * 0.5}) 70%, rgba(0, 100, 255, 0) 100%)`,
-        border: `4px solid rgba(100, 200, 255, ${opacity})`,
+        background: `radial-gradient(circle, rgba(255, 255, 255, ${opacity}) 0%, rgba(255, 255, 255, ${opacity * 0.5}) 70%, rgba(255, 255, 255, 0) 100%)`,
+        // border: `4px solid rgba(100, 200, 255, ${opacity})`,
         transition: 'all 0.02s linear', // 🚀 0.05s → 0.02s (더 빠른 전환)
         animation: voiceVolume > 0.05 ? 'voicePulse 0.15s infinite alternate' : 'none' // 🚀 더 빠른 애니메이션
       }} />
@@ -932,8 +1040,8 @@ const renderVoiceSpectrum = () => {
         width: `${8 + (voiceVolume * 20)}px`,  // 🚀 더 큰 변화폭
         height: `${8 + (voiceVolume * 20)}px`,
         borderRadius: '50%',
-        backgroundColor: `rgba(100, 200, 255, ${opacity})`,
-        boxShadow: `0 0 ${10 + (voiceVolume * 40)}px rgba(100, 200, 255, ${opacity})`, // 🚀 더 큰 그림자
+        backgroundColor: `rgba(255, 255, 255, ${opacity})`,
+        boxShadow: `0 0 ${10 + (voiceVolume * 40)}px rgba(255, 255, 255, ${opacity})`,
         transition: 'all 0.01s linear' // 🚀 매우 빠른 반응
       }} />
       
@@ -947,7 +1055,7 @@ const renderVoiceSpectrum = () => {
           width: `${radius * 3.0}px`, // 🚀 더 큰 링
           height: `${radius * 3.0}px`,
           borderRadius: '50%',
-          border: `3px solid rgba(100, 200, 255, ${opacity * 0.4})`,
+          border: `3px solid rgba(255, 255, 255, ${opacity * 0.4})`,
           animation: 'voiceRipple 0.4s infinite' // 🚀 더 빠른 리플
         }} />
       )}
@@ -1889,6 +1997,9 @@ const getScreenTransform = () => {
  */}
 
 
+      {/* 🆕 질문확인 자막 렌더링 (최우선 순위) */}
+      {renderQuestionConfirmSubtitle()}
+
 
       {/* 🔧 수정: 기존 말풍선과 TTS 대기 화면 대신 통합 화면 */}
     {renderResponsePreparation()}
@@ -1913,7 +2024,6 @@ const getScreenTransform = () => {
 }
 
 export default SpectrumVisualizer;
-
 
 
 
