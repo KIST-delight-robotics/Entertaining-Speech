@@ -133,6 +133,8 @@ class Mp3Player(Node):
 
         # 🆕 단일 단어 자막 퍼블리셔 추가
         self.single_word_publisher = self.create_publisher(String, "/single_word_subtitle", 10)
+        self.pending_subtitle_data = None  # 🆕 자막 데이터 저장용
+
 
         
 
@@ -1295,8 +1297,12 @@ class Mp3Player(Node):
                         "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
                     }
 
-                    # 🆕 순차 단일 단어 자막 시작
-                    self.publish_single_word_subtitle(subtitle_data)
+                    # 🔑 핵심 수정: 즉시 퍼블리시하지 않고 저장만
+                    self.pending_subtitle_data = subtitle_data
+
+
+                    # # 🆕 순차 단일 단어 자막 시작
+                    # self.publish_single_word_subtitle(subtitle_data)
                     
                     msg = String()
                     msg.data = json.dumps(subtitle_data, ensure_ascii=False)
@@ -1791,6 +1797,19 @@ class Mp3Player(Node):
             
             # 재생 시작 신호
             self.publish_tts_status("tts_playing")
+
+            # 🆕 TTS 재생 시작과 동시에 자막 시작
+            if self.pending_subtitle_data:
+                self.get_logger().info("📺 TTS 재생과 동시에 자막 시작")
+                self.publish_single_word_subtitle(self.pending_subtitle_data)
+                self.pending_subtitle_data = None  # 사용 후 초기화
+                
+
+
+
+
+
+
             
             # 🆕 TTS 전용 스펙트럼과 함께 재생
             self.play_tts_with_spectrum(self.reply_path)
