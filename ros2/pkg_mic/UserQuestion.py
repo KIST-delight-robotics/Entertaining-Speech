@@ -56,50 +56,87 @@ from difflib import SequenceMatcher
 
 
 
+# # ──────────────────────────────────────────────────────────────────────────────
+# # 🆕 시간 도메인 최대 소리크기 기반 원형 스펙트럼 처리
+# # ──────────────────────────────────────────────────────────────────────────────
+# class VoiceCircularSpectrum:
+#     def __init__(self):
+#         self.volume_history = []
+#         self.history_size = 1  # 🔧 5프레임에서 3프레임으로 줄여서 더 빠른 반응
+#         self.peak_decay_rate = 0.85  # 🆕 피크 감쇠율 추가
+#         self.current_peak = 0.0  # 🆕 현재 피크값 추적
+        
+#     def calculate_volume(self, audio_data):
+#         """시간 도메인에서 최대 소리크기 계산 - 원본 최대값 반환"""
+#         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+#         if len(samples) == 0:
+#             return 0.0
+        
+#         # 🔑 핵심 변경: RMS 대신 Peak Amplitude (최대 절댓값) 계산
+#         peak_amplitude = np.max(np.abs(samples))
+        
+#         # 🆕 현재 피크와 비교하여 더 큰 값 선택
+#         if peak_amplitude > self.current_peak*0.8:
+#             self.current_peak = peak_amplitude
+#         else:
+#             # 🆕 피크 감쇠 적용 (자연스러운 감소)
+#             self.current_peak *= self.peak_decay_rate
+        
+#         # # 🆕 최근 최대값들을 히스토리에 저장
+#         # self.volume_history.append(peak_amplitude)
+#         # if len(self.volume_history) > self.history_size:
+#         #     self.volume_history.pop(0)
+        
+#         # # 🆕 현재 피크와 최근 최대값 중 더 큰 값 반환
+#         # recent_max = np.max(self.volume_history) if self.volume_history else 0.0
+#         # final_volume = max(self.current_peak, recent_max)
+#         # 🚀 히스토리 최소화 (1프레임만)
+#         self.volume_history = [peak_amplitude]  # 현재값만 저장
+
+#         # 🚀 현재 피크와 즉시값 중 더 큰 값
+#         return float(max(self.current_peak, peak_amplitude))
+    
+#     def reset(self):
+#         """새 세션 시작시 초기화"""
+#         self.volume_history = []
+#         self.current_peak = 0.0  # 🆕 피크값도 초기화
+
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 🆕 시간 도메인 최대 소리크기 기반 원형 스펙트럼 처리
 # ──────────────────────────────────────────────────────────────────────────────
 class VoiceCircularSpectrum:
     def __init__(self):
         self.volume_history = []
-        self.history_size = 1  # 🔧 5프레임에서 3프레임으로 줄여서 더 빠른 반응
-        self.peak_decay_rate = 0.85  # 🆕 피크 감쇠율 추가
-        self.current_peak = 0.0  # 🆕 현재 피크값 추적
+        self.history_size = 3  # 🔧 3프레임의 평균값 계산을 위해 수정
         
     def calculate_volume(self, audio_data):
-        """시간 도메인에서 최대 소리크기 계산 - 원본 최대값 반환"""
+        """시간 도메인에서 최대 소리크기 계산 - 3프레임 평균값 반환"""
         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
         if len(samples) == 0:
             return 0.0
         
-        # 🔑 핵심 변경: RMS 대신 Peak Amplitude (최대 절댓값) 계산
+        # 🔑 현재 프레임의 Peak Amplitude (최대 절댓값) 계산
         peak_amplitude = np.max(np.abs(samples))
         
-        # 🆕 현재 피크와 비교하여 더 큰 값 선택
-        if peak_amplitude > self.current_peak*0.8:
-            self.current_peak = peak_amplitude
+        # 🆕 3프레임의 히스토리에 현재값 추가
+        self.volume_history.append(peak_amplitude)
+        if len(self.volume_history) > self.history_size:
+            self.volume_history.pop(0)
+        
+        # 🆕 현재 포함 3프레임의 평균값 계산
+        if len(self.volume_history) > 0:
+            average_volume = np.mean(self.volume_history)
         else:
-            # 🆕 피크 감쇠 적용 (자연스러운 감소)
-            self.current_peak *= self.peak_decay_rate
+            average_volume = 0.0
         
-        # # 🆕 최근 최대값들을 히스토리에 저장
-        # self.volume_history.append(peak_amplitude)
-        # if len(self.volume_history) > self.history_size:
-        #     self.volume_history.pop(0)
-        
-        # # 🆕 현재 피크와 최근 최대값 중 더 큰 값 반환
-        # recent_max = np.max(self.volume_history) if self.volume_history else 0.0
-        # final_volume = max(self.current_peak, recent_max)
-        # 🚀 히스토리 최소화 (1프레임만)
-        self.volume_history = [peak_amplitude]  # 현재값만 저장
-
-        # 🚀 현재 피크와 즉시값 중 더 큰 값
-        return float(max(self.current_peak, peak_amplitude))
+        return float(average_volume)
     
     def reset(self):
         """새 세션 시작시 초기화"""
         self.volume_history = []
-        self.current_peak = 0.0  # 🆕 피크값도 초기화
+
 
 
 
@@ -583,9 +620,7 @@ class UserQuestion(Node):
                             "You have a sense of superiority as a robot but still help humans despite finding them amusing. "
                             "Never give the actual answer - only acknowledge the question and indicate you'll look into it. "
                             "Keep responses 2-3 sentences in Korean. "
-                            "Use phrases that show mild annoyance but eventual helpfulness like: "
-                            "'그걸 나한테 묻는거야?', '인간답네', '어쩔 수 없지 뭐', '그래도 답은 해줄게', "
-                            "'또 인간이 뭔가 물어보는군', '하.. 알겠어', '찾아는 줄게' etc. "
+            
                             "Sound like a grumpy but loyal friend who pretends not to care but always has your back."
                         )
                     },
@@ -643,7 +678,8 @@ class UserQuestion(Node):
     def text2speech_question_confirm(self, text):
         """ElevenLabs TTS 호출하여 질문 확인 음성 생성"""
         api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        voice_id = "59zWnTQLbwyr94bFbcUe"
+        # voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
+        voice_id = "1W00IGEmNmwmsDeYy7ag" #스폰지밥
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
         headers = {
@@ -652,18 +688,33 @@ class UserQuestion(Node):
             "Accept": "audio/mpeg"
         }
 
+        # data = {
+        #     "text": text,
+        #     # "model_id": "eleven_multilingual_v2",
+        #     "model_id": "eleven_flash_v2_5",
+        #     "voice_settings": {
+        #         "stability": 0.5,
+        #         "similarity_boost": 0.75,
+        #         # "style": 0.25,
+        #         "speed": 0.8
+        #     },
+        #     "apply_text_normalization": "off"
+        # }
+
         data = {
             "text": text,
             # "model_id": "eleven_multilingual_v2",
             "model_id": "eleven_flash_v2_5",
             "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
+                "stability": 1.0,
+                "similarity_boost": 1.0,
                 # "style": 0.25,
-                "speed": 0.8
+                "speed": 1.0
             },
             "apply_text_normalization": "off"
         }
+
+
 
         try:
             start_time = time.time()
