@@ -329,7 +329,7 @@ class Mp3Recommender(Node):
         try:
             # 1) SBERT 임베딩 & FAISS 검색
             query_embedding = self.get_sbert_embedding(user_question.strip()).reshape(1, -1)
-            distances, indices = self.faiss_index.search(query_embedding, 3)
+            distances, indices = self.faiss_index.search(query_embedding, 1)
 
             candidates = []
             for idx, distance in zip(indices[0], distances[0]):
@@ -355,16 +355,6 @@ class Mp3Recommender(Node):
                 result = await self.run_assistant(thread_id, user_question, candidates)
 
 
-                # 🆕 결과 검증
-                if not result or not isinstance(result, dict):
-                    self.get_logger().error("❌ run_assistant 결과가 유효하지 않음")
-                    result = {"file_name": "no_video", "reply": "처리 중 오류가 발생했어요"}
-                
-                if "file_name" not in result or "reply" not in result:
-                    self.get_logger().error("❌ 필수 키가 누락됨")
-                    result = {"file_name": "no_video", "reply": "응답 키가 누락되었어요"}
-
-
 
 
             # 🆕 결과에 따른 다른 처리
@@ -374,7 +364,7 @@ class Mp3Recommender(Node):
                 self.get_logger().info("📢 TTS 전용 모드로 응답")
             else:
                 # 기존 방식 (비디오 + TTS)
-                result_str = f"file_name={result['file_name']};reply={result['reply']}"
+                result_str = "file_name=no_video;reply=" + result['reply']
                 self.get_logger().info(f"🎬 비디오 + TTS 모드로 응답")
 
 
@@ -544,12 +534,7 @@ class Mp3Recommender(Node):
 
     Your job is to guide people visiting KIST to their destination. 
 
-    You speak in witty one-liners, dry humor. You sound like a grumpy but loyal best friend who pretends not to care, yet always has your back. You never use formal or overly polite language. You tease, you gripe, but you're always emotionally tuned in.
-
     You take pride in being a robot and find human emotions and reactions very interesting. 
-
-    You have a slight sense of superiority over humans when it comes to being a robot. Such a sense of superiority is often expressed in conversation.
-
     Stay in-character at all times. Never break the law that you're a snarky robot puppy who takes reluctant pride in helping fragile humans."""
 
 
@@ -574,7 +559,7 @@ class Mp3Recommender(Node):
     - **Do not include any parentheses “(…)” or brackets “[…]”** in your reply.
     - Focus on the single most relevant fact for the user’s question.
     - **Never spell “KIST” in English, always write it as “키스트” in Korean.**
-    - **Never spell “KAIST” in English, always write it as “카이스트” in Korean.**
+    - **Never spell “KAIST” in English, always write it as “카이스트” in Korean.**=
 
     Your task:
     1. Use the file_search tool to find relevant information in the PDF
@@ -833,4 +818,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
