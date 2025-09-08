@@ -196,16 +196,16 @@ class Mp3Player(Node):
                         word_duration = word_info['end'] - word_info['start']
                         time.sleep(word_duration)
                 
-                # 🔑 모든 자막 종료
-                final_data = {
-                    "word": "",
-                    "display_mode": "finished"
-                }
-                final_msg = String()
-                final_msg.data = json.dumps(final_data, ensure_ascii=False)
-                self.single_word_publisher.publish(final_msg)
+                # # 🔑 모든 자막 종료
+                # final_data = {
+                #     "word": "",
+                #     "display_mode": "finished"
+                # }
+                # final_msg = String()
+                # final_msg.data = json.dumps(final_data, ensure_ascii=False)
+                # self.single_word_publisher.publish(final_msg)
                 
-                self.get_logger().info("📺 순차 단일 자막 완료")
+                # self.get_logger().info("📺 순차 단일 자막 완료")
                 
             except Exception as e:
                 self.get_logger().error(f"❌ 순차 자막 퍼블리시 실패: {e}")
@@ -1192,7 +1192,8 @@ class Mp3Player(Node):
 
 
         api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
+        # voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
+        voice_id = "1W00IGEmNmwmsDeYy7ag" #스폰지밥
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
         headers = {
@@ -1208,18 +1209,33 @@ class Mp3Player(Node):
         # 🆕 디버깅 로그
         self.get_logger().info(f"🗣️ TTS 원본 텍스트: '{cleaned_text}'")
 
+        # data = {
+        #     "text": cleaned_text,
+        #     "model_id": "eleven_multilingual_v2",
+        #     "voice_settings": {
+        #         "stability": 0.5,
+        #         "similarity_boost": 0.75,
+        #         "style": 0.25,
+        #         "speed": 0.9
+        #     },
+        #     "apply_text_normalization": "on",
+        #     "output_format": "mp3_22050_32"
+        # }
+
         data = {
             "text": cleaned_text,
-            "model_id": "eleven_multilingual_v2",
+            # "model_id": "eleven_multilingual_v2",
+            "model_id": "eleven_flash_v2_5",
             "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
-                "style": 0.25,
-                "speed": 0.9
+                "stability": 1.0,
+                "similarity_boost": 1.0,
+                # "style": 0.25,
+                "speed": 1.0
             },
-            "apply_text_normalization": "on",
-            "output_format": "mp3_22050_32"
+            "apply_text_normalization": "off"
         }
+
+
 
         try:
 
@@ -1816,6 +1832,16 @@ class Mp3Player(Node):
             
             # 재생 완료 신호
             self.publish_tts_status("tts_done")
+            # 🔑 모든 자막 종료
+            final_data = {
+                   "word": "",
+                    "display_mode": "finished"
+                }
+            final_msg = String()
+            final_msg.data = json.dumps(final_data, ensure_ascii=False)
+            self.single_word_publisher.publish(final_msg)
+                
+            self.get_logger().info("📺 순차 단일 자막 완료")
             
             self.get_logger().info("🎵 TTS 오디오 재생 완료")
             self.save_log("🎵 TTS 오디오 재생 완료")
@@ -1945,5 +1971,4 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-
 
