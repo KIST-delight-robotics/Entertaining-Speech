@@ -190,9 +190,9 @@ const [showQuestionConfirmSubtitle, setShowQuestionConfirmSubtitle] = useState(f
       }}>
         {/* 질문확인 단어 표시 */}
         <div style={{
-          fontSize: '4rem',
+          fontSize: '9rem',
           fontWeight: 'bold',
-          color: '#FFD700',
+          color: '#FFFFFF',
           textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
           minHeight: '6rem',
           display: 'flex',
@@ -291,7 +291,8 @@ const renderResponsePreparation = () => {
       }}>
         {/* 질문 표시 */}
         <div style={{
-          fontSize: '2.2rem',
+          // fontSize: '2.2rem',
+          fontSize: '4.2rem',
           fontWeight: '600',
           marginBottom: '30px',
           color: '#FFD700',
@@ -302,7 +303,8 @@ const renderResponsePreparation = () => {
         
         {/* 답변 준비 메시지 */}
         <div style={{
-          fontSize: '1.8rem',
+          // fontSize: '1.8rem',
+          fontSize: '3.8rem',
           fontWeight: '500',
           color: '#FFFFFF',
           animation: 'pulse 2s infinite'
@@ -422,7 +424,8 @@ const renderSingleWordSubtitle = () => {
       }}>
         {/* 🔑 단일 단어 표시 - 고정 크기 */}
         <div style={{
-          fontSize: '6rem', // 🔑 고정된 큰 크기
+          // fontSize: '6rem', // 🔑 고정된 큰 크기
+          fontSize: '10rem', // 🔑 고정된 큰 크기
           fontWeight: 'bold',
           color: '#FFFFFF',
           textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
@@ -944,7 +947,6 @@ const requestTtsPlay = () => {
 
 
 
-
 // 🚀 음성 원형 스펙트럼 구독 (더 빠른 반응)
 useEffect(() => {
   const voiceSpectrumListener = new ROSLIB.Topic({
@@ -958,13 +960,17 @@ useEffect(() => {
       const data = JSON.parse(message.data);
       if (data.type === 'voice_spectrum') {
         // 🚀 더 민감한 스케일링
+
+      
         const scaledVolume = data.volume * 0.0003; // 0.00015 → 0.0003
+
+        
         const clampedVolume = Math.min(1.0, scaledVolume);
         
-        console.log(`🔊 원본 Peak: ${data.volume.toFixed(1)}, 스케일된값: ${clampedVolume.toFixed(3)}`);
+        console.log(`🔊 원본 Peak: ${data.volume.toFixed(1)}, 스케일된값: ${scaledVolume.toFixed(3)}`);
         
-        setVoiceVolume(clampedVolume);
-        setIsVoiceActive(data.volume > 100); // 🚀 임계값 낮춤 (200 → 100)
+        setVoiceVolume(scaledVolume);
+        setIsVoiceActive(data.volume > 200); // 🚀 임계값 낮춤 (200 → 100)
       }
     } catch (e) {
       console.error('음성 스펙트럼 JSON 파싱 오류:', e);
@@ -973,6 +979,11 @@ useEffect(() => {
 
   return () => voiceSpectrumListener.unsubscribe();
 }, []);
+
+
+
+
+
 
 
 
@@ -995,22 +1006,73 @@ const shouldShowVoiceSpectrum = () => {
          isVoiceActive;
 };
 
+// // 🚀 더 즉각적인 렌더링
+// const renderVoiceSpectrum = () => {
+//   if (!shouldShowVoiceSpectrum() ) {
+//     return null;
+//   }
+
+//   // 🚀 더 역동적인 크기 변화
+//   const minRadius = 60;   // 🚀 60 → 40 (더 작은 최소값)
+//   const maxRadius = 600;  // 🚀 350 → 400 (더 큰 최대값)
+//   const radius = minRadius + (voiceVolume * (maxRadius - minRadius));
+  
+//   // 🚀 더 강한 투명도 변화
+//   const minOpacity = 0.2; // 🚀 0.3 → 0.2
+//   const maxOpacity = 1.0; // 🚀 0.95 → 1.0 (완전 불투명)
+//   const opacity = minOpacity + (voiceVolume * (maxOpacity - minOpacity));
+
+//   return (
+//     <div style={{
+//       position: 'fixed',
+//       top: '50%',
+//       left: '50%',
+//       transform: 'translate(-50%, -50%)',
+//       zIndex: 25,
+//       pointerEvents: 'none'
+//     }}>
+//       {/* 메인 원 - 불투명한 흰색 */}
+//       <div style={{
+//         width: `${radius * 2}px`,
+//         height: `${radius * 2}px`,
+//         borderRadius: '50%',
+//         background: `radial-gradient(circle, #ffffff 0%, rgba(255, 255, 255, 0.5) 70%, rgba(255, 255, 255, 0) 100%)`,
+//         transition: 'all 0.02s linear',
+//         animation: voiceVolume > 0.05 ? 'voicePulse 0.15s infinite alternate' : 'none'
+//       }} />
+      
+//       {/* 중앙 점 - 불투명한 흰색 */}
+//       <div style={{
+//         position: 'absolute',
+//         top: '50%',
+//         left: '50%',
+//         transform: 'translate(-50%, -50%)',
+//         width: `${8 + (voiceVolume * 20)}px`,
+//         height: `${8 + (voiceVolume * 20)}px`,
+//         borderRadius: '50%',
+//         backgroundColor: '#ffffff', // 불투명한 흰색
+//         boxShadow: `0 0 ${10 + (voiceVolume * 40)}px #ffffff`,
+//         transition: 'all 0.01s linear'
+//       }} />
+      
+    
+//     </div>
+//   );
+
+
+// };
+
+
 // 🚀 더 즉각적인 렌더링
 const renderVoiceSpectrum = () => {
   if (!shouldShowVoiceSpectrum() ) {
     return null;
   }
-
   // 🚀 더 역동적인 크기 변화
-  const minRadius = 60;   // 🚀 60 → 40 (더 작은 최소값)
-  const maxRadius = 600;  // 🚀 350 → 400 (더 큰 최대값)
+  const minRadius = 60;   
+  const maxRadius = 600;  
   const radius = minRadius + (voiceVolume * (maxRadius - minRadius));
   
-  // 🚀 더 강한 투명도 변화
-  const minOpacity = 0.2; // 🚀 0.3 → 0.2
-  const maxOpacity = 1.0; // 🚀 0.95 → 1.0 (완전 불투명)
-  const opacity = minOpacity + (voiceVolume * (maxOpacity - minOpacity));
-
   return (
     <div style={{
       position: 'fixed',
@@ -1020,69 +1082,38 @@ const renderVoiceSpectrum = () => {
       zIndex: 25,
       pointerEvents: 'none'
     }}>
-      {/* 메인 원 */}
+      {/* 메인 원 - 순수 흰색 */}
       <div style={{
         width: `${radius * 2}px`,
         height: `${radius * 2}px`,
         borderRadius: '50%',
-        background: `radial-gradient(circle, rgba(255, 255, 255, ${opacity}) 0%, rgba(255, 255, 255, ${opacity * 0.5}) 70%, rgba(255, 255, 255, 0) 100%)`,
-        // border: `4px solid rgba(100, 200, 255, ${opacity})`,
-        transition: 'all 0.02s linear', // 🚀 0.05s → 0.02s (더 빠른 전환)
-        animation: voiceVolume > 0.05 ? 'voicePulse 0.15s infinite alternate' : 'none' // 🚀 더 빠른 애니메이션
+        backgroundColor: '#ffffff', // 순수 흰색으로 변경
+        transition: 'all 0.02s linear',
+        animation: voiceVolume > 0.05 ? 'voicePulse 0.15s infinite alternate' : 'none'
       }} />
       
-      {/* 🚀 더 역동적인 중앙 점 */}
+      {/* 중앙 점 - 순수 흰색 */}
       <div style={{
         position: 'absolute',
         top: '50%',
         left: '50%',
         transform: 'translate(-50%, -50%)',
-        width: `${8 + (voiceVolume * 20)}px`,  // 🚀 더 큰 변화폭
+        width: `${8 + (voiceVolume * 20)}px`,
         height: `${8 + (voiceVolume * 20)}px`,
         borderRadius: '50%',
-        backgroundColor: `rgba(255, 255, 255, ${opacity})`,
-        boxShadow: `0 0 ${10 + (voiceVolume * 40)}px rgba(255, 255, 255, ${opacity})`,
-        transition: 'all 0.01s linear' // 🚀 매우 빠른 반응
+        backgroundColor: '#ffffff', // 순수 흰색 유지
+        transition: 'all 0.01s linear'
       }} />
-      
-      {/* 🚀 더 민감한 외곽 링 */}
-      {voiceVolume > 0.05 && ( // 🚀 0.1 → 0.05 (더 민감)
-        <div style={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: `${radius * 3.0}px`, // 🚀 더 큰 링
-          height: `${radius * 3.0}px`,
-          borderRadius: '50%',
-          border: `3px solid rgba(255, 255, 255, ${opacity * 0.4})`,
-          animation: 'voiceRipple 0.4s infinite' // 🚀 더 빠른 리플
-        }} />
-      )}
-      
-      {/* CSS 애니메이션도 더 빠르게 */}
-      <style>
-        {`
-          @keyframes voicePulse {
-            0% { transform: scale(1); }
-            100% { transform: scale(1.12); }
-          }
-          
-          @keyframes voiceRipple {
-            0% { 
-              transform: translate(-50%, -50%) scale(0.6);
-              opacity: 1;
-            }
-            100% { 
-              transform: translate(-50%, -50%) scale(1.6);
-              opacity: 0;
-            }
-          }
-        `}
-      </style>
     </div>
   );
 };
+
+
+
+
+
+
+
 
 
 
@@ -1952,7 +1983,7 @@ const getScreenTransform = () => {
         fontWeight: 'bold',
         zIndex: 100,
         transform: screenFlipped ? 'scaleY(-1)' : 'scaleY(1)', // 텍스트는 정상 방향 유지
-        backgroundColor: 'rgba(0,0,0,0.7)',
+        backgroundColor: 'rgba(0,0,0,0)',
         padding: '5px 10px',
         borderRadius: '5px'
       }}>
@@ -2028,4 +2059,4 @@ export default SpectrumVisualizer;
 
 
 
-
+``
