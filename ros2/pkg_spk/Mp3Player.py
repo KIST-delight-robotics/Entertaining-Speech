@@ -330,7 +330,7 @@ class Mp3Player(Node):
             
             for token in tokens:
                 # Kiwi 태그에서 명사 확인 (NNG: 일반명사, NNP: 고유명사, NNB: 의존명사)
-                if token.tag in ['NNG', 'NNP', 'NNB'] or token.tag.startswith('NN'):
+                if token.tag in ['NNG', 'NNP', 'NNB','NR','NP','W_SERIAL','SN','SL'] or token.tag.startswith('NN'):
                     raw_nouns.append(f"{token.form}({token.tag})")  # 태그 정보 포함
                     
                     if self._is_meaningful_noun(token.form):
@@ -1180,26 +1180,206 @@ class Mp3Player(Node):
 
 
 
+    # def text2speech(self, text):
+    #     """
+    #     ElevenLabs TTS 호출 → reply.mp3 저장 → 원본 텍스트 기반 자막 생성
+    #     """
+
+    #     # 🆕 전체 소요시간 측정 시작
+    #     total_start_time = time.time()
+    #     self.get_logger().info("⏳ TTS 전체 프로세스 시작")
+        
+
+
+    #     api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
+    #     # voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
+    #     voice_id = "1W00IGEmNmwmsDeYy7ag" #스폰지밥
+    #     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+
+    #     headers = {
+    #         "xi-api-key": api_key,
+    #         "Content-Type": "application/json; charset=utf-8",  # UTF-8 명시
+    #         "Accept": "audio/mpeg"
+    #     }
+
+    #     # 🆕 텍스트 전처리
+    #     cleaned_text = text.strip()
+    #     cleaned_text = ' '.join(cleaned_text.split())
+        
+    #     # 🆕 디버깅 로그
+    #     self.get_logger().info(f"🗣️ TTS 원본 텍스트: '{cleaned_text}'")
+
+    #     # data = {
+    #     #     "text": cleaned_text,
+    #     #     "model_id": "eleven_multilingual_v2",
+    #     #     "voice_settings": {
+    #     #         "stability": 0.5,
+    #     #         "similarity_boost": 0.75,
+    #     #         "style": 0.25,
+    #     #         "speed": 0.9
+    #     #     },
+    #     #     "apply_text_normalization": "on",
+    #     #     "output_format": "mp3_22050_32"
+    #     # }
+
+    #     data = {
+    #         "text": cleaned_text,
+    #         # "model_id": "eleven_multilingual_v2",
+    #         "model_id": "eleven_flash_v2_5",
+    #         "voice_settings": {
+    #             "stability": 1.0,
+    #             "similarity_boost": 1.0,
+    #             # "style": 0.25,
+    #             "speed": 1.0            },
+    #         "apply_text_normalization": "off"
+    #     }
+
+
+
+    #     try:
+
+    #         # 🆕 TTS API 호출 시간 측정
+    #         tts_api_start = time.time()
+    #         self.get_logger().info("⏳ ElevenLabs TTS API 호출 시작")
+
+
+
+    #         response = requests.post(
+    #             url,
+    #             headers=headers,
+    #             data=json.dumps(data, ensure_ascii=False).encode('utf-8')
+    #         )
+
+    #         tts_api_end = time.time()
+    #         tts_api_duration = tts_api_end - tts_api_start
+    #         self.get_logger().info(f"✅ TTS API 호출 완료, 소요시간: {tts_api_duration:.2f}초")
+
+
+
+            
+    #         if response.status_code == 200:
+    #             with open(self.reply_path, "wb") as f:
+    #                 f.write(response.content)
+                
+    #             file_size = os.path.getsize(self.reply_path)
+    #             self.get_logger().info(f"🟢 음성 변환 성공 → {self.reply_path} ({file_size} bytes)")
+
+    #             # 🆕 WAV 변환 시간 측정
+    #             wav_convert_start = time.time()
+    #             self.get_logger().info("⏳ WAV 변환 시작")
+
+
+                
+    #             # 🆕 WAV 변환 (STT API용)
+    #             sound = AudioSegment.from_file(self.reply_path, format="mp3")
+    #             wav_path = "/tmp/tts_for_stt.wav"
+    #             sound = sound.set_frame_rate(16000).set_channels(1)
+    #             sound.export(wav_path, format="wav")
+                
+    #             wav_convert_end = time.time()
+    #             wav_convert_duration = wav_convert_end - wav_convert_start
+    #             self.get_logger().info(f"✅ WAV 변환 완료, 소요시간: {wav_convert_duration:.2f}초")
+
+                
+    #             # 🆕 STT 타임스탬프 추출
+    #             stt_timestamps = self.extract_word_timestamps(wav_path, cleaned_text)
+
+    #             # 🆕 자막 처리 시간 측정
+    #             subtitle_process_start = time.time()
+    #             self.get_logger().info("⏳ 자막 정렬 및 처리 시작")
+
+                
+    #             # 🔑 핵심: 원본 텍스트로 덮어쓰기
+    #             corrected_timestamps = self.merge_original_with_stt_timestamps(
+    #                 original_text=cleaned_text,
+    #                 stt_timestamps=stt_timestamps
+    #             )
+
+    #             subtitle_process_end = time.time()
+    #             subtitle_process_duration = subtitle_process_end - subtitle_process_start
+    #             self.get_logger().info(f"✅ 자막 정렬 및 처리 완료, 소요시간: {subtitle_process_duration:.2f}초")
+                
+    #             # 🆕 자막 퍼블리시 시간 측정
+    #             publish_start = time.time()
+
+
+                
+    #             # 🆕 수정된 자막 데이터 퍼블리시
+    #             if corrected_timestamps:
+    #                 subtitle_data = {
+    #                     "original_text": cleaned_text,
+    #                     "words": corrected_timestamps,
+    #                     "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
+    #                 }
+
+    #                 # 🔑 핵심 수정: 즉시 퍼블리시하지 않고 저장만
+    #                 self.pending_subtitle_data = subtitle_data
+
+
+    #                 # # 🆕 순차 단일 단어 자막 시작
+    #                 # self.publish_single_word_subtitle(subtitle_data)
+                    
+    #                 msg = String()
+    #                 msg.data = json.dumps(subtitle_data, ensure_ascii=False)
+    #                 self.tts_subtitle_publisher.publish(msg)
+    #                 self.get_logger().info(f"📝 수정된 자막 데이터 퍼블리시: {len(corrected_timestamps)}개 단어")
+    #             else:
+    #                 self.get_logger().warning("⚠️ 자막 수정 실패 - 기본 자막 사용")
+    #                 self._publish_fallback_subtitle(cleaned_text)
+    #             publish_end = time.time()
+    #             publish_duration = publish_end - publish_start
+    #             self.get_logger().info(f"✅ 자막 퍼블리시 완료, 소요시간: {publish_duration:.2f}초")
+                
+    #             # 🆕 전체 소요시간 계산 및 로그
+    #             total_end_time = time.time()
+    #             total_duration = total_end_time - total_start_time
+                
+    #             self.get_logger().info("="*60)
+    #             self.get_logger().info("📊 TTS 전체 프로세스 시간 분석")
+    #             self.get_logger().info(f"  🎤 TTS API 호출:        {tts_api_duration:.2f}초 ({tts_api_duration/total_duration*100:.1f}%)")
+    #             self.get_logger().info(f"  🔄 WAV 변환:            {wav_convert_duration:.2f}초 ({wav_convert_duration/total_duration*100:.1f}%)")
+    #             self.get_logger().info(f"  📝 동적자막 생성:        {getattr(self, '_last_stt_duration', 0):.2f}초 ({getattr(self, '_last_stt_duration', 0)/total_duration*100:.1f}%)")
+    #             self.get_logger().info(f"  🔤 형태소 분석:          {getattr(self, '_last_morphology_duration', 0):.3f}초 ({getattr(self, '_last_morphology_duration', 0)/total_duration*100:.1f}%)")  # 🆕 추가
+    #             self.get_logger().info(f"  ⚙️ 자막 처리:           {subtitle_process_duration:.2f}초 ({subtitle_process_duration/total_duration*100:.1f}%)")
+    #             self.get_logger().info(f"  📡 퍼블리시:            {publish_duration:.2f}초 ({publish_duration/total_duration*100:.1f}%)")
+    #             self.get_logger().info(f"  🏁 전체 소요시간:        {total_duration:.2f}초")
+    #             self.get_logger().info("="*60)
+
+
+                    
+    #         else:
+    #             self.get_logger().error(f"🔴 TTS 오류: {response.status_code}")
+    #             self.get_logger().error(f"응답: {response.text}")
+    #     except Exception as e:
+    #         self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
+
+
+
+
+
+
+
+
+
+
     def text2speech(self, text):
         """
-        ElevenLabs TTS 호출 → reply.mp3 저장 → 원본 텍스트 기반 자막 생성
+        Naver Clova Voice API 호출 → reply.mp3 저장 → 원본 텍스트 기반 자막 생성
         """
 
         # 🆕 전체 소요시간 측정 시작
         total_start_time = time.time()
         self.get_logger().info("⏳ TTS 전체 프로세스 시작")
         
-
-
-        api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        # voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
-        voice_id = "1W00IGEmNmwmsDeYy7ag" #스폰지밥
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
+        # Naver Clova Voice API 설정
+        client_id = "fo0f88v3wl"
+        client_secret = "KUa8Lcp8JAVE2EK92G0dtyn8ywWKFTH2iKOhnoaB"
+        url = "https://naveropenapi.apigw.ntruss.com/tts-premium/v1/tts"
+        
         headers = {
-            "xi-api-key": api_key,
-            "Content-Type": "application/json; charset=utf-8",  # UTF-8 명시
-            "Accept": "audio/mpeg"
+            "X-NCP-APIGW-API-KEY-ID": client_id,
+            "X-NCP-APIGW-API-KEY": client_secret,
+            "Content-Type": "application/x-www-form-urlencoded"
         }
 
         # 🆕 텍스트 전처리
@@ -1209,46 +1389,22 @@ class Mp3Player(Node):
         # 🆕 디버깅 로그
         self.get_logger().info(f"🗣️ TTS 원본 텍스트: '{cleaned_text}'")
 
-        # data = {
-        #     "text": cleaned_text,
-        #     "model_id": "eleven_multilingual_v2",
-        #     "voice_settings": {
-        #         "stability": 0.5,
-        #         "similarity_boost": 0.75,
-        #         "style": 0.25,
-        #         "speed": 0.9
-        #     },
-        #     "apply_text_normalization": "on",
-        #     "output_format": "mp3_22050_32"
-        # }
-
+        # Naver Clova Voice 설정
         data = {
-            "text": cleaned_text,
-            # "model_id": "eleven_multilingual_v2",
-            "model_id": "eleven_flash_v2_5",
-            "voice_settings": {
-                "stability": 1.0,
-                "similarity_boost": 1.0,
-                # "style": 0.25,
-                "speed": 1.0            },
-            "apply_text_normalization": "off"
+            "speaker": "nsangdo",  # 음성 종류 (nara, clara, matt, shinji, meow, dinna 등)
+            "volume": "0",      # 볼륨 (-5 ~ 5)
+            "speed": "0",       # 속도 (-5 ~ 5)  
+            "pitch": "0",       # 음높이 (-5 ~ 5)
+            "format": "mp3",    # 출력 포맷 (mp3, wav, ogg)
+            "text": cleaned_text
         }
 
-
-
         try:
-
             # 🆕 TTS API 호출 시간 측정
             tts_api_start = time.time()
-            self.get_logger().info("⏳ ElevenLabs TTS API 호출 시작")
+            self.get_logger().info("⏳ Naver Clova Voice API 호출 시작")
 
-
-
-            response = requests.post(
-                url,
-                headers=headers,
-                data=json.dumps(data, ensure_ascii=False).encode('utf-8')
-            )
+            response = requests.post(url, headers=headers, data=data)
 
             tts_api_end = time.time()
             tts_api_duration = tts_api_end - tts_api_start
@@ -1279,6 +1435,7 @@ class Mp3Player(Node):
                 wav_convert_end = time.time()
                 wav_convert_duration = wav_convert_end - wav_convert_start
                 self.get_logger().info(f"✅ WAV 변환 완료, 소요시간: {wav_convert_duration:.2f}초")
+
 
                 
                 # 🆕 STT 타임스탬프 추출
@@ -1352,6 +1509,22 @@ class Mp3Player(Node):
                 self.get_logger().error(f"응답: {response.text}")
         except Exception as e:
             self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1778,7 +1951,7 @@ class Mp3Player(Node):
             self.publish_tts_status("tts_generating")
             
             # TTS 생성
-            self.text2speech("아~"+reply_text)
+            self.text2speech(reply_text)
             
             # TTS 준비 완료 신호
             self.publish_tts_status("tts_ready")
