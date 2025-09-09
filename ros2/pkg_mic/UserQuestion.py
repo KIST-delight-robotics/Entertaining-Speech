@@ -1,5 +1,4 @@
 
-
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -50,6 +49,7 @@ from openai import OpenAI
 
 import whisper_timestamped as whisper
 from difflib import SequenceMatcher
+from collections import deque
 
 
 
@@ -106,36 +106,102 @@ from difflib import SequenceMatcher
 # ──────────────────────────────────────────────────────────────────────────────
 # 🆕 시간 도메인 최대 소리크기 기반 원형 스펙트럼 처리
 # ──────────────────────────────────────────────────────────────────────────────
+# class VoiceCircularSpectrum:
+#     def __init__(self):
+#         self.volume_history = []
+#         self.history_size = 3  # 🔧 3프레임의 평균값 계산을 위해 수정
+        
+#     def calculate_volume(self, audio_data):
+#         """시간 도메인에서 최대 소리크기 계산 - 3프레임 평균값 반환"""
+#         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+#         if len(samples) == 0:
+#             return 0.0
+        
+#         # 🔑 현재 프레임의 Peak Amplitude (최대 절댓값) 계산
+#         peak_amplitude = np.max(np.abs(samples))
+        
+#         # 🆕 3프레임의 히스토리에 현재값 추가
+#         self.volume_history.append(peak_amplitude)
+#         if len(self.volume_history) > self.history_size:
+#             self.volume_history.pop(0)
+        
+#         # 🆕 현재 포함 3프레임의 평균값 계산
+#         if len(self.volume_history) > 0:
+#             average_volume = np.mean(self.volume_history)
+#         else:
+#             average_volume = 0.0
+        
+#         return float(average_volume)
+    
+#     def reset(self):
+#         """새 세션 시작시 초기화"""
+#         self.volume_history = []
+
+
+
+
+
+#0908 1651 demo 수정 (박사님버전)
 class VoiceCircularSpectrum:
-    def __init__(self):
-        self.volume_history = []
-        self.history_size = 3  # 🔧 3프레임의 평균값 계산을 위해 수정
+    def __init__(self, sample_rate=16000):
+        self.sample_rate = sample_rate
+        self.samples_per_ms = sample_rate // 1000  # 16 samples per ms
+        
+        # 1ms 단위 샘플 버퍼 (최대 5ms 유지)
+        self.sample_buffer = deque(maxlen=5 * self.samples_per_ms)  # 80 samples max
+        
+        # max_now 값들 저장 (최대 3개)
+        self.max_now_history = deque(maxlen=10)
+        
+        # 1ms 청크 누적용 임시 버퍼
+        self.temp_chunk = []
         
     def calculate_volume(self, audio_data):
-        """시간 도메인에서 최대 소리크기 계산 - 3프레임 평균값 반환"""
+        """
+        1ms 단위로 처리하여 최근 5ms 최대값의 3개 이동평균 계산
+        """
         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
         if len(samples) == 0:
             return 0.0
         
-        # 🔑 현재 프레임의 Peak Amplitude (최대 절댓값) 계산
-        peak_amplitude = np.max(np.abs(samples))
+        # 현재 청크를 임시 버퍼에 추가
+        self.temp_chunk.extend(samples)
         
-        # 🆕 3프레임의 히스토리에 현재값 추가
-        self.volume_history.append(peak_amplitude)
-        if len(self.volume_history) > self.history_size:
-            self.volume_history.pop(0)
+        output_volume = None
         
-        # 🆕 현재 포함 3프레임의 평균값 계산
-        if len(self.volume_history) > 0:
-            average_volume = np.mean(self.volume_history)
-        else:
-            average_volume = 0.0
+        # 1ms씩 처리 (16 samples씩)
+        while len(self.temp_chunk) >= self.samples_per_ms:
+            # 1ms 분량 추출
+            ms_samples = self.temp_chunk[:self.samples_per_ms]
+            self.temp_chunk = self.temp_chunk[self.samples_per_ms:]
+            
+            # 1ms 샘플을 버퍼에 추가
+            self.sample_buffer.extend(ms_samples)
+            
+            # 최근 5ms(80 samples) 중 최대값 계산
+            if len(self.sample_buffer) > 0:
+                recent_samples = list(self.sample_buffer)
+                max_now = np.max(np.abs(recent_samples))
+                
+                # max_now 히스토리에 추가
+                self.max_now_history.append(max_now)
+                
+                # 최근 3개 max_now의 moving average 계산
+                if len(self.max_now_history) > 0:
+                    output_volume = np.mean(self.max_now_history)
         
-        return float(average_volume)
+        # 처리된 볼륨이 있으면 반환, 없으면 이전값 유지
+        return float(output_volume) if output_volume is not None else self.get_last_volume()
+    
+    def get_last_volume(self):
+        """마지막 계산된 볼륨 반환"""
+        return float(np.mean(self.max_now_history)) if len(self.max_now_history) > 0 else 0.0
     
     def reset(self):
         """새 세션 시작시 초기화"""
-        self.volume_history = []
+        self.sample_buffer.clear()
+        self.max_now_history.clear()
+        self.temp_chunk.clear()
 
 
 
@@ -279,7 +345,7 @@ class UserQuestion(Node):
         # 🆕 실시간 음성 원형 스펙트럼 퍼블리셔 (기존 realtime_words_pub 대신)
         self.voice_spectrum_pub = self.create_publisher(String, "/voice_spectrum", 10)
         # 🆕 실시간 음성 스펙트럼 처리 추가 (기존 word_processor 대신)
-        self.voice_spectrum = VoiceCircularSpectrum()
+        self.voice_spectrum = VoiceCircularSpectrum(sample_rate=16000)
 
 
         # 🆕 질문 확인 TTS 파일 저장 경로 추가
@@ -732,6 +798,7 @@ class UserQuestion(Node):
 
                 # 🆕 타임스탬프 추출을 위한 WAV 변환
                 sound = AudioSegment.from_file(self.question_confirm_path, format="mp3")
+
                 wav_path = "/tmp/question_confirm_for_stt.wav"
                 sound = sound.set_frame_rate(16000).set_channels(1)
                 sound.export(wav_path, format="wav")
@@ -805,10 +872,22 @@ class UserQuestion(Node):
                 
 
 
+                # ✅ Mp3Player와 동일한 정규화 적용
+                sound = AudioSegment.from_file(audio_path, format="mp3")
+                
+                # ✅ -14.0 dBFS로 정규화 (Mp3Player와 동일)
+                target_dBFS = -14.0
+                change_in_dBFS = target_dBFS - sound.dBFS
+                sound = sound.apply_gain(change_in_dBFS)
+                
+                # ✅ 정규화된 오디오를 임시 파일로 저장
+                temp_path = "/tmp/question_confirm_normalized.mp3"
+                sound.export(temp_path, format="mp3")
+
                 
                 # pygame으로 MP3 재생
                 pygame.mixer.init()
-                pygame.mixer.music.load(audio_path)
+                pygame.mixer.music.load(temp_path)
                 pygame.mixer.music.play()
                 
                 # 재생 완료까지 대기
@@ -1625,7 +1704,7 @@ class UserQuestion(Node):
             confirmation_text = self.generate_question_confirmation(question_text)
             
             # 5. ElevenLabs TTS로 음성 생성
-            if self.text2speech_question_confirm(confirmation_text):
+            if self.text2speech_question_confirm("아~"+ confirmation_text):
                 # 6. TTS 재생 (완료 시 자동으로 상태 퍼블리시됨)
                 self.play_question_confirm_tts(self.question_confirm_path)
             else:
