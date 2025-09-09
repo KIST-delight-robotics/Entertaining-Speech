@@ -1,4 +1,5 @@
 
+
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -141,67 +142,125 @@ from collections import deque
 
 
 
-#0908 1651 demo 수정 (박사님버전)
+# #0908 1651 demo 수정 (박사님버전)
+# class VoiceCircularSpectrum:
+#     def __init__(self, sample_rate=16000):
+#         self.sample_rate = sample_rate
+#         self.samples_per_ms = sample_rate // 1000  # 16 samples per ms
+        
+#         # 1ms 단위 샘플 버퍼 (최대 5ms 유지)
+#         self.sample_buffer = deque(maxlen=5 * self.samples_per_ms)  # 80 samples max
+        
+#         # max_now 값들 저장 (최대 3개)
+#         self.max_now_history = deque(maxlen=10)
+        
+#         # 1ms 청크 누적용 임시 버퍼
+#         self.temp_chunk = []
+        
+#     def calculate_volume(self, audio_data):
+#         """
+#         1ms 단위로 처리하여 최근 5ms 최대값의 3개 이동평균 계산
+#         """
+#         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+#         if len(samples) == 0:
+#             return 0.0
+        
+#         # 현재 청크를 임시 버퍼에 추가
+#         self.temp_chunk.extend(samples)
+        
+#         output_volume = None
+        
+#         # 1ms씩 처리 (16 samples씩)
+#         while len(self.temp_chunk) >= self.samples_per_ms:
+#             # 1ms 분량 추출
+#             ms_samples = self.temp_chunk[:self.samples_per_ms]
+#             self.temp_chunk = self.temp_chunk[self.samples_per_ms:]
+            
+#             # 1ms 샘플을 버퍼에 추가
+#             self.sample_buffer.extend(ms_samples)
+            
+#             # 최근 5ms(80 samples) 중 최대값 계산
+#             if len(self.sample_buffer) > 0:
+#                 recent_samples = list(self.sample_buffer)
+#                 max_now = np.max(np.abs(recent_samples))
+                
+#                 # max_now 히스토리에 추가
+#                 self.max_now_history.append(max_now)
+                
+#                 # 최근 3개 max_now의 moving average 계산
+#                 if len(self.max_now_history) > 0:
+#                     output_volume = np.mean(self.max_now_history)
+        
+#         # 처리된 볼륨이 있으면 반환, 없으면 이전값 유지
+#         return float(output_volume) if output_volume is not None else self.get_last_volume()
+    
+#     def get_last_volume(self):
+#         """마지막 계산된 볼륨 반환"""
+#         return float(np.mean(self.max_now_history)) if len(self.max_now_history) > 0 else 0.0
+    
+#     def reset(self):
+#         """새 세션 시작시 초기화"""
+#         self.sample_buffer.clear()
+#         self.max_now_history.clear()
+#         self.temp_chunk.clear()
+
+
+#0909 수정버전(3개의 윈도우사이즈 최대값 평균)
 class VoiceCircularSpectrum:
     def __init__(self, sample_rate=16000):
-        self.sample_rate = sample_rate
+        self.sample_rate = sample_rate 
         self.samples_per_ms = sample_rate // 1000  # 16 samples per ms
+        monitor_f = 40
+        self.samples_per_buffer = sample_rate//monitor_f  # 64ms = 1024 samples
         
-        # 1ms 단위 샘플 버퍼 (최대 5ms 유지)
-        self.sample_buffer = deque(maxlen=5 * self.samples_per_ms)  # 80 samples max
+        # 현재 64ms 버퍼에 샘플 누적
+        self.current_buffer_samples = []
         
-        # max_now 값들 저장 (최대 3개)
-        self.max_now_history = deque(maxlen=10)
-        
-        # 1ms 청크 누적용 임시 버퍼
-        self.temp_chunk = []
+        # 각 64ms 구간의 마지막 5ms 최대값 저장 (슬라이딩 윈도우)
+        self.last_5ms_max_values = deque(maxlen=3)  # 최근 3개 값 유지
         
     def calculate_volume(self, audio_data):
         """
-        1ms 단위로 처리하여 최근 5ms 최대값의 3개 이동평균 계산
+        64ms마다 호출되어 각 구간의 마지막 5ms 최대값을 구하고
+        최근 3개 값의 이동평균 반환
         """
         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
         if len(samples) == 0:
-            return 0.0
+            return self.get_current_average()
         
-        # 현재 청크를 임시 버퍼에 추가
-        self.temp_chunk.extend(samples)
+        # 현재 64ms 버퍼에 샘플 추가
+        self.current_buffer_samples.extend(samples)
         
-        output_volume = None
-        
-        # 1ms씩 처리 (16 samples씩)
-        while len(self.temp_chunk) >= self.samples_per_ms:
-            # 1ms 분량 추출
-            ms_samples = self.temp_chunk[:self.samples_per_ms]
-            self.temp_chunk = self.temp_chunk[self.samples_per_ms:]
+        # 64ms 분량(1024 samples)이 모이면 처리
+        if len(self.current_buffer_samples) >= self.samples_per_buffer:
+            # 64ms 버퍼에서 마지막 5ms(80 samples) 추출
+            last_5ms_samples = self.current_buffer_samples[-10 * self.samples_per_ms:]
             
-            # 1ms 샘플을 버퍼에 추가
-            self.sample_buffer.extend(ms_samples)
+            # 마지막 5ms에서 최대값 계산
+            max_value = np.max(np.abs(last_5ms_samples))
             
-            # 최근 5ms(80 samples) 중 최대값 계산
-            if len(self.sample_buffer) > 0:
-                recent_samples = list(self.sample_buffer)
-                max_now = np.max(np.abs(recent_samples))
-                
-                # max_now 히스토리에 추가
-                self.max_now_history.append(max_now)
-                
-                # 최근 3개 max_now의 moving average 계산
-                if len(self.max_now_history) > 0:
-                    output_volume = np.mean(self.max_now_history)
+            # 슬라이딩 윈도우에 추가 (자동으로 3개 유지)
+            self.last_5ms_max_values.append(max_value)
+            
+            # 버퍼 초기화 (다음 64ms 준비)
+            self.current_buffer_samples = []
+            
+            # 현재까지의 평균 반환
+            return self.get_current_average()
         
-        # 처리된 볼륨이 있으면 반환, 없으면 이전값 유지
-        return float(output_volume) if output_volume is not None else self.get_last_volume()
+        # 아직 64ms가 안 모였으면 이전 평균값 유지
+        return self.get_current_average()
     
-    def get_last_volume(self):
-        """마지막 계산된 볼륨 반환"""
-        return float(np.mean(self.max_now_history)) if len(self.max_now_history) > 0 else 0.0
-    
+    def get_current_average(self):
+        """현재 저장된 최대값들의 평균 반환"""
+        if len(self.last_5ms_max_values) > 0:
+            return float(np.mean(self.last_5ms_max_values))
+        return 0.0
+        
     def reset(self):
         """새 세션 시작시 초기화"""
-        self.sample_buffer.clear()
-        self.max_now_history.clear()
-        self.temp_chunk.clear()
+        self.current_buffer_samples.clear()
+        self.last_5ms_max_values.clear()
 
 
 
@@ -725,76 +784,144 @@ class UserQuestion(Node):
 
 
 
-    # 🔧 수정된 Mp3Recommender 완료 처리
-    def mp3_recommend_done_callback(self, msg):
-        """Mp3Recommender 완료 처리 - TTS 재생 중이면 대기"""
-        if msg.data == "completed":
-            if self.question_confirm_playing:
-                self.get_logger().info("🎵 TTS 재생 중 - mp4 데이터 대기 저장")
-                self.pending_mp4_data = msg.data  # 실제로는 mp4 데이터가 별도 토픽으로 올 것
-            else:
-                self.get_logger().info("📬 Mp3Recommender 완료 - 즉시 처리 가능")
-                # 즉시 처리 (기존 로직)
+    # # 🔧 수정된 Mp3Recommender 완료 처리
+    # def mp3_recommend_done_callback(self, msg):
+    #     """Mp3Recommender 완료 처리 - TTS 재생 중이면 대기"""
+    #     if msg.data == "completed":
+    #         if self.question_confirm_playing:
+    #             self.get_logger().info("🎵 TTS 재생 중 - mp4 데이터 대기 저장")
+    #             self.pending_mp4_data = msg.data  # 실제로는 mp4 데이터가 별도 토픽으로 올 것
+    #         else:
+    #             self.get_logger().info("📬 Mp3Recommender 완료 - 즉시 처리 가능")
+    #             # 즉시 처리 (기존 로직)
 
 
 
 
 
-    # 🆕 ElevenLabs TTS 함수 추가
+    # # 🆕 ElevenLabs TTS 함수 추가
+    # def text2speech_question_confirm(self, text):
+    #     """ElevenLabs TTS 호출하여 질문 확인 음성 생성"""
+    #     api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
+    #     # voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
+    #     voice_id = "1W00IGEmNmwmsDeYy7ag" #스폰지밥
+    #     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+
+    #     headers = {
+    #         "xi-api-key": api_key,
+    #         "Content-Type": "application/json",
+    #         "Accept": "audio/mpeg"
+    #     }
+
+    #     # data = {
+    #     #     "text": text,
+    #     #     # "model_id": "eleven_multilingual_v2",
+    #     #     "model_id": "eleven_flash_v2_5",
+    #     #     "voice_settings": {
+    #     #         "stability": 0.5,
+    #     #         "similarity_boost": 0.75,
+    #     #         # "style": 0.25,
+    #     #         "speed": 0.8
+    #     #     },
+    #     #     "apply_text_normalization": "off"
+    #     # }
+
+    #     data = {
+    #         "text": text,
+    #         # "model_id": "eleven_multilingual_v2",
+    #         "model_id": "eleven_flash_v2_5",
+    #         "voice_settings": {
+    #             "stability": 1.0,
+    #             "similarity_boost": 1.0,
+    #             # "style": 0.25,
+    #             "speed": 1.0
+    #         },
+    #         "apply_text_normalization": "off"
+    #     }
+
+
+
+    #     try:
+    #         start_time = time.time()
+    #         response = requests.post(url, headers=headers, json=data)
+            
+    #         if response.status_code == 200:
+    #             with open(self.question_confirm_path, "wb") as f:
+    #                 f.write(response.content)
+                
+    #             generation_time = time.time() - start_time    
+    #             self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 → {self.question_confirm_path}")
+    #             self.get_logger().info(f"⏱️ TTS 생성 시간: {generation_time:.3f}초")
+
+
+
+    #             # 🆕 타임스탬프 추출을 위한 WAV 변환
+    #             sound = AudioSegment.from_file(self.question_confirm_path, format="mp3")
+
+    #             wav_path = "/tmp/question_confirm_for_stt.wav"
+    #             sound = sound.set_frame_rate(16000).set_channels(1)
+    #             sound.export(wav_path, format="wav")
+                
+    #             # 🆕 타임스탬프 추출
+    #             stt_timestamps = self.extract_question_confirm_timestamps(wav_path, text)
+                
+    #             # 🆕 원본 텍스트와 병합
+    #             corrected_timestamps = self.merge_original_with_confirm_timestamps(text, stt_timestamps)
+                
+    #             # 🆕 자막 데이터 저장 (재생 시 사용)
+    #             self.question_confirm_subtitle_data = {
+    #                 "original_text": text,
+    #                 "words": corrected_timestamps,
+    #                 "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
+    #             }
+
+    #             return True
+    #         else:
+    #             self.get_logger().error(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
+    #             return False
+                
+    #     except Exception as e:
+    #         self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
+    #         return False
+
+
+
+
+
     def text2speech_question_confirm(self, text):
-        """ElevenLabs TTS 호출하여 질문 확인 음성 생성"""
-        api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-        # voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
-        voice_id = "1W00IGEmNmwmsDeYy7ag" #스폰지밥
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
+        """Naver Clova Voice API 호출하여 질문 확인 음성 생성"""
+        client_id = "fo0f88v3wl"
+        client_secret = "KUa8Lcp8JAVE2EK92G0dtyn8ywWKFTH2iKOhnoaB"
+        
+        url = "https://naveropenapi.apigw.ntruss.com/tts-premium/v1/tts"
+        
         headers = {
-            "xi-api-key": api_key,
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg"
+            "X-NCP-APIGW-API-KEY-ID": client_id,
+            "X-NCP-APIGW-API-KEY": client_secret,
+            "Content-Type": "application/x-www-form-urlencoded"
         }
-
-        # data = {
-        #     "text": text,
-        #     # "model_id": "eleven_multilingual_v2",
-        #     "model_id": "eleven_flash_v2_5",
-        #     "voice_settings": {
-        #         "stability": 0.5,
-        #         "similarity_boost": 0.75,
-        #         # "style": 0.25,
-        #         "speed": 0.8
-        #     },
-        #     "apply_text_normalization": "off"
-        # }
-
+        
+        # Naver Clova Voice 설정
         data = {
-            "text": text,
-            # "model_id": "eleven_multilingual_v2",
-            "model_id": "eleven_flash_v2_5",
-            "voice_settings": {
-                "stability": 1.0,
-                "similarity_boost": 1.0,
-                # "style": 0.25,
-                "speed": 1.0
-            },
-            "apply_text_normalization": "off"
+            "speaker": "nsangdo",  # 음성 종류 (nara, clara, matt, shinji, meow, dinna 등)
+            "volume": "0",      # 볼륨 (-5 ~ 5)
+            "speed": "0",       # 속도 (-5 ~ 5)  
+            "pitch": "0",       # 음높이 (-5 ~ 5)
+            "format": "mp3",    # 출력 포맷 (mp3, wav, ogg)
+            "text": text
         }
-
-
 
         try:
             start_time = time.time()
-            response = requests.post(url, headers=headers, json=data)
+            response = requests.post(url, headers=headers, data=data)
             
             if response.status_code == 200:
                 with open(self.question_confirm_path, "wb") as f:
                     f.write(response.content)
                 
                 generation_time = time.time() - start_time    
-                self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 → {self.question_confirm_path}")
+                self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 (Naver Clova) → {self.question_confirm_path}")
                 self.get_logger().info(f"⏱️ TTS 생성 시간: {generation_time:.3f}초")
-
-
 
                 # 🆕 타임스탬프 추출을 위한 WAV 변환
                 sound = AudioSegment.from_file(self.question_confirm_path, format="mp3")
@@ -816,22 +943,19 @@ class UserQuestion(Node):
                     "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
                 }
 
-
-
-
-
-
-
-
-
                 return True
             else:
-                self.get_logger().error(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
+                self.get_logger().error(f"🔴 Naver Clova TTS 오류: {response.status_code}")
+                self.get_logger().error(f"오류 내용: {response.text}")
                 return False
                 
         except Exception as e:
-            self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
+            self.get_logger().error(f"🔴 Naver Clova TTS 호출 실패: {e}")
             return False
+
+
+
+
 
 
 
@@ -880,21 +1004,21 @@ class UserQuestion(Node):
                 change_in_dBFS = target_dBFS - sound.dBFS
                 sound = sound.apply_gain(change_in_dBFS)
                 
-                # ✅ 정규화된 오디오를 임시 파일로 저장
-                temp_path = "/tmp/question_confirm_normalized.mp3"
-                sound.export(temp_path, format="mp3")
 
+
+                # ✅ 정규화된 오디오를 WAV로 변환하여 임시 파일로 저장
+                temp_wav = "/tmp/question_confirm_normalized.wav"
+                sound.export(temp_wav, format="wav")
+
+                self.get_logger().info("🎵 질문 확인 TTS aplay 재생 시작")
                 
-                # pygame으로 MP3 재생
-                pygame.mixer.init()
-                pygame.mixer.music.load(temp_path)
-                pygame.mixer.music.play()
+                # aplay로 WAV 재생 (Mp3Player.py와 동일한 방식)
+                os.system(f"aplay {temp_wav}")
                 
-                # 재생 완료까지 대기
-                while pygame.mixer.music.get_busy():
-                    pygame.time.Clock().tick(10)
-                
-                self.get_logger().info("🎵 질문 확인 TTS 재생 완료")
+                self.get_logger().info("🎵 질문 확인 TTS aplay 재생 완료")
+
+
+
                 
             except Exception as e:
                 self.get_logger().error(f"❌ TTS 재생 실패: {e}")
@@ -1640,7 +1764,8 @@ class UserQuestion(Node):
         effects_dir = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/_tts_trigger"
 
         # 디렉토리에서 MP3 파일 목록 가져오기
-        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+        # mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".mp3")]
+        mp3_files = [f for f in os.listdir(effects_dir) if f.endswith(".wav")]
 
         try:
             self.ignore_stt = True  # 🔇 STT 입력 무시 시작
@@ -1704,7 +1829,7 @@ class UserQuestion(Node):
             confirmation_text = self.generate_question_confirmation(question_text)
             
             # 5. ElevenLabs TTS로 음성 생성
-            if self.text2speech_question_confirm("아~"+ confirmation_text):
+            if self.text2speech_question_confirm(confirmation_text):
                 # 6. TTS 재생 (완료 시 자동으로 상태 퍼블리시됨)
                 self.play_question_confirm_tts(self.question_confirm_path)
             else:
