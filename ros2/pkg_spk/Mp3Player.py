@@ -1230,8 +1230,7 @@ class Mp3Player(Node):
                 "stability": 1.0,
                 "similarity_boost": 1.0,
                 # "style": 0.25,
-                "speed": 1.0
-            },
+                "speed": 1.0            },
             "apply_text_normalization": "off"
         }
 
@@ -1779,7 +1778,7 @@ class Mp3Player(Node):
             self.publish_tts_status("tts_generating")
             
             # TTS 생성
-            self.text2speech(reply_text)
+            self.text2speech("아~"+reply_text)
             
             # TTS 준비 완료 신호
             self.publish_tts_status("tts_ready")
