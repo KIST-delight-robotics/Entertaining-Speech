@@ -962,7 +962,7 @@ useEffect(() => {
         // 🚀 더 민감한 스케일링
 
       
-        const scaledVolume = data.volume * 0.0003; // 0.00015 → 0.0003
+        const scaledVolume = data.volume * 0.00003; // 0.00015 → 0.0003
 
         
         const clampedVolume = Math.min(1.0, scaledVolume);
@@ -1069,8 +1069,20 @@ const renderVoiceSpectrum = () => {
     return null;
   }
   // 🚀 더 역동적인 크기 변화
-  const minRadius = 60;   
-  const maxRadius = 600;  
+  const minRadius = 30;   
+
+  const screenWidth = window.innerWidth;
+  const screenHeight = window.innerHeight;
+  
+  // 🔑 화면 크기를 벗어나지 않도록 최대 반지름 제한
+  // 화면의 작은 쪽 기준으로 40% 정도를 최대 반지름으로 설정
+  const maxRadiusLimit = Math.min(screenWidth, screenHeight) * 0.4;
+  const maxRadius = Math.min(600, maxRadiusLimit); // 기존 600과 화면 제한 중 작은 값
+  
+
+
+
+  // const maxRadius = 600;  
   const radius = minRadius + (voiceVolume * (maxRadius - minRadius));
   
   return (
