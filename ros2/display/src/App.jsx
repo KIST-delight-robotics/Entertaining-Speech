@@ -181,7 +181,7 @@ const [showQuestionConfirmSubtitle, setShowQuestionConfirmSubtitle] = useState(f
       flexDirection: 'column',
       justifyContent: 'center',
       alignItems: 'center',
-      backgroundColor: 'rgba(26, 26, 26, 0.95)'
+      backgroundColor: 'rgba(0, 0, 0, 0.95)'
     }}>
       <div style={{
         maxWidth: '90vw',
@@ -225,7 +225,8 @@ const [showQuestionConfirmSubtitle, setShowQuestionConfirmSubtitle] = useState(f
 const [responsePreparation, setResponsePreparation] = useState({
   show: false,
   question: '',
-  status: 'preparing' // 'preparing', 'ready'
+  status: 'preparing', // 'preparing', 'ready'
+  startTime: null // 🆕 표시 시작 시간 추가
 });
 
 // 🆕 통합 응답 준비 화면 구독 추가  
@@ -245,13 +246,15 @@ useEffect(() => {
         setResponsePreparation({
           show: true,
           question: data.question,
-          status: 'preparing'
+          status: 'preparing',
+          startTime: Date.now() // 🆕 표시 시작 시간 기록
         });
       } else if (data.action === 'hide') {
         setResponsePreparation({
           show: false,
           question: '',
-          status: 'preparing'
+          status: 'preparing',
+          startTime: null // 🆕 시작 시간 초기화
         });
       }
     } catch (e) {
@@ -264,9 +267,96 @@ useEffect(() => {
   };
 }, []);
 
-// 🆕 통합 응답 준비 화면 렌더링 함수
+// // 🆕 통합 응답 준비 화면 렌더링 함수
+// const renderResponsePreparation = () => {
+//   if (!responsePreparation.show || !responsePreparation.question || showQuestionConfirmSubtitle || questionConfirmStatus === 'playing') {
+//     return null;
+//   }
+
+//   return (
+//     <div style={{
+//       position: 'absolute',
+//       top: '0',
+//       left: '0',
+//       width: '100vw',
+//       height: '100vh',
+//       zIndex: 25,
+//       display: 'flex',
+//       justifyContent: 'center',
+//       alignItems: 'center',
+//       backgroundColor: 'rgba(26, 26, 26, 0.95)'
+//     }}>
+//       <div style={{
+//         maxWidth: '80vw',
+//         textAlign: 'center',
+//         padding: '40px 20px',
+//         color: '#fff'
+//       }}>
+//         {/* 질문 표시 */}
+//         <div style={{
+//           // fontSize: '2.2rem',
+//           fontSize: '4.2rem',
+//           fontWeight: '600',
+//           marginBottom: '30px',
+//           color: '#FFD700',
+//           lineHeight: '1.4'
+//         }}>
+//           "{responsePreparation.question}"
+//         </div>
+        
+//         {/* 답변 준비 메시지 */}
+//         <div style={{
+//           // fontSize: '1.8rem',
+//           fontSize: '3.8rem',
+//           fontWeight: '500',
+//           color: '#FFFFFF',
+//           animation: 'pulse 2s infinite'
+//         }}>
+//           에 대해 생각중이야. 
+//         </div>
+        
+//         {/* 로딩 인디케이터 */}
+//         <div style={{
+//           marginTop: '30px',
+//           display: 'flex',
+//           justifyContent: 'center',
+//           gap: '8px'
+//         }}>
+//           {[0, 1, 2].map(i => (
+//             <div key={i} style={{
+//               width: '12px',
+//               height: '12px',
+//               borderRadius: '50%',
+//               backgroundColor: '#FFD700',
+//               animation: `bounce 1.5s infinite ${i * 0.2}s`
+//             }} />
+//           ))}
+//         </div>
+//       </div>
+      
+//       <style>
+//         {`
+//           @keyframes pulse {
+//             0%, 100% { opacity: 1; }
+//             50% { opacity: 0.7; }
+//           }
+          
+//           @keyframes bounce {
+//             0%, 80%, 100% { transform: translateY(0); }
+//             40% { transform: translateY(-10px); }
+//           }
+//         `}
+//       </style>
+//     </div>
+//   );
+// };
+
+
+
+
+// 🆕 개선된 통합 응답 준비 화면 렌더링 함수 (텍스트 없애고 대기중 도형만 렌더링)
 const renderResponsePreparation = () => {
-  if (!responsePreparation.show || !responsePreparation.question || showQuestionConfirmSubtitle || questionConfirmStatus === 'playing') {
+  if (!responsePreparation.show || showQuestionConfirmSubtitle || questionConfirmStatus === 'playing') {
     return null;
   }
 
@@ -281,75 +371,37 @@ const renderResponsePreparation = () => {
       display: 'flex',
       justifyContent: 'center',
       alignItems: 'center',
-      backgroundColor: 'rgba(26, 26, 26, 0.95)'
+      backgroundColor: 'rgba(0, 0, 0, 1)'
     }}>
+      {/* 크게 확대된 로딩 인디케이터 */}
       <div style={{
-        maxWidth: '80vw',
-        textAlign: 'center',
-        padding: '40px 20px',
-        color: '#fff'
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: '24px' // 기존 8px에서 24px로 확대
       }}>
-        {/* 질문 표시 */}
-        <div style={{
-          // fontSize: '2.2rem',
-          fontSize: '4.2rem',
-          fontWeight: '600',
-          marginBottom: '30px',
-          color: '#FFD700',
-          lineHeight: '1.4'
-        }}>
-          "{responsePreparation.question}"
-        </div>
-        
-        {/* 답변 준비 메시지 */}
-        <div style={{
-          // fontSize: '1.8rem',
-          fontSize: '3.8rem',
-          fontWeight: '500',
-          color: '#FFFFFF',
-          animation: 'pulse 2s infinite'
-        }}>
-          에 대해 생각중이야. 
-        </div>
-        
-        {/* 로딩 인디케이터 */}
-        <div style={{
-          marginTop: '30px',
-          display: 'flex',
-          justifyContent: 'center',
-          gap: '8px'
-        }}>
-          {[0, 1, 2].map(i => (
-            <div key={i} style={{
-              width: '12px',
-              height: '12px',
-              borderRadius: '50%',
-              backgroundColor: '#FFD700',
-              animation: `bounce 1.5s infinite ${i * 0.2}s`
-            }} />
-          ))}
-        </div>
+        {[0, 1, 2].map(i => (
+          <div key={i} style={{
+            width: '80px',        // 기존 12px에서 40px로 확대
+            height: '80px',       // 기존 12px에서 40px로 확대
+            borderRadius: '50%',
+            backgroundColor: '#FFD700',
+            animation: `bounce 1.5s infinite ${i * 0.2}s`
+          }} />
+        ))}
       </div>
       
       <style>
         {`
-          @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.7; }
-          }
-          
           @keyframes bounce {
             0%, 80%, 100% { transform: translateY(0); }
-            40% { transform: translateY(-10px); }
+            40% { transform: translateY(-20px); }
           }
         `}
       </style>
     </div>
   );
 };
-
-
-
 
 
 
@@ -415,7 +467,7 @@ const renderSingleWordSubtitle = () => {
       flexDirection: 'column',
       justifyContent: 'center',
       alignItems: 'center',
-      backgroundColor: 'rgba(26, 26, 26, 0.95)'
+      backgroundColor: 'rgba(0, 0, 0, 0.95)'
     }}>
       <div style={{
         maxWidth: '90vw',
@@ -1260,7 +1312,82 @@ const renderVoiceSpectrum = () => {
 
 
 
-// TTS 상태 변화 감지 및 처리 (수정된 버전)
+// // TTS 상태 변화 감지 및 처리 (수정된 버전)
+// useEffect(() => {
+//   console.log('🔄 TTS 상태 변화 감지:', {
+//     ttsStatus,
+//     videoVisible,
+//     responsePreparation: responsePreparation.show,
+//     currentReply,
+//     isTtsPlaying
+//   });
+
+//   if (ttsStatus === 'tts_ready') {
+//     if (currentVideo && !videoVisible) {
+//       // 비디오가 있는 경우: 비디오 재생 시작
+//       console.log('🎬 TTS 준비 완료 - 비디오 재생 시작');
+//       setVideoVisible(true);
+//       setResponsePreparation(prev => ({ ...prev, show: false }));
+//       setIsWaitingAudioMode(false);
+//       setIsMp3WaitingMode(false);
+      
+//     } else if (!currentVideo && responsePreparation.show) {
+//       // 비디오가 없는 경우: TTS 재생 시작
+//       console.log('🗣️ TTS 준비 완료 - TTS 전용 재생 시작');
+      
+//       if (!currentReply || currentReply.trim() === '') {
+//         console.warn('⚠️ currentReply가 비어있음 - TTS 재생 중단');
+//         return;
+//       }
+
+//       // 🔧 수정: 기존 상태들 대신 responsePreparation만 처리
+//       setResponsePreparation(prev => ({ ...prev, show: false }));
+//       setIsTtsPlaying(true);
+ 
+//       requestTtsPlay();
+//     }
+
+    
+
+
+//   } else if (ttsStatus === 'tts_done') {
+//     console.log('🗣️ TTS 재생 완료 - 초기화');
+    
+//     // ✅ TTS 관련 상태만 초기화
+//   setIsTtsPlaying(false);
+//   setTtsVolume(0);
+//   setCurrentReply('');
+//   setVideoVisible(false);
+  
+//   // ✅ 응답 준비 화면 숨김 추가
+//   setResponsePreparation({
+//     show: false,
+//     question: '',
+//     status: 'preparing'
+//   });
+  
+//   // 🆕 단일 단어 자막 상태 초기화
+//   setSingleWordSubtitle(null);
+//   setShowSingleWord(false);
+    
+//     // ✅ 새 질문을 위한 초기화
+//     setCanShowSpectrum(false);
+//     setMusicPlaying(false);
+//     setIsWaitingAudioMode(false);
+//     setIsMp3WaitingMode(false);
+//     setIsTransitioning(false);
+//     setVoiceVolume(0);
+//     setIsVoiceActive(false);
+//     setIsDirectionFixed(false);
+//     setFixedDirection(null);
+    
+//     console.log('✅ TTS 완료 후 상태 초기화');
+//   }
+// }, [ttsStatus, videoVisible, responsePreparation.show, currentReply, currentVideo, isTtsPlaying]);
+
+
+
+// TTS 상태 변화 감지 및 처리 (최소 2초 대기 로직 추가)
 useEffect(() => {
   console.log('🔄 TTS 상태 변화 감지:', {
     ttsStatus,
@@ -1271,51 +1398,77 @@ useEffect(() => {
   });
 
   if (ttsStatus === 'tts_ready') {
-    if (currentVideo && !videoVisible) {
-      // 비디오가 있는 경우: 비디오 재생 시작
-      console.log('🎬 TTS 준비 완료 - 비디오 재생 시작');
-      setVideoVisible(true);
-      setResponsePreparation(prev => ({ ...prev, show: false }));
-      setIsWaitingAudioMode(false);
-      setIsMp3WaitingMode(false);
-      
-    } else if (!currentVideo && responsePreparation.show) {
-      // 비디오가 없는 경우: TTS 재생 시작
-      console.log('🗣️ TTS 준비 완료 - TTS 전용 재생 시작');
-      
-      if (!currentReply || currentReply.trim() === '') {
-        console.warn('⚠️ currentReply가 비어있음 - TTS 재생 중단');
-        return;
+    // 🆕 응답 준비 화면 최소 2초 표시 로직
+    const handleTtsReady = () => {
+      if (currentVideo && !videoVisible) {
+        // 비디오가 있는 경우: 비디오 재생 시작
+        console.log('🎬 TTS 준비 완료 - 비디오 재생 시작');
+        setVideoVisible(true);
+        setResponsePreparation(prev => ({ ...prev, show: false }));
+        setIsWaitingAudioMode(false);
+        setIsMp3WaitingMode(false);
+        
+      } else if (!currentVideo && responsePreparation.show) {
+        // 비디오가 없는 경우: TTS 재생 시작
+        console.log('🗣️ TTS 준비 완료 - TTS 전용 재생 시작');
+        
+        if (!currentReply || currentReply.trim() === '') {
+          console.warn('⚠️ currentReply가 비어있음 - TTS 재생 중단');
+          return;
+        }
+
+        // 🔧 수정: 기존 상태들 대신 responsePreparation만 처리
+        setResponsePreparation(prev => ({ ...prev, show: false }));
+        setIsTtsPlaying(true);
+   
+        requestTtsPlay();
       }
+    };
 
-      // 🔧 수정: 기존 상태들 대신 responsePreparation만 처리
-      setResponsePreparation(prev => ({ ...prev, show: false }));
-      setIsTtsPlaying(true);
- 
-      requestTtsPlay();
+    // 🆕 응답 준비 화면이 표시 중이고 startTime이 있는 경우 최소 2초 대기
+    if (responsePreparation.show && responsePreparation.startTime) {
+      const elapsedTime = Date.now() - responsePreparation.startTime;
+      const remainingTime = Math.max(0, 3000 - elapsedTime); // 2초 - 경과 시간
+      
+      console.log(`⏳ 응답 준비 화면 표시 경과 시간: ${elapsedTime}ms, 추가 대기: ${remainingTime}ms`);
+      
+      if (remainingTime > 0) {
+        // 2초가 안 되었으면 추가 대기 후 진행
+        setTimeout(() => {
+          console.log('✅ 최소 2초 대기 완료 - 다음 단계 진행');
+          handleTtsReady();
+        }, remainingTime);
+      } else {
+        // 이미 2초가 지났으면 즉시 진행
+        console.log('✅ 이미 2초 경과 - 즉시 다음 단계 진행');
+        handleTtsReady();
+      }
+    } else {
+      // 응답 준비 화면이 표시되지 않은 경우 기존 로직 유지
+      handleTtsReady();
     }
-
 
   } else if (ttsStatus === 'tts_done') {
     console.log('🗣️ TTS 재생 완료 - 초기화');
     
     // ✅ TTS 관련 상태만 초기화
-  setIsTtsPlaying(false);
-  setTtsVolume(0);
-  setCurrentReply('');
-  setVideoVisible(false);
-  
-  // ✅ 응답 준비 화면 숨김 추가
-  setResponsePreparation({
-    show: false,
-    question: '',
-    status: 'preparing'
-  });
-  
-  // 🆕 단일 단어 자막 상태 초기화
-  setSingleWordSubtitle(null);
-  setShowSingleWord(false);
+    setIsTtsPlaying(false);
+    setTtsVolume(0);
+    setCurrentReply('');
+    setVideoVisible(false);
     
+    // ✅ 응답 준비 화면 숨김 추가
+    setResponsePreparation({
+      show: false,
+      question: '',
+      status: 'preparing',
+      startTime: null // 🆕 시작 시간도 초기화
+    });
+    
+    // 🆕 단일 단어 자막 상태 초기화
+    setSingleWordSubtitle(null);
+    setShowSingleWord(false);
+      
     // ✅ 새 질문을 위한 초기화
     setCanShowSpectrum(false);
     setMusicPlaying(false);
@@ -1329,8 +1482,7 @@ useEffect(() => {
     
     console.log('✅ TTS 완료 후 상태 초기화');
   }
-}, [ttsStatus, videoVisible, responsePreparation.show, currentReply, currentVideo, isTtsPlaying]);
-
+}, [ttsStatus, videoVisible, responsePreparation.show, responsePreparation.startTime, currentReply, currentVideo, isTtsPlaying]);
 
 
 
@@ -1621,7 +1773,7 @@ useEffect(() => {
     canvas.height = height;
     
     // 마이크용 배경
-    ctx.fillStyle = '#222222';
+    ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, width, height);
     
     if (recommendStatus === 'searching' && !videoVisible) {
@@ -1976,9 +2128,9 @@ const getScreenTransform = () => {
       // backgroundColor: (recommendStatus === 'searching' && !imageVisible) ? '#fff' : 
       //            (musicPlaying || imageVisible) ? '#000' : '#222222',
       // 🆕 대기 모드 고려한 배경색 로직
-      backgroundColor: isTtsPlaying ? '#1a1a1a' :  (recommendStatus === 'searching' && !videoVisible && !isWaitingAudioMode) ? '#fff' : 
+      backgroundColor: isTtsPlaying ? '#000000' :  (recommendStatus === 'searching' && !videoVisible && !isWaitingAudioMode) ? '#fff' : 
       (isWaitingAudioMode) ? '#fff' :
-      (musicPlaying || videoVisible) ? '#000' : '#222222',
+      (musicPlaying || videoVisible) ? '#000' : '#000000',
 
       // 🆕 화면 변환 적용
       transform: getScreenTransform(),
