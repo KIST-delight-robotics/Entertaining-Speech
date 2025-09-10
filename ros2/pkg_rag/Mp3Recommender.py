@@ -1,4 +1,5 @@
 
+
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -37,9 +38,16 @@ class Mp3Recommender(Node):
 
          # PDF 파일 경로
         self.pdf_paths = [
-            "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/KIST_intro.pdf",
+            
+             "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/KIST_intro.pdf",
             # 새로 넣고 싶은 PDF가 생길 때마다 아래 한 줄씩만 추가
             "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/250520_기관 소개자료 PPT.pdf"
+
+            # "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/kist_map_final.pdf",
+            # # 새로 넣고 싶은 PDF가 생길 때마다 아래 한 줄씩만 추가
+            # "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/kist_intro_final.pdf"
+
+
         ]
         self.vector_store_id = None   # Vector Store ID 저장용
 
@@ -127,6 +135,7 @@ class Mp3Recommender(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to save log: {e}")
 
+
     def init_pdf_vector_store(self):
         """
         1. Vector Store 생성
@@ -161,10 +170,31 @@ class Mp3Recommender(Node):
             #         self.get_logger().info(f"✅ {pdf} → {batch.status}")
 
 
+            # # 한 파일씩 업로드 (poll_interval과 timeout 제거)
+            # for pdf in self.pdf_paths:
+            #     with open(pdf, "rb") as f:
+            #         self.get_logger().info(f"⬆️ '{os.path.basename(pdf)}' 업로드 시작")
+            #         batch = self.sync_client.vector_stores.file_batches.upload_and_poll(
+            #             vector_store_id=vs.id,
+            #             files=[f]  # 필수 매개변수만 사용
+            #         )
+            #         self.get_logger().info(f"✅ {pdf} → {batch.status}")
+
+
             # 3) Assistant에 file_search + vector_store 연결
-            self.sync_client.beta.assistants.update(
+            updated_assistant = self.sync_client.beta.assistants.update(
                 assistant_id=self.assistant_id,
-                tools=[{"type": "file_search"}],
+                tools=[{"type": "file_search",
+                "file_search": {
+            "max_num_results": 10,
+            "ranking_options": {
+                "score_threshold": 0.0,  # 기본값보다 낮게 설정
+                "ranker": "default_2024_08_21"
+            }
+        }
+                
+                
+                }],
                 tool_resources={"file_search": {"vector_store_ids": [vs.id]}},
                 instructions=(
                     "You are Dangdang, a snarky robot dog guide at KIST. "
@@ -173,6 +203,9 @@ class Mp3Recommender(Node):
                 ),
             )
             self.get_logger().info("🔗 Assistant ↔ Vector Store 연결 완료")
+            self.get_logger().info(f"🔗 Assistant tools: {updated_assistant.tools}")
+            self.get_logger().info(f"🔗 Vector Store IDs: {updated_assistant.tool_resources.file_search.vector_store_ids}")
+
 
         except Exception as e:
             self.get_logger().error(f"Vector Store 초기화 실패: {e}")
@@ -548,6 +581,8 @@ class Mp3Recommender(Node):
     # Instruction
     *IMPORTANT 1: Do NOT write citation markers like 【...】 in your reply text. File citations will be attached automatically.
     *IMPORTANT 2: You must base your reply only on factual content that exists in the PDF.
+    *IMPORTANT 3: Express the special symbol in letters. Ex)18:10 as 18분 10분.
+
     - Do not invent or hallucinate new information that isn’t in the document.
     - However, do not quote the PDF text verbatim.
     - Instead, paraphrase the most relevant sentence naturally, using your own tone and phrasing.
