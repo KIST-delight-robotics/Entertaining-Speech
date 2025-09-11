@@ -280,22 +280,13 @@ class UserQuestion(Node):
         self.client = speech.SpeechClient()
 
 
-        # 신뢰성 높은 QoS 설정
-        reliable_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL
-        )
-
-
         # ROS 2 인터페이스
-        stt_group = ReentrantCallbackGroup()
+       
         self.publisher_ = self.create_publisher(String, "user_question", 10)
         # 트리거 상태 퍼블리시용 추가
         self.trigger_status_pub = self.create_publisher(String, "/trigger_status", 10)
         self.gif_status_pub = self.create_publisher(String, "/gif_status", 10)
-        #self.gif_status_pub = self.create_publisher(String, "/gif_status", reliable_qos)
+   
         
 
         # self.create_subscription(
@@ -336,16 +327,7 @@ class UserQuestion(Node):
 
         # PyAudio 세팅 (16 kHz mono)
         self.p = pyaudio.PyAudio()
-        # self.stream = self.p.open(
-        #     format=pyaudio.paInt16,
-        #     channels=1,
-        #     rate=16000,
-        #     input=True,
-        #     frames_per_buffer=1024,
-        #     stream_callback=self.audio_callback,
-        # )
-        # # STT 스레드 시작
-        # threading.Thread(target=self.transcribe_streaming, daemon=True).start()
+      
         self.device_index = 24
         
         self.stream = None
@@ -451,11 +433,54 @@ class UserQuestion(Node):
         self.question_processing = False  # 질문 처리 중 플래그
         self.waiting_for_tts = False      # TTS 시작 대기 중 플래그
 
+        
 
-
-
+        # 🆕 partial 텍스트 실시간 퍼블리시용 추가
+        self.partial_text_pub = self.create_publisher(String, "/partial_text", 10)
+        
 
         self.start_audio_stream()
+
+
+
+
+
+
+
+
+    def publish_partial_text(self, partial_text, is_final=False):
+        """모든 partial 텍스트를 무조건 실시간 퍼블리시 (플래그 무시)"""
+        try:
+            # partial 텍스트 데이터 구성
+            partial_data = {
+                "text": partial_text,
+            }
+            
+            msg = String()
+            msg.data = json.dumps(partial_data, ensure_ascii=False)
+            self.partial_text_pub.publish(msg)
+            
+            # 디버깅용 로그 (0.2초마다만 출력)
+            current_time = time.time()
+            if not hasattr(self, 'last_partial_log_time'):
+                self.last_partial_log_time = 0
+            
+            if current_time - self.last_partial_log_time >= 0.2:
+                self.last_partial_log_time = current_time
+                final_marker = "[FINAL]" if is_final else "[PARTIAL]"
+                self.get_logger().info(f"📝 {final_marker} '{partial_text}'")
+                
+        except Exception as e:
+            self.get_logger().error(f"❌ Partial 텍스트 퍼블리시 실패: {e}")
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1535,6 +1560,11 @@ class UserQuestion(Node):
             for result in resp.results:
                 txt = result.alternatives[0].transcript.strip()
                 is_final = result.is_final
+
+                # 🚀 무조건 모든 텍스트 전송 (한 줄로 간단하게)
+                if txt:
+                    self.publish_partial_text(txt, is_final)
+                    
 
                 if self.ignore_stt:
                     self.get_logger().info(f"[무시됨] 효과음 재생 중 transcript: {txt}")
