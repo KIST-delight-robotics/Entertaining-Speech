@@ -663,6 +663,11 @@ useEffect(() => {
 
   mp4Listener.subscribe((message) => {
     console.log('🎬 MP4 메시지 수신:', message.data);
+
+    // 🆕 새로운 답변 시작 시 이전 currentReply 초기화
+    setCurrentReply('');
+
+    
     
     if (message.data && message.data.trim() !== "") {
       const parts = message.data.split(';');
@@ -740,7 +745,9 @@ const processPendingContent = (content) => {
     setVideoVisible(false);
     setCurrentVideo(null);
     setCurrentReply(content.reply);
-
+    
+    // 🆕 TTS 전용 모드에서 즉시 TTS 재생 상태 설정
+  setIsTtsPlaying(true);
   }
   
   // 공통 처리
@@ -917,7 +924,8 @@ const createSafeUrl = (path) => {
             requestTtsPlay();
           } 
           // 2. TTS 상태 감지 로직에 동영상 후 조건 추가
-          else if (!currentVideo && currentReply && currentReply.trim() !== '') {
+          // else if (!currentVideo && currentReply && currentReply.trim() !== '') {
+          else if (!currentVideo && (responsePreparation.show || currentReply.trim() !== '')) {
             console.log('🗣️ TTS 준비 완료 - TTS 재생 시작 (동영상 후)');
             setResponsePreparation(prev => ({ ...prev, show: false }));
             setIsTtsPlaying(true);
@@ -1454,7 +1462,7 @@ useEffect(() => {
     // ✅ TTS 관련 상태만 초기화
     setIsTtsPlaying(false);
     setTtsVolume(0);
-    setCurrentReply('');
+   
     setVideoVisible(false);
     
     // ✅ 응답 준비 화면 숨김 추가
@@ -1464,6 +1472,8 @@ useEffect(() => {
       status: 'preparing',
       startTime: null // 🆕 시작 시간도 초기화
     });
+
+
     
     // 🆕 단일 단어 자막 상태 초기화
     setSingleWordSubtitle(null);
@@ -2223,4 +2233,3 @@ export default SpectrumVisualizer;
 
 
 
-``
