@@ -1,4 +1,5 @@
 
+
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
@@ -441,25 +442,84 @@ useEffect(() => {
   };
 }, []);
 
-
-
-
-
-
-
-
-
-
 const renderSingleWordSubtitle = () => {
   if (!isTtsPlaying || !showSingleWord) {
+    console.log('🎬 자막 렌더링 조건 불만족:', {isTtsPlaying, showSingleWord});
     return null;
   }
+
+  // 🔑 핵심: 원본 텍스트 기반으로 부분별 하이라이트
+  const renderHighlightedWord = () => {
+    console.log('🔍 자막 데이터 상세:', singleWordSubtitle);
+
+    if (!singleWordSubtitle || !singleWordSubtitle.morpheme_info) {
+      return singleWordSubtitle?.segment || '';
+    }
+
+    const originalWord = singleWordSubtitle.morpheme_info.original_word;
+    const highlightRanges = singleWordSubtitle.morpheme_info.highlight_ranges || [];
+    
+    if (!highlightRanges || highlightRanges.length === 0) {
+      console.log('⚠️ highlight_ranges가 없음 - 기본 표시');
+      return originalWord;
+    }
+
+    console.log('🔍 하이라이트 범위들:', highlightRanges);
+
+    // 🔑 핵심: 범위 정보에 따라 원본 텍스트를 분할 렌더링
+    const parts = [];
+    let lastEnd = 0;
+
+    // 범위들을 정렬 (시작 위치 기준)
+    const sortedRanges = [...highlightRanges].sort((a, b) => a.start - b.start);
+
+    sortedRanges.forEach((range, index) => {
+      // 이전 범위와 현재 범위 사이의 텍스트 (있다면)
+      if (range.start > lastEnd) {
+        const betweenText = originalWord.slice(lastEnd, range.start);
+        parts.push(
+          <span key={`between-${index}`} style={{ color: '#FFFFFF' }}>
+            {betweenText}
+          </span>
+        );
+      }
+
+      // 현재 범위의 텍스트
+      const rangeText = originalWord.slice(range.start, range.end);
+      parts.push(
+        <span 
+          key={`range-${index}`}
+          style={{
+            color: range.is_noun ? '#FFD700' : '#FFFFFF',  // ✅ 체언만 노란색
+            fontWeight: range.is_noun ? 'bold' : 'bold'
+          }}
+        >
+          {rangeText}
+        </span>
+      );
+
+      lastEnd = range.end;
+    });
+
+    // 마지막 범위 이후의 텍스트 (있다면)
+    if (lastEnd < originalWord.length) {
+      const remainingText = originalWord.slice(lastEnd);
+      parts.push(
+        <span key="remaining" style={{ color: '#FFFFFF' }}>
+          {remainingText}
+        </span>
+      );
+    }
+
+    console.log('🎨 렌더링 부분들:', parts.length);
+    return parts;
+  };
 
   return (
     <div style={{
       position: 'absolute',
       top: '0',
-      left: '0',
+      left: '0', 
       width: '100vw',
       height: '100vh',
       zIndex: 30,
@@ -474,45 +534,22 @@ const renderSingleWordSubtitle = () => {
         textAlign: 'center',
         padding: '40px 20px'
       }}>
-        {/* 🔑 단일 단어 표시 - 고정 크기 */}
         <div style={{
-          // fontSize: '6rem', // 🔑 고정된 큰 크기
-          fontSize: '10rem', // 🔑 고정된 큰 크기
+          fontSize: '10rem',
           fontWeight: 'bold',
-          color: '#FFFFFF',
           textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
-          minHeight: '8rem', // 빈 공간에서도 높이 유지
+          minHeight: '8rem',
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'center', 
           justifyContent: 'center',
           letterSpacing: '0.05em'
         }}>
-          {singleWordSubtitle ? singleWordSubtitle.word : ''}
+          {renderHighlightedWord()}
         </div>
-        
-        
       </div>
     </div>
   );
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -2219,6 +2256,9 @@ const getScreenTransform = () => {
 
 
   {/* 🔧 기존 TTS 노래방 자막 대신 단일 단어 자막 사용 */}
+  {/* {renderSingleWordSubtitle()}
+   */}
+
   {renderSingleWordSubtitle()}
       
       
@@ -2229,7 +2269,6 @@ const getScreenTransform = () => {
 }
 
 export default SpectrumVisualizer;
-
 
 
 
