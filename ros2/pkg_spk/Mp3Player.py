@@ -140,82 +140,53 @@ class Mp3Player(Node):
 
 
 
-
-
     def publish_single_word_subtitle(self, subtitle_data):
         """
-        자막을 한 단어씩 순차적으로 퍼블리시 (다음 단어까지 현재 단어 유지)
+        세그먼트 기반 자막을 순차적으로 퍼블리시
         """
-        if not subtitle_data or 'words' not in subtitle_data:
+        if not subtitle_data or 'segments' not in subtitle_data:
             return
         
         def subtitle_worker():
             try:
-                words = subtitle_data['words']
+                segments = subtitle_data['segments']
                 start_time = time.time()
                 
-                self.get_logger().info(f"📺 순차 단일 자막 시작: {len(words)}개 단어")
-                
-                for i, word_info in enumerate(words):
-                    # 단어 시작 시간까지 대기
+                for i, segment_info in enumerate(segments):
+                    # 세그먼트 시작 시간까지 대기
                     elapsed_time = time.time() - start_time
-                    target_time = word_info['start']
+                    target_time = segment_info['start']
                     
                     if target_time > elapsed_time:
                         sleep_duration = target_time - elapsed_time
                         time.sleep(sleep_duration)
                     
-                    # 🔑 현재 단어 표시
-                    current_word_data = {
-                        "word": word_info['word'],
-                        "start": word_info['start'],
-                        "end": word_info['end'],
-                        "confidence": word_info['confidence'],
-                        "index": i,
-                        "total": len(words),
+                    # 🔑 핵심 수정: morpheme_info 키 사용
+                    current_segment_data = {
+                        "segment": segment_info['segment'],
+                        "morpheme_info": segment_info.get('morpheme_info', {}),  # ✅ 올바른 키 사용
+                        "start": segment_info['start'],
+                        "end": segment_info['end'],
+                        "confidence": segment_info['confidence'],
                         "display_mode": "single_word"
                     }
                     
                     msg = String()
-                    msg.data = json.dumps(current_word_data, ensure_ascii=False)
+                    msg.data = json.dumps(current_segment_data, ensure_ascii=False)
                     self.single_word_publisher.publish(msg)
                     
-                    self.get_logger().info(f"📺 [{i+1}/{len(words)}] 표시: '{word_info['word']}' ({word_info['start']:.2f}s-{word_info['end']:.2f}s)")
-                    
-                    # 🔑 핵심 수정: 다음 단어 시작 시간까지 대기 (빈 화면 없이)
-                    if i < len(words) - 1:
-                        # 다음 단어가 있는 경우: 다음 단어 시작 시간까지 현재 단어 유지
-                        next_word_start = words[i + 1]['start']
-                        current_time_in_audio = time.time() - start_time
-                        remaining_time = next_word_start - current_time_in_audio
-                        
+                    # 다음 세그먼트까지 대기
+                    if i < len(segments) - 1:
+                        next_start = segments[i + 1]['start']
+                        current_time = time.time() - start_time
+                        remaining_time = next_start - current_time
                         if remaining_time > 0:
                             time.sleep(remaining_time)
-                    else:
-                        # 마지막 단어인 경우: 단어의 지속 시간만큼 대기
-                        word_duration = word_info['end'] - word_info['start']
-                        time.sleep(word_duration)
-                
-                # # 🔑 모든 자막 종료
-                # final_data = {
-                #     "word": "",
-                #     "display_mode": "finished"
-                # }
-                # final_msg = String()
-                # final_msg.data = json.dumps(final_data, ensure_ascii=False)
-                # self.single_word_publisher.publish(final_msg)
-                
-                # self.get_logger().info("📺 순차 단일 자막 완료")
-                
+                    
             except Exception as e:
-                self.get_logger().error(f"❌ 순차 자막 퍼블리시 실패: {e}")
+                self.get_logger().error(f"❌ 세그먼트 자막 퍼블리시 실패: {e}")
         
-        # 별도 스레드에서 실행
-        subtitle_thread = threading.Thread(target=subtitle_worker, daemon=True)
-        subtitle_thread.start()
-
-
-
+        threading.Thread(target=subtitle_worker, daemon=True).start()
 
 
 
@@ -1174,187 +1145,6 @@ class Mp3Player(Node):
 
      
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TTS 재생 및 스펙트럼 퍼블리시
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-
-    # def text2speech(self, text):
-    #     """
-    #     ElevenLabs TTS 호출 → reply.mp3 저장 → 원본 텍스트 기반 자막 생성
-    #     """
-
-    #     # 🆕 전체 소요시간 측정 시작
-    #     total_start_time = time.time()
-    #     self.get_logger().info("⏳ TTS 전체 프로세스 시작")
-        
-
-
-    #     api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-    #     # voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
-    #     voice_id = "1W00IGEmNmwmsDeYy7ag" #스폰지밥
-    #     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
-    #     headers = {
-    #         "xi-api-key": api_key,
-    #         "Content-Type": "application/json; charset=utf-8",  # UTF-8 명시
-    #         "Accept": "audio/mpeg"
-    #     }
-
-    #     # 🆕 텍스트 전처리
-    #     cleaned_text = text.strip()
-    #     cleaned_text = ' '.join(cleaned_text.split())
-        
-    #     # 🆕 디버깅 로그
-    #     self.get_logger().info(f"🗣️ TTS 원본 텍스트: '{cleaned_text}'")
-
-    #     # data = {
-    #     #     "text": cleaned_text,
-    #     #     "model_id": "eleven_multilingual_v2",
-    #     #     "voice_settings": {
-    #     #         "stability": 0.5,
-    #     #         "similarity_boost": 0.75,
-    #     #         "style": 0.25,
-    #     #         "speed": 0.9
-    #     #     },
-    #     #     "apply_text_normalization": "on",
-    #     #     "output_format": "mp3_22050_32"
-    #     # }
-
-    #     data = {
-    #         "text": cleaned_text,
-    #         # "model_id": "eleven_multilingual_v2",
-    #         "model_id": "eleven_flash_v2_5",
-    #         "voice_settings": {
-    #             "stability": 1.0,
-    #             "similarity_boost": 1.0,
-    #             # "style": 0.25,
-    #             "speed": 1.0            },
-    #         "apply_text_normalization": "off"
-    #     }
-
-
-
-    #     try:
-
-    #         # 🆕 TTS API 호출 시간 측정
-    #         tts_api_start = time.time()
-    #         self.get_logger().info("⏳ ElevenLabs TTS API 호출 시작")
-
-
-
-    #         response = requests.post(
-    #             url,
-    #             headers=headers,
-    #             data=json.dumps(data, ensure_ascii=False).encode('utf-8')
-    #         )
-
-    #         tts_api_end = time.time()
-    #         tts_api_duration = tts_api_end - tts_api_start
-    #         self.get_logger().info(f"✅ TTS API 호출 완료, 소요시간: {tts_api_duration:.2f}초")
-
-
-
-            
-    #         if response.status_code == 200:
-    #             with open(self.reply_path, "wb") as f:
-    #                 f.write(response.content)
-                
-    #             file_size = os.path.getsize(self.reply_path)
-    #             self.get_logger().info(f"🟢 음성 변환 성공 → {self.reply_path} ({file_size} bytes)")
-
-    #             # 🆕 WAV 변환 시간 측정
-    #             wav_convert_start = time.time()
-    #             self.get_logger().info("⏳ WAV 변환 시작")
-
-
-                
-    #             # 🆕 WAV 변환 (STT API용)
-    #             sound = AudioSegment.from_file(self.reply_path, format="mp3")
-    #             wav_path = "/tmp/tts_for_stt.wav"
-    #             sound = sound.set_frame_rate(16000).set_channels(1)
-    #             sound.export(wav_path, format="wav")
-                
-    #             wav_convert_end = time.time()
-    #             wav_convert_duration = wav_convert_end - wav_convert_start
-    #             self.get_logger().info(f"✅ WAV 변환 완료, 소요시간: {wav_convert_duration:.2f}초")
-
-                
-    #             # 🆕 STT 타임스탬프 추출
-    #             stt_timestamps = self.extract_word_timestamps(wav_path, cleaned_text)
-
-    #             # 🆕 자막 처리 시간 측정
-    #             subtitle_process_start = time.time()
-    #             self.get_logger().info("⏳ 자막 정렬 및 처리 시작")
-
-                
-    #             # 🔑 핵심: 원본 텍스트로 덮어쓰기
-    #             corrected_timestamps = self.merge_original_with_stt_timestamps(
-    #                 original_text=cleaned_text,
-    #                 stt_timestamps=stt_timestamps
-    #             )
-
-    #             subtitle_process_end = time.time()
-    #             subtitle_process_duration = subtitle_process_end - subtitle_process_start
-    #             self.get_logger().info(f"✅ 자막 정렬 및 처리 완료, 소요시간: {subtitle_process_duration:.2f}초")
-                
-    #             # 🆕 자막 퍼블리시 시간 측정
-    #             publish_start = time.time()
-
-
-                
-    #             # 🆕 수정된 자막 데이터 퍼블리시
-    #             if corrected_timestamps:
-    #                 subtitle_data = {
-    #                     "original_text": cleaned_text,
-    #                     "words": corrected_timestamps,
-    #                     "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
-    #                 }
-
-    #                 # 🔑 핵심 수정: 즉시 퍼블리시하지 않고 저장만
-    #                 self.pending_subtitle_data = subtitle_data
-
-
-    #                 # # 🆕 순차 단일 단어 자막 시작
-    #                 # self.publish_single_word_subtitle(subtitle_data)
-                    
-    #                 msg = String()
-    #                 msg.data = json.dumps(subtitle_data, ensure_ascii=False)
-    #                 self.tts_subtitle_publisher.publish(msg)
-    #                 self.get_logger().info(f"📝 수정된 자막 데이터 퍼블리시: {len(corrected_timestamps)}개 단어")
-    #             else:
-    #                 self.get_logger().warning("⚠️ 자막 수정 실패 - 기본 자막 사용")
-    #                 self._publish_fallback_subtitle(cleaned_text)
-    #             publish_end = time.time()
-    #             publish_duration = publish_end - publish_start
-    #             self.get_logger().info(f"✅ 자막 퍼블리시 완료, 소요시간: {publish_duration:.2f}초")
-                
-    #             # 🆕 전체 소요시간 계산 및 로그
-    #             total_end_time = time.time()
-    #             total_duration = total_end_time - total_start_time
-                
-    #             self.get_logger().info("="*60)
-    #             self.get_logger().info("📊 TTS 전체 프로세스 시간 분석")
-    #             self.get_logger().info(f"  🎤 TTS API 호출:        {tts_api_duration:.2f}초 ({tts_api_duration/total_duration*100:.1f}%)")
-    #             self.get_logger().info(f"  🔄 WAV 변환:            {wav_convert_duration:.2f}초 ({wav_convert_duration/total_duration*100:.1f}%)")
-    #             self.get_logger().info(f"  📝 동적자막 생성:        {getattr(self, '_last_stt_duration', 0):.2f}초 ({getattr(self, '_last_stt_duration', 0)/total_duration*100:.1f}%)")
-    #             self.get_logger().info(f"  🔤 형태소 분석:          {getattr(self, '_last_morphology_duration', 0):.3f}초 ({getattr(self, '_last_morphology_duration', 0)/total_duration*100:.1f}%)")  # 🆕 추가
-    #             self.get_logger().info(f"  ⚙️ 자막 처리:           {subtitle_process_duration:.2f}초 ({subtitle_process_duration/total_duration*100:.1f}%)")
-    #             self.get_logger().info(f"  📡 퍼블리시:            {publish_duration:.2f}초 ({publish_duration/total_duration*100:.1f}%)")
-    #             self.get_logger().info(f"  🏁 전체 소요시간:        {total_duration:.2f}초")
-    #             self.get_logger().info("="*60)
-
-
-                    
-    #         else:
-    #             self.get_logger().error(f"🔴 TTS 오류: {response.status_code}")
-    #             self.get_logger().error(f"응답: {response.text}")
-    #     except Exception as e:
-    #         self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
-
-
-
 
 
 
@@ -1465,7 +1255,7 @@ class Mp3Player(Node):
                 if corrected_timestamps:
                     subtitle_data = {
                         "original_text": cleaned_text,
-                        "words": corrected_timestamps,
+                        "segments": corrected_timestamps,
                         "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
                     }
 
@@ -1728,45 +1518,153 @@ class Mp3Player(Node):
 
     def merge_original_with_stt_timestamps(self, original_text, stt_timestamps):
         """
-        🆕 명사 전용 자막 생성 (기존 함수 완전 교체)
+        전체 문장을 세그먼트별로 분할하고 각 세그먼트의 형태소 정보 추가
         """
         try:
-            # 🆕 형태소 분석 시간 측정 시작
-            morphology_extraction_start = time.time()
+            original_words = original_text.split()
             
-            # 1. 명사 추출
-            nouns = self.extract_nouns_from_text(original_text)
-            
-            # 🆕 형태소 분석 시간 저장 (나중에 전체 시간 분석에서 사용)
-            morphology_extraction_end = time.time()
-            self._last_morphology_duration = morphology_extraction_end - morphology_extraction_start
-            
-            if not nouns:
-                self.get_logger().warning("⚠️ 추출된 명사가 없습니다. 기본 자막 생성")
-                return self._create_fallback_subtitle_data(original_text)
-            
-            # 나머지 코드는 동일...
-            # 2. STT가 없는 경우 기본 타임스탬프 생성
             if not stt_timestamps:
-                return self._create_default_noun_timestamps(nouns)
+                return self._create_default_segment_timestamps(original_words)
             
-            # 3. 명사와 STT 타임스탬프 매핑 및 분할
-            noun_timestamps = self.map_nouns_to_timestamps(nouns, stt_timestamps, original_text)
+            # 1. 전체 단어를 STT 타임스탬프와 매핑
+            segment_timestamps = []
             
-            if not noun_timestamps:
-                self.get_logger().warning("⚠️ 명사 타임스탬프 매핑 실패")
-                return self._create_default_noun_timestamps(nouns)
+            for i, orig_word in enumerate(original_words):
+                if i < len(stt_timestamps):
+                    # STT 타임스탬프가 있는 경우
+                    start_time = stt_timestamps[i]["start"]
+                    end_time = stt_timestamps[i]["end"]
+                    confidence = stt_timestamps[i]["confidence"]
+                else:
+                    # STT 타임스탬프가 부족한 경우 추정
+                    prev_end = segment_timestamps[-1]["end"] if segment_timestamps else 0
+                    start_time = prev_end
+                    end_time = start_time + len(orig_word) * 0.15
+                    confidence = 0.8
+                
+                # 2. 해당 세그먼트(단어)의 형태소 분석 수행
+                morpheme_info = self._analyze_word_morphemes(orig_word)
+                
+                segment_timestamps.append({
+                    "segment": orig_word,
+                    "start": round(start_time, 3),
+                    "end": round(end_time, 3), 
+                    "confidence": round(confidence, 3),
+                    "morpheme_info": morpheme_info  # 형태소 정보 추가
+                })
             
-            self.get_logger().info(f"✅ 명사 자막 생성 완료: {len(noun_timestamps)}개 명사")
-            for i, ts in enumerate(noun_timestamps[:3]):  # 처음 3개만 로그
-                divided_info = " (분할됨)" if ts.get('divided') else ""
-                self.get_logger().info(f"  [{i}] '{ts['word']}': {ts['start']:.2f}s-{ts['end']:.2f}s{divided_info}")
-            
-            return noun_timestamps
+            return segment_timestamps
             
         except Exception as e:
-            self.get_logger().error(f"❌ 명사 자막 생성 실패: {e}")
-            return self._create_fallback_subtitle_data(original_text)
+            self.get_logger().error(f"❌ 세그먼트 타임스탬프 생성 실패: {e}")
+            return original_text
+        
+
+
+
+    def _create_default_segment_timestamps(self, original_words):
+        """
+        STT 실패시 기본 세그먼트 타임스탬프 생성
+        """
+        segment_timestamps = []
+        current_time = 0.0
+        
+        for word in original_words:
+            # 단어별 형태소 분석
+            morpheme_info = self._analyze_word_morphemes(word)
+            
+            duration = max(0.5, len(word) * 0.15)
+            
+            segment_timestamps.append({
+                "segment": word,
+                "start": round(current_time, 3),
+                "end": round(current_time + duration, 3),
+                "confidence": 1.0,
+                "morphemes": morpheme_info
+            })
+            
+            current_time += duration
+        
+        return segment_timestamps
+
+
+
+
+    def _analyze_word_morphemes(self, word):
+        """
+        원본 단어에서 체언 부분의 위치를 찾아 하이라이트 정보 생성
+        """
+        try:
+            if not self.kiwi:
+                return {
+                    "original_word": word,
+                    "highlight_ranges": [{"start": 0, "end": len(word), "is_noun": False}]
+                }
+            
+            result = self.kiwi.analyze(word)
+            if not result or not result[0] or not result[0][0]:
+                return {
+                    "original_word": word,
+                    "highlight_ranges": [{"start": 0, "end": len(word), "is_noun": False}]
+                }
+            
+            tokens = result[0][0]
+            highlight_ranges = []
+            current_pos = 0
+            
+            # 🔑 핵심: 원본 단어에서 각 형태소의 실제 위치 찾기
+            for token in tokens:
+                morpheme_text = token.form
+                is_noun = token.tag in ['NNG', 'NNP', 'NNB', 'NR', 'NP','SL','SN']
+                
+                # 원본 단어에서 이 형태소의 위치 찾기
+                start_pos = word.find(morpheme_text, current_pos)
+                
+                if start_pos != -1:
+                    end_pos = start_pos + len(morpheme_text)
+                    highlight_ranges.append({
+                        "start": start_pos,
+                        "end": end_pos,
+                        "text": morpheme_text,
+                        "is_noun": is_noun
+                    })
+                    current_pos = end_pos
+                else:
+                    # 🔑 중요: 형태소가 원본에서 찾아지지 않으면 건너뛰기
+                    # 예: "궁금한"에서 "하", "ㄴ"이 개별적으로는 없음
+                    self.get_logger().warning(f"형태소 '{morpheme_text}'가 원본 '{word}'에서 찾아지지 않음")
+            
+            # 🔑 원본 텍스트의 모든 부분이 커버되지 않았으면 나머지 부분 추가
+            if current_pos < len(word):
+                # 남은 부분을 체언이 아닌 것으로 처리
+                highlight_ranges.append({
+                    "start": current_pos,
+                    "end": len(word),
+                    "text": word[current_pos:],
+                    "is_noun": False
+                })
+            
+            result_data = {
+                "original_word": word,
+                "highlight_ranges": highlight_ranges
+            }
+            
+            # 🆕 상세 디버깅 로그
+            ranges_info = [f"'{r['text']}'({r['start']}-{r['end']}, {'체언' if r['is_noun'] else '기타'})" 
+                        for r in highlight_ranges]
+            self.get_logger().info(f"🔍 '{word}' 하이라이트 범위: {ranges_info}")
+            
+            return result_data
+            
+        except Exception as e:
+            error_result = {
+                "original_word": word,
+                "highlight_ranges": [{"start": 0, "end": len(word), "text": word, "is_noun": False}]
+            }
+            self.get_logger().error(f"🔍 형태소 분석 실패: {word} → {e}")
+            return error_result
+
+
 
 
 
@@ -2143,4 +2041,3 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-
