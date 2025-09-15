@@ -57,154 +57,6 @@ from collections import deque
 
 
 
-# # ──────────────────────────────────────────────────────────────────────────────
-# # 🆕 시간 도메인 최대 소리크기 기반 원형 스펙트럼 처리
-# # ──────────────────────────────────────────────────────────────────────────────
-# class VoiceCircularSpectrum:
-#     def __init__(self):
-#         self.volume_history = []
-#         self.history_size = 1  # 🔧 5프레임에서 3프레임으로 줄여서 더 빠른 반응
-#         self.peak_decay_rate = 0.85  # 🆕 피크 감쇠율 추가
-#         self.current_peak = 0.0  # 🆕 현재 피크값 추적
-        
-#     def calculate_volume(self, audio_data):
-#         """시간 도메인에서 최대 소리크기 계산 - 원본 최대값 반환"""
-#         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
-#         if len(samples) == 0:
-#             return 0.0
-        
-#         # 🔑 핵심 변경: RMS 대신 Peak Amplitude (최대 절댓값) 계산
-#         peak_amplitude = np.max(np.abs(samples))
-        
-#         # 🆕 현재 피크와 비교하여 더 큰 값 선택
-#         if peak_amplitude > self.current_peak*0.8:
-#             self.current_peak = peak_amplitude
-#         else:
-#             # 🆕 피크 감쇠 적용 (자연스러운 감소)
-#             self.current_peak *= self.peak_decay_rate
-        
-#         # # 🆕 최근 최대값들을 히스토리에 저장
-#         # self.volume_history.append(peak_amplitude)
-#         # if len(self.volume_history) > self.history_size:
-#         #     self.volume_history.pop(0)
-        
-#         # # 🆕 현재 피크와 최근 최대값 중 더 큰 값 반환
-#         # recent_max = np.max(self.volume_history) if self.volume_history else 0.0
-#         # final_volume = max(self.current_peak, recent_max)
-#         # 🚀 히스토리 최소화 (1프레임만)
-#         self.volume_history = [peak_amplitude]  # 현재값만 저장
-
-#         # 🚀 현재 피크와 즉시값 중 더 큰 값
-#         return float(max(self.current_peak, peak_amplitude))
-    
-#     def reset(self):
-#         """새 세션 시작시 초기화"""
-#         self.volume_history = []
-#         self.current_peak = 0.0  # 🆕 피크값도 초기화
-
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 🆕 시간 도메인 최대 소리크기 기반 원형 스펙트럼 처리
-# ──────────────────────────────────────────────────────────────────────────────
-# class VoiceCircularSpectrum:
-#     def __init__(self):
-#         self.volume_history = []
-#         self.history_size = 3  # 🔧 3프레임의 평균값 계산을 위해 수정
-        
-#     def calculate_volume(self, audio_data):
-#         """시간 도메인에서 최대 소리크기 계산 - 3프레임 평균값 반환"""
-#         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
-#         if len(samples) == 0:
-#             return 0.0
-        
-#         # 🔑 현재 프레임의 Peak Amplitude (최대 절댓값) 계산
-#         peak_amplitude = np.max(np.abs(samples))
-        
-#         # 🆕 3프레임의 히스토리에 현재값 추가
-#         self.volume_history.append(peak_amplitude)
-#         if len(self.volume_history) > self.history_size:
-#             self.volume_history.pop(0)
-        
-#         # 🆕 현재 포함 3프레임의 평균값 계산
-#         if len(self.volume_history) > 0:
-#             average_volume = np.mean(self.volume_history)
-#         else:
-#             average_volume = 0.0
-        
-#         return float(average_volume)
-    
-#     def reset(self):
-#         """새 세션 시작시 초기화"""
-#         self.volume_history = []
-
-
-
-
-
-# #0908 1651 demo 수정 (박사님버전)
-# class VoiceCircularSpectrum:
-#     def __init__(self, sample_rate=16000):
-#         self.sample_rate = sample_rate
-#         self.samples_per_ms = sample_rate // 1000  # 16 samples per ms
-        
-#         # 1ms 단위 샘플 버퍼 (최대 5ms 유지)
-#         self.sample_buffer = deque(maxlen=5 * self.samples_per_ms)  # 80 samples max
-        
-#         # max_now 값들 저장 (최대 3개)
-#         self.max_now_history = deque(maxlen=10)
-        
-#         # 1ms 청크 누적용 임시 버퍼
-#         self.temp_chunk = []
-        
-#     def calculate_volume(self, audio_data):
-#         """
-#         1ms 단위로 처리하여 최근 5ms 최대값의 3개 이동평균 계산
-#         """
-#         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
-#         if len(samples) == 0:
-#             return 0.0
-        
-#         # 현재 청크를 임시 버퍼에 추가
-#         self.temp_chunk.extend(samples)
-        
-#         output_volume = None
-        
-#         # 1ms씩 처리 (16 samples씩)
-#         while len(self.temp_chunk) >= self.samples_per_ms:
-#             # 1ms 분량 추출
-#             ms_samples = self.temp_chunk[:self.samples_per_ms]
-#             self.temp_chunk = self.temp_chunk[self.samples_per_ms:]
-            
-#             # 1ms 샘플을 버퍼에 추가
-#             self.sample_buffer.extend(ms_samples)
-            
-#             # 최근 5ms(80 samples) 중 최대값 계산
-#             if len(self.sample_buffer) > 0:
-#                 recent_samples = list(self.sample_buffer)
-#                 max_now = np.max(np.abs(recent_samples))
-                
-#                 # max_now 히스토리에 추가
-#                 self.max_now_history.append(max_now)
-                
-#                 # 최근 3개 max_now의 moving average 계산
-#                 if len(self.max_now_history) > 0:
-#                     output_volume = np.mean(self.max_now_history)
-        
-#         # 처리된 볼륨이 있으면 반환, 없으면 이전값 유지
-#         return float(output_volume) if output_volume is not None else self.get_last_volume()
-    
-#     def get_last_volume(self):
-#         """마지막 계산된 볼륨 반환"""
-#         return float(np.mean(self.max_now_history)) if len(self.max_now_history) > 0 else 0.0
-    
-#     def reset(self):
-#         """새 세션 시작시 초기화"""
-#         self.sample_buffer.clear()
-#         self.max_now_history.clear()
-#         self.temp_chunk.clear()
-
-
 #0909 수정버전(3개의 윈도우사이즈 최대값 평균)
 class VoiceCircularSpectrum:
     def __init__(self, sample_rate=16000):
@@ -712,13 +564,6 @@ class UserQuestion(Node):
 
 
 
-
-
-
-
-
-
-
     def publish_response_preparation_show(self, question_text):
         """🆕 통합 응답 준비 화면 표시"""
         preparation_data = {
@@ -799,115 +644,6 @@ class UserQuestion(Node):
 
 
 
-
-
-
-
-
-
-
-
-
-
-    # # 🔧 수정된 Mp3Recommender 완료 처리
-    # def mp3_recommend_done_callback(self, msg):
-    #     """Mp3Recommender 완료 처리 - TTS 재생 중이면 대기"""
-    #     if msg.data == "completed":
-    #         if self.question_confirm_playing:
-    #             self.get_logger().info("🎵 TTS 재생 중 - mp4 데이터 대기 저장")
-    #             self.pending_mp4_data = msg.data  # 실제로는 mp4 데이터가 별도 토픽으로 올 것
-    #         else:
-    #             self.get_logger().info("📬 Mp3Recommender 완료 - 즉시 처리 가능")
-    #             # 즉시 처리 (기존 로직)
-
-
-
-
-
-    # # 🆕 ElevenLabs TTS 함수 추가
-    # def text2speech_question_confirm(self, text):
-    #     """ElevenLabs TTS 호출하여 질문 확인 음성 생성"""
-    #     api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
-    #     # voice_id = "59zWnTQLbwyr94bFbcUe" #스폰지밥
-    #     voice_id = "1W00IGEmNmwmsDeYy7ag" #스폰지밥
-    #     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
-    #     headers = {
-    #         "xi-api-key": api_key,
-    #         "Content-Type": "application/json",
-    #         "Accept": "audio/mpeg"
-    #     }
-
-    #     # data = {
-    #     #     "text": text,
-    #     #     # "model_id": "eleven_multilingual_v2",
-    #     #     "model_id": "eleven_flash_v2_5",
-    #     #     "voice_settings": {
-    #     #         "stability": 0.5,
-    #     #         "similarity_boost": 0.75,
-    #     #         # "style": 0.25,
-    #     #         "speed": 0.8
-    #     #     },
-    #     #     "apply_text_normalization": "off"
-    #     # }
-
-    #     data = {
-    #         "text": text,
-    #         # "model_id": "eleven_multilingual_v2",
-    #         "model_id": "eleven_flash_v2_5",
-    #         "voice_settings": {
-    #             "stability": 1.0,
-    #             "similarity_boost": 1.0,
-    #             # "style": 0.25,
-    #             "speed": 1.0
-    #         },
-    #         "apply_text_normalization": "off"
-    #     }
-
-
-
-    #     try:
-    #         start_time = time.time()
-    #         response = requests.post(url, headers=headers, json=data)
-            
-    #         if response.status_code == 200:
-    #             with open(self.question_confirm_path, "wb") as f:
-    #                 f.write(response.content)
-                
-    #             generation_time = time.time() - start_time    
-    #             self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 → {self.question_confirm_path}")
-    #             self.get_logger().info(f"⏱️ TTS 생성 시간: {generation_time:.3f}초")
-
-
-
-    #             # 🆕 타임스탬프 추출을 위한 WAV 변환
-    #             sound = AudioSegment.from_file(self.question_confirm_path, format="mp3")
-
-    #             wav_path = "/tmp/question_confirm_for_stt.wav"
-    #             sound = sound.set_frame_rate(16000).set_channels(1)
-    #             sound.export(wav_path, format="wav")
-                
-    #             # 🆕 타임스탬프 추출
-    #             stt_timestamps = self.extract_question_confirm_timestamps(wav_path, text)
-                
-    #             # 🆕 원본 텍스트와 병합
-    #             corrected_timestamps = self.merge_original_with_confirm_timestamps(text, stt_timestamps)
-                
-    #             # 🆕 자막 데이터 저장 (재생 시 사용)
-    #             self.question_confirm_subtitle_data = {
-    #                 "original_text": text,
-    #                 "words": corrected_timestamps,
-    #                 "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
-    #             }
-
-    #             return True
-    #         else:
-    #             self.get_logger().error(f"🔴 TTS 오류 발생: {response.status_code}\n{response.text}")
-    #             return False
-                
-    #     except Exception as e:
-    #         self.get_logger().error(f"🔴 TTS 호출 실패: {e}")
-    #         return False
 
 
 
@@ -1297,31 +1033,35 @@ class UserQuestion(Node):
 
 
     def start_audio_stream(self):
-        """ 마이크 입력을 Google STT API로 실시간 전송 """
-        self.get_logger().info('Starting microphone stream (continuous)...')
-     
-        #self.stop_audio_stream()
-
+        """Google STT API와 함께 오디오 스트림 시작"""
+        self.get_logger().info("Starting microphone stream (continuous)...")
+        self.stop_audio_stream()
+        
         try:
             self.stream = self.p.open(
-            format=pyaudio.paInt16,
-            channels=1,  # ✅ PulseAudio에서는 1 채널을 지원할 가능성이 높음
-            rate=16000,
-            input=True,
-            frames_per_buffer=1024,
-            input_device_index=None,  # ✅ PulseAudio의 기본 입력 장치를 사용
-            stream_callback=self.audio_callback
-        )
-
-
-            time.sleep(0.5)  
-            #self.transcribe_streaming()  # ✅ 누락된 함수 호출 (아래에 정의)
-            threading.Thread(target=self.transcribe_streaming, daemon=True).start()
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=16000,
+                input=True,
+                frames_per_buffer=1024,
+                input_device_index=None,
+                stream_callback=self.audio_callback
+            )
+            
+            time.sleep(0.5)  # 스트림 안정화 대기
+            
+            # ✅ transcribing 상태 확인 후 한 번만 시작
+            if not self.transcribing:
+                threading.Thread(target=self.transcribe_streaming, daemon=True).start()
+            else:
+                self.get_logger().warning("STT already running during start_audio_stream")
+                
         except Exception as e:
             self.get_logger().error(f"Failed to start microphone stream: {e}")
             self.get_logger().info("Retrying microphone stream in 1 second...")
             time.sleep(1)
             self.start_audio_stream()
+
 
     def stop_audio_stream(self):
         """ ✅ 마이크 입력 스트리밍 중지 함수 추가 """
@@ -1334,50 +1074,62 @@ class UserQuestion(Node):
 
 
     def transcribe_streaming(self):
-        """ Google STT API를 사용하여 실시간 음성 인식 """
+        """Google STT API를 사용한 실시간 음성 인식"""
         if self.transcribing:
             self.get_logger().info("STT already running, skipping duplicate start.")
             return
-
+            
         self.transcribing = True
         self.get_logger().info("Starting transcribe_streaming...")
-
+        
         def request_gen():
             while True:
-                data = self.audio_stream.get() 
+                data = self.audio_stream.get()
                 if data is None:
                     break
                 yield speech.StreamingRecognizeRequest(audio_content=data)
-
-        # 1) 화자 분할 설정
+        
+        # Google STT 설정
         diar_cfg = speech.SpeakerDiarizationConfig(
             enable_speaker_diarization=True,
             min_speaker_count=2,
-            max_speaker_count=2,
+            max_speaker_count=2
         )
-
+        
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=16000,
             language_code="ko-KR",
-            model='telephony',
-            enable_automatic_punctuation = True
+            model="telephony",
+            enable_automatic_punctuation=True
         )
+        
         streaming_config = speech.StreamingRecognitionConfig(
-            config=config, interim_results=True
+            config=config,
+            interim_results=True
         )
+        
         try:
             self.stt_restart_time = time.time()
-            responses = self.client.streaming_recognize(
-                streaming_config, request_gen()
-            )
+            responses = self.client.streaming_recognize(streaming_config, request_gen())
             self.process_responses(responses)
         except Exception as e:
             self.get_logger().error(f"STT error: {e}")
+            
+            # ✅ Exception 발생 즉시 플래그 초기화
+            self.transcribing = False
+            
+            # Timeout 오류 특별 처리
+            if "Audio Timeout Error" in str(e):
+                self.get_logger().error("Audio Timeout detected - forcing complete restart")
+                time.sleep(1.0)  # 더 긴 대기 시간
+            
             self.force_restart_stt()
         finally:
-            self.transcribing = False  # ✅ 항상 플래그 초기화
-            
+            # ✅ 반드시 플래그 초기화
+            self.transcribing = False
+
+                
 
 
 
@@ -1592,8 +1344,8 @@ class UserQuestion(Node):
 
                 # ── 1) trigger 감지 시 ──
                 if not self.trigger_detected:
-                    if "안녕!" in txt:
-                        split_text = txt.split("안녕!", 1)
+                    if "블랙." in txt:
+                        split_text = txt.split("블랙.", 1)
                         if len(split_text) > 1:
                             self.partial_transcript = split_text[1].strip()
                             self.get_logger().info(f"Trigger detected. Capturing transcript: {self.partial_transcript}")
@@ -1617,8 +1369,8 @@ class UserQuestion(Node):
 
                 # ── 2) trigger 이후 본 질문 저장 ──
                 elif self.trigger_detected:
-                    if "안녕!" in txt:
-                        split_text = txt.split("안녕!", 1)
+                    if "블랙." in txt:
+                        split_text = txt.split("블랙.", 1)
                         if len(split_text) > 1:
                             self.partial_transcript = split_text[1].strip()
                     else:
@@ -1994,7 +1746,7 @@ class UserQuestion(Node):
 
 
     def save_audio_clip(self):
-        """ "안녕!" 이후의 오디오를 WAV 파일로 저장 """
+        """ "블랙." 이후의 오디오를 WAV 파일로 저장 """
         if not self.audio_buffer:
             return
 
@@ -2015,23 +1767,63 @@ class UserQuestion(Node):
         
   
 
+    # def force_restart_stt(self):
+    #     self.get_logger().info("Forcing STT restart...")
+
+    #     # ✅ STT 세션 종료 표시
+    #     self.transcribing = False
+
+    #     # ✅ 세션 강제 중지
+    #     self.stop_audio_stream()
+
+    #     # #✅ 대기 시간 조금 여유롭게
+    #     # time.sleep(2.5)
+
+    #     # ✅ 입력 스트림 재시작
+    #     self.start_audio_stream()
+
+    #     # ✅ STT 재시작 – 쓰레드로 안전하게 분리
+    #     threading.Thread(target=self.transcribe_streaming, daemon=True).start()
+
+
+
+
+
+
     def force_restart_stt(self):
         self.get_logger().info("Forcing STT restart...")
-
-        # ✅ STT 세션 종료 표시
+        
+        # ✅ 가장 중요: transcribing 플래그 즉시 초기화
         self.transcribing = False
-
-        # ✅ 세션 강제 중지
-        self.stop_audio_stream()
-
-        # #✅ 대기 시간 조금 여유롭게
-        # time.sleep(2.5)
-
-        # ✅ 입력 스트림 재시작
+        
+        # 기존 상태 완전 초기화
+        self.processing = False
+        self.last_published_text = ""
+        self.partial_transcript = ""
+        self.trigger_detected = True
+        self.waiting_for_input_after_music = True
+        self.force_published = False
+        self.ignore_stt = False
+        self.is_sound_playing = False
+        
+        # ✅ 추가: 오디오 버퍼 완전 정리
+        self.audio_buffer = []
+        while not self.audio_stream.empty():
+            try:
+                self.audio_stream.get_nowait()
+            except queue.Empty:
+                break
+        
+        # 짧은 지연 후 재시작 (기존 세션 완전 종료 대기)
+        time.sleep(0.5)
         self.start_audio_stream()
+        
+        self.start_30s_timer()
+        self.get_logger().info("TTS 완료 후 STT 재시작 - 완료")
+        self.save_log("TTS 완료 후 STT 재시작 - 완료")
 
-        # ✅ STT 재시작 – 쓰레드로 안전하게 분리
-        threading.Thread(target=self.transcribe_streaming, daemon=True).start()
+
+
 
 
     def save_log(self, message):
