@@ -2271,4 +2271,3 @@ const getScreenTransform = () => {
 export default SpectrumVisualizer;
 
 
-
