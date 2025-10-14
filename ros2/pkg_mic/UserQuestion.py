@@ -1,5 +1,4 @@
 
-
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -668,7 +667,7 @@ class UserQuestion(Node):
             "volume": "0",      # 볼륨 (-5 ~ 5)
             "speed": "0",       # 속도 (-5 ~ 5)  
             "pitch": "0",       # 음높이 (-5 ~ 5)
-            "format": "mp3",    # 출력 포맷 (mp3, wav, ogg)
+            "format": "wav",    # 출력 포맷 (mp3, wav, ogg)
             "text": text
         }
 
@@ -677,19 +676,18 @@ class UserQuestion(Node):
             response = requests.post(url, headers=headers, data=data)
             
             if response.status_code == 200:
+                # WAV 파일로 직접 저장
+                wav_path = "/tmp/question_confirm_for_stt.wav"
+                with open(wav_path, "wb") as f:
+                    f.write(response.content)
+                
+                # 원본 파일도 WAV로 저장 (필요시)
                 with open(self.question_confirm_path, "wb") as f:
                     f.write(response.content)
                 
                 generation_time = time.time() - start_time    
-                self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 (Naver Clova) → {self.question_confirm_path}")
+                self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 (Naver Clova) → {wav_path}")
                 self.get_logger().info(f"⏱️ TTS 생성 시간: {generation_time:.3f}초")
-
-                # 🆕 타임스탬프 추출을 위한 WAV 변환
-                sound = AudioSegment.from_file(self.question_confirm_path, format="mp3")
-
-                wav_path = "/tmp/question_confirm_for_stt.wav"
-                sound = sound.set_frame_rate(16000).set_channels(1)
-                sound.export(wav_path, format="wav")
                 
                 # 🆕 타임스탬프 추출
                 stt_timestamps = self.extract_question_confirm_timestamps(wav_path, text)
