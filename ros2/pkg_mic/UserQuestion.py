@@ -1,4 +1,5 @@
 
+
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -241,7 +242,7 @@ class UserQuestion(Node):
 
 
         # 🆕 질문 확인 TTS 파일 저장 경로 추가
-        self.question_confirm_path = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/question_confirm.mp3"
+        self.question_confirm_path = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/question_confirm.wav"
 
         # 🆕 TTS 상태 구독 추가
         self.tts_status_subscription = self.create_subscription(
@@ -258,7 +259,7 @@ class UserQuestion(Node):
         self.openai_client = OpenAI(api_key=api_key)  # 동기 클라이언트 사용
 
         # 🆕 질문 확인 TTS 관련 변수
-        self.question_confirm_path = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/question_confirm.mp3"
+        self.question_confirm_path = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/question_confirm.wav"
         self.question_confirm_playing = False  # TTS 재생 중 플래그
         self.pending_mp4_data = None  # 대기 중인 mp4 데이터
 
@@ -756,7 +757,7 @@ class UserQuestion(Node):
 
 
                 # ✅ Mp3Player와 동일한 정규화 적용
-                sound = AudioSegment.from_file(audio_path, format="mp3")
+                sound = AudioSegment.from_file(audio_path, format="wav")
                 
                 # ✅ -14.0 dBFS로 정규화 (Mp3Player와 동일)
                 target_dBFS = -14.0
@@ -781,7 +782,6 @@ class UserQuestion(Node):
                 
             except Exception as e:
                 self.get_logger().error(f"❌ TTS 재생 실패: {e}")
-            finally:
                 self.question_confirm_playing = False
                 # 재생 완료 상태 퍼블리시
                 self.publish_question_confirm_status("completed")
