@@ -136,7 +136,81 @@ class Mp3Player(Node):
         self.pending_subtitle_data = None  # 🆕 자막 데이터 저장용
 
 
+        # 🆕 interrupt 신호 구독 추가
+        self.interrupt_sub = self.create_subscription(
+            String,
+            'interrupt_signal',
+            self.interrupt_callback,
+            10
+        )
+
+        # 🆕 TTS 재생 상태 플래그 추가
+        self.tts_playing = False
+        self.current_tts_thread = None
+
+        self.get_logger().info("✅ Mp3Player interrupt 구독 준비 완료")
+
+
+
+
+
+
+    def interrupt_callback(self, msg: String):
+        """
+        interrupt 신호 수신 시 TTS 재생 중단 및 상태 초기화
+        """
+        try:
+            if msg.data == "interrupt":
+                self.get_logger().info("🛑 Interrupt 신호 수신: TTS 재생 중단")
+                
+                # TTS 재생 중단
+                if self.tts_playing:
+                    self.stop_tts_playback()
+                
+                # 상태 초기화
+                self.reset_player_state()
+                
+                self.get_logger().info("✅ Mp3Player 상태 초기화 완료")
+                
+        except Exception as e:
+            self.get_logger().error(f"❌ interrupt 처리 실패: {e}")
+
+    def stop_tts_playback(self):
+        """
+        현재 재생 중인 TTS 즉시 중지
+        """
+        try:
+            self.tts_playing = False
+            self.is_playing = False
+            
+            # 재생 쓰레드가 있으면 종료 대기
+            if self.current_tts_thread and self.current_tts_thread.is_alive():
+                self.get_logger().info("🛑 TTS 재생 쓰레드 종료 대기")
+                time.sleep(0.2)
+            
+            # 시스템 오디오 강제 종료 (aplay 프로세스 kill)
+            os.system("pkill -9 aplay")
+            
+            self.get_logger().info("✅ TTS 재생 중지 완료")
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ TTS 재생 중지 실패: {e}")
+
+    def reset_player_state(self):
+        """
+        Mp3Player 모든 상태 초기화
+        """
+        self.tts_playing = False
+        self.current_tts_thread = None
+        self.is_playing = False
+        self.current_image_path = None
+        self.pending_subtitle_data = None
         
+        self.get_logger().info("🔄 Mp3Player 내부 상태 완전 초기화")
+
+
+
+
 
 
 
@@ -1185,7 +1259,7 @@ class Mp3Player(Node):
             "volume": "0",      # 볼륨 (-5 ~ 5)
             "speed": "0",       # 속도 (-5 ~ 5)  
             "pitch": "0",       # 음높이 (-5 ~ 5)
-            "format": "mp3",    # 출력 포맷 (mp3, wav, ogg)
+            "format": "wav",    # 출력 포맷 (mp3, wav, ogg)
             "text": cleaned_text
         }
 
@@ -1204,29 +1278,19 @@ class Mp3Player(Node):
 
             
             if response.status_code == 200:
+                # WAV 파일로 직접 저장
+                wav_path = "/tmp/tts_for_stt.wav"
+                with open(wav_path, "wb") as f:
+                    f.write(response.content)
+                
+                # 원본 파일도 WAV로 저장 (필요시)
                 with open(self.reply_path, "wb") as f:
                     f.write(response.content)
                 
-                file_size = os.path.getsize(self.reply_path)
-                self.get_logger().info(f"🟢 음성 변환 성공 → {self.reply_path} ({file_size} bytes)")
-
-                # 🆕 WAV 변환 시간 측정
-                wav_convert_start = time.time()
-                self.get_logger().info("⏳ WAV 변환 시작")
-
-
+                file_size = os.path.getsize(wav_path)
+                self.get_logger().info(f"🟢 음성 변환 성공 → {wav_path} ({file_size} bytes)")
                 
-                # 🆕 WAV 변환 (STT API용)
-                sound = AudioSegment.from_file(self.reply_path, format="mp3")
-                wav_path = "/tmp/tts_for_stt.wav"
-                sound = sound.set_frame_rate(16000).set_channels(1)
-                sound.export(wav_path, format="wav")
-                
-                wav_convert_end = time.time()
-                wav_convert_duration = wav_convert_end - wav_convert_start
-                self.get_logger().info(f"✅ WAV 변환 완료, 소요시간: {wav_convert_duration:.2f}초")
-
-
+             
                 
                 # 🆕 STT 타임스탬프 추출
                 stt_timestamps = self.extract_word_timestamps(wav_path, cleaned_text)
@@ -1284,7 +1348,6 @@ class Mp3Player(Node):
                 self.get_logger().info("="*60)
                 self.get_logger().info("📊 TTS 전체 프로세스 시간 분석")
                 self.get_logger().info(f"  🎤 TTS API 호출:        {tts_api_duration:.2f}초 ({tts_api_duration/total_duration*100:.1f}%)")
-                self.get_logger().info(f"  🔄 WAV 변환:            {wav_convert_duration:.2f}초 ({wav_convert_duration/total_duration*100:.1f}%)")
                 self.get_logger().info(f"  📝 동적자막 생성:        {getattr(self, '_last_stt_duration', 0):.2f}초 ({getattr(self, '_last_stt_duration', 0)/total_duration*100:.1f}%)")
                 self.get_logger().info(f"  🔤 형태소 분석:          {getattr(self, '_last_morphology_duration', 0):.3f}초 ({getattr(self, '_last_morphology_duration', 0)/total_duration*100:.1f}%)")  # 🆕 추가
                 self.get_logger().info(f"  ⚙️ 자막 처리:           {subtitle_process_duration:.2f}초 ({subtitle_process_duration/total_duration*100:.1f}%)")
@@ -1875,44 +1938,96 @@ class Mp3Player(Node):
 
 
 
+    # def play_tts_audio(self):
+    #     """TTS 오디오 재생 (App.jsx에서 요청시) - 스펙트럼 포함"""
+    #     try:
+    #         self.tts_playing = True
+    #         self.get_logger().info("🎵 TTS 오디오 재생 시작")
+    #         self.save_log("🎵 TTS 오디오 재생 시작")
+            
+    #         # 재생 시작 신호
+    #         self.publish_tts_status("tts_playing")
+
+
+    #         # 🆕 TTS 재생 시작과 동시에 자막 시작
+    #         if self.pending_subtitle_data:
+    #             self.get_logger().info("📺 TTS 재생과 동시에 자막 시작")
+    #             self.publish_single_word_subtitle(self.pending_subtitle_data)
+    #             self.pending_subtitle_data = None  # 사용 후 초기화
+                        
+    #         # 🆕 TTS 전용 스펙트럼과 함께 재생
+    #         self.play_tts_with_spectrum(self.reply_path)
+            
+    #         # 재생 완료 신호
+    #         self.publish_tts_status("tts_done")
+    #         # 🔑 모든 자막 종료
+    #         final_data = {
+    #                "word": "",
+    #                 "display_mode": "finished"
+    #             }
+    #         final_msg = String()
+    #         final_msg.data = json.dumps(final_data, ensure_ascii=False)
+    #         self.single_word_publisher.publish(final_msg)
+                
+    #         self.get_logger().info("📺 순차 단일 자막 완료")
+            
+    #         self.get_logger().info("🎵 TTS 오디오 재생 완료")
+    #         self.save_log("🎵 TTS 오디오 재생 완료")
+            
+    #     except Exception as e:
+    #         error_msg = f"❌ TTS 재생 중 오류: {e}"
+    #         self.get_logger().error(error_msg)
+    #         self.save_log(error_msg)
+    #         self.publish_tts_status("tts_error")
+
+
+
     def play_tts_audio(self):
-        """TTS 오디오 재생 (App.jsx에서 요청시) - 스펙트럼 포함"""
+        """TTS 오디오 재생 (App.jsx에서 요청시) - 스펙트럼 포함 + interrupt 지원"""
         try:
+            # 🆕 재생 시작 플래그 설정
+            self.tts_playing = True
+            
             self.get_logger().info("🎵 TTS 오디오 재생 시작")
             self.save_log("🎵 TTS 오디오 재생 시작")
             
             # 재생 시작 신호
             self.publish_tts_status("tts_playing")
 
-            # 🆕 TTS 재생 시작과 동시에 자막 시작
+            # 자막 시작
             if self.pending_subtitle_data:
+                # 🆕 중단 확인
+                if not self.tts_playing:
+                    self.get_logger().info("🛑 TTS 재생이 시작 전에 중단됨")
+                    return
+                    
                 self.get_logger().info("📺 TTS 재생과 동시에 자막 시작")
                 self.publish_single_word_subtitle(self.pending_subtitle_data)
-                self.pending_subtitle_data = None  # 사용 후 초기화
-                
-
-
-
-
-
-
+                self.pending_subtitle_data = None
             
-            # 🆕 TTS 전용 스펙트럼과 함께 재생
+            # 🆕 중단 확인
+            if not self.tts_playing:
+                self.get_logger().info("🛑 TTS 재생이 자막 후 중단됨")
+                return
+            
+            # TTS 스펙트럼과 함께 재생
             self.play_tts_with_spectrum(self.reply_path)
+            
+            # 🆕 중단 확인 - 재생이 정상 완료된 경우만 완료 신호 전송
+            if not self.tts_playing:
+                self.get_logger().info("🛑 TTS 재생이 중간에 중단됨")
+                return
             
             # 재생 완료 신호
             self.publish_tts_status("tts_done")
-            # 🔑 모든 자막 종료
-            final_data = {
-                   "word": "",
-                    "display_mode": "finished"
-                }
+            
+            # 자막 종료
+            final_data = {"word": "", "display_mode": "finished"}
             final_msg = String()
             final_msg.data = json.dumps(final_data, ensure_ascii=False)
             self.single_word_publisher.publish(final_msg)
-                
-            self.get_logger().info("📺 순차 단일 자막 완료")
             
+            self.get_logger().info("📺 순차 단일 자막 완료")
             self.get_logger().info("🎵 TTS 오디오 재생 완료")
             self.save_log("🎵 TTS 오디오 재생 완료")
             
@@ -1921,6 +2036,15 @@ class Mp3Player(Node):
             self.get_logger().error(error_msg)
             self.save_log(error_msg)
             self.publish_tts_status("tts_error")
+            
+        finally:
+            # 🆕 항상 플래그 초기화
+            self.tts_playing = False
+
+
+
+
+
 
     def play_tts_with_spectrum(self, file_path):
         """TTS 전용 전체 음량 기반 스펙트럼과 함께 재생"""
@@ -1945,8 +2069,55 @@ class Mp3Player(Node):
 
 
 
+    # def tts_publish_and_play(self, wav_path):
+    #     """TTS 재생 시간 정보만 퍼블리시 (음량 정보 제거)"""
+    #     wf = wave.open(wav_path, 'rb')
+    #     chunk_size = 1024
+    #     frame_rate = wf.getframerate()
+    #     start_time = time.time()
+
+    #     def publish_tts_time_only():
+    #         data = wf.readframes(chunk_size)
+            
+    #         while data:
+    #             current_time = round(time.time() - start_time, 3)
+                
+    #             # 🔑 음량 정보 완전 제거 - 시간 정보만 전송
+    #             time_data = {
+    #                 "current_time": current_time,
+    #                 "status": "playing",
+    #                 "timestamp": time.time()
+    #             }
+
+    #             msg = String()
+    #             msg.data = json.dumps(time_data)
+    #             self.tts_spectrum_publisher.publish(msg)
+                
+    #             data = wf.readframes(chunk_size)
+    #             time.sleep(chunk_size / frame_rate)
+            
+    #         # 재생 완료 신호
+    #         final_data = {
+    #             "current_time": current_time,
+    #             "status": "finished",
+    #             "timestamp": time.time()
+    #         }
+    #         msg = String()
+    #         msg.data = json.dumps(final_data)
+    #         self.tts_spectrum_publisher.publish(msg)
+
+    #     time_thread = threading.Thread(target=publish_tts_time_only)
+    #     time_thread.start()
+    #     os.system(f"aplay {wav_path}")
+    #     time_thread.join()
+    #     wf.close()
+
+
+
+
+
     def tts_publish_and_play(self, wav_path):
-        """TTS 재생 시간 정보만 퍼블리시 (음량 정보 제거)"""
+        """TTS 재생 시간 정보만 퍼블리시 (음량 정보 제거) + interrupt 지원"""
         wf = wave.open(wav_path, 'rb')
         chunk_size = 1024
         frame_rate = wf.getframerate()
@@ -1955,10 +2126,10 @@ class Mp3Player(Node):
         def publish_tts_time_only():
             data = wf.readframes(chunk_size)
             
-            while data:
+            while data and self.tts_playing:  # 🆕 중단 플래그 확인
                 current_time = round(time.time() - start_time, 3)
                 
-                # 🔑 음량 정보 완전 제거 - 시간 정보만 전송
+                # 시간 정보만 전송
                 time_data = {
                     "current_time": current_time,
                     "status": "playing",
@@ -1972,6 +2143,11 @@ class Mp3Player(Node):
                 data = wf.readframes(chunk_size)
                 time.sleep(chunk_size / frame_rate)
             
+            # 🆕 중단 여부 확인
+            if not self.tts_playing:
+                self.get_logger().info("🛑 TTS 스펙트럼 퍼블리시 중단됨")
+                return
+            
             # 재생 완료 신호
             final_data = {
                 "current_time": current_time,
@@ -1982,12 +2158,36 @@ class Mp3Player(Node):
             msg.data = json.dumps(final_data)
             self.tts_spectrum_publisher.publish(msg)
 
-        time_thread = threading.Thread(target=publish_tts_time_only)
+        time_thread = threading.Thread(target=publish_tts_time_only, daemon=True)  # 🆕 daemon으로 설정
         time_thread.start()
-        os.system(f"aplay {wav_path}")
-        time_thread.join()
+        
+        # 🆕 aplay를 subprocess로 실행하여 중단 가능하게 변경
+        import subprocess
+        
+        try:
+            # subprocess로 aplay 실행
+            process = subprocess.Popen(
+                ['aplay', wav_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            
+            # 🆕 주기적으로 중단 플래그 확인
+            while process.poll() is None:  # 프로세스가 실행 중일 때
+                if not self.tts_playing:
+                    self.get_logger().info("🛑 TTS 재생 프로세스 강제 종료")
+                    process.terminate()  # 프로세스 종료
+                    time.sleep(0.1)
+                    if process.poll() is None:  # 종료되지 않으면 강제 kill
+                        process.kill()
+                    break
+                time.sleep(0.1)  # 100ms마다 확인
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ aplay 실행 오류: {e}")
+        
+        time_thread.join(timeout=1.0)  # 최대 1초 대기
         wf.close()
-
 
 
 
