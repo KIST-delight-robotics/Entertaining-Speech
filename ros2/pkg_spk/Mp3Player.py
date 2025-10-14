@@ -37,7 +37,7 @@ class Mp3Player(Node):
 
         # 파일 경로
         self.file_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_plus"
-        self.reply_path = "/home/nvidia/ros2_ws/src/pkg_spk/pkg_spk/reply.mp3"
+        self.reply_path = "/home/nvidia/ros2_ws/src/pkg_spk/pkg_spk/reply.wav"
         self.api_key = "sk_fdb1ba8706bb125cb308ae613f58105e23e26a89d127a4cd"
 
 
@@ -1036,7 +1036,7 @@ class Mp3Player(Node):
         """waiting 파일을 스펙트럼 시각화와 함께 재생 (UserQuestion.py와 동일한 방식)"""
         try:
             # pydub으로 MP3 로드 및 정규화 (UserQuestion.py와 동일)
-            sound = AudioSegment.from_file(file_path, format="mp3")
+            sound = AudioSegment.from_file(file_path, format="wav")
             
             # # 정규화 (UserQuestion.py와 동일)
             # target_dBFS = -14.0
