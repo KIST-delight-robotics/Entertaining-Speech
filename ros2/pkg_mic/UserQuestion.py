@@ -668,7 +668,7 @@ class UserQuestion(Node):
             "volume": "0",      # 볼륨 (-5 ~ 5)
             "speed": "0",       # 속도 (-5 ~ 5)  
             "pitch": "0",       # 음높이 (-5 ~ 5)
-            "format": "wav",    # 출력 포맷 (mp3, wav, ogg)
+            "format": "wav",    # 출력 포맷을 wav로 변경
             "text": text
         }
 
@@ -677,20 +677,16 @@ class UserQuestion(Node):
             response = requests.post(url, headers=headers, data=data)
             
             if response.status_code == 200:
-                # WAV 파일로 직접 저장
-                wav_path = "/tmp/question_confirm_for_stt.wav"
+                # WAV 파일로 직접 저장 (확장자 변경)
+                wav_path = "/home/nvidia/ros2_ws/src/pkg_mic/pkg_mic/question_confirm.wav"
                 with open(wav_path, "wb") as f:
-                    f.write(response.content)
-                
-                # 원본 파일도 WAV로 저장 (필요시)
-                with open(self.question_confirm_path, "wb") as f:
                     f.write(response.content)
                 
                 generation_time = time.time() - start_time    
                 self.get_logger().info(f"🟢 질문 확인 TTS 생성 성공 (Naver Clova) → {wav_path}")
                 self.get_logger().info(f"⏱️ TTS 생성 시간: {generation_time:.3f}초")
-                
-                # 🆕 타임스탬프 추출
+
+                # 🆕 타임스탬프 추출 (WAV 변환 과정 생략)
                 stt_timestamps = self.extract_question_confirm_timestamps(wav_path, text)
                 
                 # 🆕 원본 텍스트와 병합
@@ -702,6 +698,9 @@ class UserQuestion(Node):
                     "words": corrected_timestamps,
                     "total_duration": corrected_timestamps[-1]["end"] if corrected_timestamps else 0
                 }
+
+                # 🆕 재생용 파일 경로 업데이트
+                self.question_confirm_path = wav_path
 
                 return True
             else:
@@ -756,7 +755,7 @@ class UserQuestion(Node):
                 
 
 
-                # ✅ Mp3Player와 동일한 정규화 적용
+                # ✅ Mp3Player와 동일한 정규화 적용 (WAV 파일 직접 처리)
                 sound = AudioSegment.from_file(audio_path, format="wav")
                 
                 # ✅ -14.0 dBFS로 정규화 (Mp3Player와 동일)
@@ -766,7 +765,7 @@ class UserQuestion(Node):
                 
 
 
-                # ✅ 정규화된 오디오를 WAV로 변환하여 임시 파일로 저장
+                # ✅ 정규화된 오디오를 임시 WAV 파일로 저장
                 temp_wav = "/tmp/question_confirm_normalized.wav"
                 sound.export(temp_wav, format="wav")
 
@@ -782,6 +781,7 @@ class UserQuestion(Node):
                 
             except Exception as e:
                 self.get_logger().error(f"❌ TTS 재생 실패: {e}")
+            finally:
                 self.question_confirm_playing = False
                 # 재생 완료 상태 퍼블리시
                 self.publish_question_confirm_status("completed")
