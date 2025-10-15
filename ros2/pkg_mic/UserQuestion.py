@@ -1,5 +1,4 @@
 
-
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -285,7 +284,13 @@ class UserQuestion(Node):
         self.question_processing = False  # 질문 처리 중 플래그
         self.waiting_for_tts = False      # TTS 시작 대기 중 플래그
 
+        # 🆕 STT 재시작 관련 플래그 추가 (명시적 초기화)
+        self._restarting_stt = False      # STT 재시작 중 플래그
+        self._starting_stream = False     # 오디오 스트림 시작 중 플래그
         
+        # 🆕 추가 안전장치: 재시작 카운터
+        self._restart_count = 0           # 재시작 시도 횟수
+        self._max_restart_attempts = 3   # 최대 재시작 시도 횟수
 
         # 🆕 partial 텍스트 실시간 퍼블리시용 추가
         self.partial_text_pub = self.create_publisher(String, "/partial_text", 10)
@@ -928,7 +933,7 @@ class UserQuestion(Node):
             self.get_logger().info("🧹 모든 버퍼 초기화 완료")
             
             # 8. 잠시 대기 후 새로운 오디오 스트림 시작
-            time.sleep(0.5)  # 시스템 안정화 대기
+         #   time.sleep(0.5)  # 시스템 안정화 대기
             
             # 9. 새로운 오디오 스트림 시작
             self.start_audio_stream()
@@ -1032,10 +1037,27 @@ class UserQuestion(Node):
 
     def start_audio_stream(self):
         """Google STT API와 함께 오디오 스트림 시작"""
-        self.get_logger().info("Starting microphone stream (continuous)...")
-        self.stop_audio_stream()
+        self.get_logger().info("🔄 마이크 스트림 시작...")
+        
+        # ✅ 중복 실행 방지
+        if hasattr(self, '_starting_stream') and self._starting_stream:
+            self.get_logger().warning("오디오 스트림 시작이 이미 진행 중입니다.")
+            return
+            
+        self._starting_stream = True
         
         try:
+            # ✅ 기존 스트림 완전 정리
+            self.stop_audio_stream()
+          #  time.sleep(1.0)  # 정리 대기
+            
+            # ✅ PyAudio 객체 확인 및 재생성
+            if not hasattr(self, 'p') or self.p is None:
+                self.get_logger().info("PyAudio 객체 생성 중...")
+                self.p = pyaudio.PyAudio()
+            
+            # ✅ 새로운 스트림 생성
+            self.get_logger().info("새로운 오디오 스트림 생성 중...")
             self.stream = self.p.open(
                 format=pyaudio.paInt16,
                 channels=1,
@@ -1046,28 +1068,38 @@ class UserQuestion(Node):
                 stream_callback=self.audio_callback
             )
             
-            time.sleep(0.5)  # 스트림 안정화 대기
+           # time.sleep(2.0)  # 스트림 안정화 대기 시간 증가
             
-            # ✅ transcribing 상태 확인 후 한 번만 시작
+            # ✅ STT 스레드 시작
             if not self.transcribing:
+                self.get_logger().info("STT 스레드 시작 중...")
                 threading.Thread(target=self.transcribe_streaming, daemon=True).start()
+                self.get_logger().info("✅ STT 스레드 시작 완료")
             else:
                 self.get_logger().warning("STT already running during start_audio_stream")
                 
         except Exception as e:
-            self.get_logger().error(f"Failed to start microphone stream: {e}")
-            self.get_logger().info("Retrying microphone stream in 1 second...")
-            time.sleep(1)
-            self.start_audio_stream()
+            self.get_logger().error(f"❌ 마이크 스트림 시작 실패: {e}")
+            self.get_logger().info("5초 후 재시도...")
+            time.sleep(5)  # 재시도 간격 증가
+            self._starting_stream = False
+            threading.Timer(3.0, self.start_audio_stream).start()
+        finally:
+            self._starting_stream = False
 
 
     def stop_audio_stream(self):
         """ ✅ 마이크 입력 스트리밍 중지 함수 추가 """
         if self.stream is not None:
-            self.get_logger().info("Stopping microphone stream...")
-            self.stream.stop_stream()
-            self.stream.close()
-            self.stream = None
+            try:
+                self.get_logger().info("Stopping microphone stream...")
+                self.stream.stop_stream()
+                self.stream.close()
+                self.stream = None
+            #    time.sleep(0.5)  # 스트림 종료 안정화 대기
+            except Exception as e:
+                self.get_logger().error(f"오디오 스트림 종료 중 오류: {e}")
+                self.stream = None
 
 
 
@@ -1117,15 +1149,55 @@ class UserQuestion(Node):
             # ✅ Exception 발생 즉시 플래그 초기화
             self.transcribing = False
             
-            # Timeout 오류 특별 처리
-            if "Audio Timeout Error" in str(e):
-                self.get_logger().error("Audio Timeout detected - forcing complete restart")
-                time.sleep(1.0)  # 더 긴 대기 시간
-            
-            self.force_restart_stt()
+            # ✅ 타임아웃 오류 특별 처리
+            if "Audio Timeout Error" in str(e) or "maximum allowed stream duration" in str(e):
+                self.get_logger().error("STT 타임아웃 감지 - 완전 재시작")
+                
+                # ✅ 재시작 중복 방지 플래그 확인 및 설정
+                if not hasattr(self, '_restarting_stt') or not self._restarting_stt:
+                    self._restarting_stt = True
+                    self.get_logger().info("🔄 지연된 재시작 스케줄링...")
+                    threading.Timer(2.0, self._delayed_restart).start()
+                else:
+                    self.get_logger().warning("이미 재시작이 진행 중입니다.")
+            else:
+                # 일반 오류는 즉시 재시작
+                self.get_logger().info("일반 오류 - 즉시 재시작")
+                self.force_restart_stt()
         finally:
             # ✅ 반드시 플래그 초기화
             self.transcribing = False
+
+    def _delayed_restart(self):
+        """지연된 STT 재시작 함수"""
+        try:
+            self.get_logger().info("🔄 지연된 STT 재시작 시작")
+            
+            # ✅ 강제로 모든 상태 초기화
+            self.transcribing = False
+            self._restarting_stt = False
+            self._starting_stream = False
+            
+            # ✅ 트리거워드 대기 상태로 초기화
+            self.trigger_detected = False
+            self.waiting_for_input_after_music = False
+            self.partial_transcript = ""
+            self.force_published = False
+            
+            # ✅ 완전한 재시작 실행
+            self.force_restart_stt()
+            
+            self.get_logger().info("✅ 지연된 STT 재시작 완료")
+            
+        except Exception as e:
+            self.get_logger().error(f"❌ 지연된 재시작 실패: {e}")
+            # 비상 복구: 플래그 강제 해제 후 재시도
+            self._restarting_stt = False
+            self._starting_stream = False
+            threading.Timer(5.0, self.force_restart_stt).start()
+        finally:
+            # 재시작 플래그 해제
+            self._restarting_stt = False
 
                 
 
@@ -1375,7 +1447,8 @@ class UserQuestion(Node):
                         self.partial_transcript = txt
 
                 # ── 3) 무음 3초 후 퍼블리시 시점 ──
-                if is_final and self.partial_transcript.strip():
+                # ✅ 트리거워드가 감지된 상태에서만 퍼블리시 허용
+                if is_final and self.partial_transcript.strip() and self.trigger_detected:
                     try:
                         if self.waiting_sequence_running:
                             self.get_logger().info("이미 대기 시퀀스가 실행 중입니다.")
@@ -1437,8 +1510,8 @@ class UserQuestion(Node):
                     self.force_published = False  # 플래그 리셋
                     break
 
-                # 🔥 무음 시간 동안 텍스트가 있는지 최종 확인
-                if self.partial_transcript.strip():
+                # 🔥 무음 시간 동안 텍스트가 있는지 최종 확인 (트리거워드 조건 추가)
+                if self.partial_transcript.strip() and self.trigger_detected:
                     self.get_logger().info(f"무음성 3초 경과 전 텍스트 감지: {self.partial_transcript}")
                     self.publish_transcription(self.partial_transcript)
                     self.last_published_text = self.partial_transcript
@@ -1469,7 +1542,7 @@ class UserQuestion(Node):
                         self.partial_transcript = ""
                         self.after_prompt = False  # 상태 초기화
                         break
-                    else:
+                    elif self.trigger_detected:  # ✅ 트리거워드 조건 추가
                         self.get_logger().info(f"종료음 후 추가 무음 {self.silence_seconds}초 경과 (음성 감지)")
                         self.get_logger().info("종료음 재생 후 3초 경과로 인해 강제 publish")
                         self.publish_transcription(self.partial_transcript)
@@ -1789,17 +1862,27 @@ class UserQuestion(Node):
 
 
     def force_restart_stt(self):
-        self.get_logger().info("Forcing STT restart...")
+        self._restart_count += 1
+        self.get_logger().info(f"🔄 STT 강제 재시작 시작... (시도 {self._restart_count}/{self._max_restart_attempts})")
         
-        # ✅ 가장 중요: transcribing 플래그 즉시 초기화
+        # ✅ 재시작 횟수 제한 확인
+        if self._restart_count > self._max_restart_attempts:
+            self.get_logger().error(f"❌ 최대 재시작 시도 횟수 초과 ({self._max_restart_attempts}회)")
+            self.get_logger().info("🔄 재시작 카운터 리셋 후 재시도...")
+            self._restart_count = 0
+            time.sleep(10.0)  # 10초 대기 후 재시도
+        
+        # ✅ 모든 플래그 강제 초기화
         self.transcribing = False
+        self._restarting_stt = False
+        self._starting_stream = False
         
         # 기존 상태 완전 초기화
         self.processing = False
         self.last_published_text = ""
         self.partial_transcript = ""
-        self.trigger_detected = True
-        self.waiting_for_input_after_music = True
+        self.trigger_detected = False  # ✅ 트리거워드 대기 상태로 초기화
+        self.waiting_for_input_after_music = False  # ✅ 입력 대기 상태 해제
         self.force_published = False
         self.ignore_stt = False
         self.is_sound_playing = False
@@ -1812,13 +1895,59 @@ class UserQuestion(Node):
             except queue.Empty:
                 break
         
-        # 짧은 지연 후 재시작 (기존 세션 완전 종료 대기)
-        time.sleep(0.5)
-        self.start_audio_stream()
+        # ✅ 추가: 시각화 큐도 완전 정리
+        while not self.visualizer_queue.empty():
+            try:
+                self.visualizer_queue.get_nowait()
+            except queue.Empty:
+                break
         
-        self.start_30s_timer()
-        self.get_logger().info("TTS 완료 후 STT 재시작 - 완료")
-        self.save_log("TTS 완료 후 STT 재시작 - 완료")
+        # ✅ 추가: 스펙트럼 관련 버퍼 초기화
+        self.spectrum_buffer = []
+        self.spectrum_count = 0
+        self.voice_spectrum.reset()
+        
+        # ✅ 추가: 무음 감지 스레드 정리
+        if hasattr(self, 'silence_monitoring_thread') and self.silence_monitoring_thread.is_alive():
+            self.get_logger().info("기존 무음 감지 스레드 정리 중...")
+        
+        # ✅ 추가: 30초 타이머 정리
+        if self.timer_30s and self.timer_30s.is_alive():
+            self.timer_30s.cancel()
+        
+        # ✅ 추가: 대기 시퀀스 상태 초기화
+        self.waiting_sequence_running = False
+        
+        # ✅ PyAudio 객체 완전 재생성
+        try:
+            if hasattr(self, 'p') and self.p is not None:
+                self.p.terminate()
+            self.p = pyaudio.PyAudio()
+            self.get_logger().info("✅ PyAudio 객체 재생성 완료")
+        except Exception as e:
+            self.get_logger().error(f"❌ PyAudio 재생성 실패: {e}")
+        
+        # ✅ 더 긴 지연 시간으로 안정화 대기
+    #    time.sleep(3.0)  # 2초에서 3초로 증가
+        
+        # ✅ 새로운 STT 세션 시작
+        try:
+            self.get_logger().info("🔄 새로운 오디오 스트림 시작...")
+            self.start_audio_stream()
+            self.start_30s_timer()
+            
+            # ✅ 성공적인 재시작 시 카운터 리셋
+            self._restart_count = 0
+            self.get_logger().info("✅ STT 강제 재시작 완료")
+            self.save_log("✅ STT 강제 재시작 완료")
+            
+            # ✅ 트리거워드 대기 상태 퍼블리시
+            self.publish_trigger_status()
+        except Exception as e:
+            self.get_logger().error(f"❌ STT 재시작 실패: {e}")
+            # 비상 복구: 더 긴 대기 후 재시도
+            time.sleep(5.0)
+            threading.Timer(10.0, self.force_restart_stt).start()
 
 
 
