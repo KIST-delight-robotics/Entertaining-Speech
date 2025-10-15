@@ -1,5 +1,4 @@
 
-
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
@@ -164,11 +163,69 @@ const [showQuestionConfirmSubtitle, setShowQuestionConfirmSubtitle] = useState(f
 
 
 
- // 🆕 질문확인 자막 렌더링 함수
+ // 🆕 질문확인 자막 렌더링 함수 (화면 크기 비례 조정 추가)
  const renderQuestionConfirmSubtitle = () => {
   if (!showQuestionConfirmSubtitle || questionConfirmStatus !== 'playing') {
     return null;
   }
+
+  // 🆕 화면 크기에 맞는 글자 크기 계산 함수 (질문확인용)
+  const calculateQuestionConfirmFontSize = (text) => {
+    if (!text || text.length === 0) return '12rem';
+    
+    const screenWidth = window.innerWidth || 1112;
+    const screenHeight = window.innerHeight || 532;
+    
+    // 🆕 기준 화면 크기 (원래 크기)
+    const baseWidth = 1112;
+    const baseHeight = 532;
+    
+    // 🆕 화면 크기 비율 계산 (작은 쪽 기준)
+    const widthRatio = screenWidth / baseWidth;
+    const heightRatio = screenHeight / baseHeight;
+    const screenRatio = Math.min(widthRatio, heightRatio); // 작은 쪽 비율 사용
+    
+    console.log(`📐 질문확인 화면 비율 계산: width=${widthRatio.toFixed(2)}, height=${heightRatio.toFixed(2)}, ratio=${screenRatio.toFixed(2)}`);
+    
+    const maxWidth = screenWidth * 0.9; // 화면 너비의 90% 사용
+    const maxHeight = screenHeight * 0.8; // 화면 높이의 80% 사용
+    
+    // 🆕 기본 글자 크기 (화면 비율 적용) - 더 큰 크기로 설정
+    let fontSize = 12 * screenRatio; // 기본 크기를 12rem으로 증가
+    
+    // 텍스트 길이에 따른 기본 크기 조정 (화면 비율 고려)
+    if (text.length <= 3) {
+      fontSize = 12 * screenRatio; // 더 큰 기본 크기
+    } else if (text.length <= 6) {
+      fontSize = 10 * screenRatio;
+    } else if (text.length <= 10) {
+      fontSize = 8 * screenRatio;
+    } else if (text.length <= 15) {
+      fontSize = 6 * screenRatio;
+    } else {
+      fontSize = 5 * screenRatio; // 더 큰 최소 크기
+    }
+    
+    // 화면 너비 기준으로 추가 조정
+    const estimatedTextWidth = text.length * fontSize * 0.6; // 대략적인 텍스트 너비 계산
+    if (estimatedTextWidth > maxWidth) {
+      fontSize = (maxWidth / text.length) / 0.6;
+    }
+    
+    // 화면 높이 기준으로 추가 조정
+    if (fontSize > maxHeight / 2) {
+      fontSize = maxHeight / 2;
+    }
+    
+    // 🆕 최소 크기 보장 (화면 비율 고려) - 더 큰 최소 크기
+    fontSize = Math.max(2.5 * screenRatio, fontSize);
+    
+    console.log(`📏 질문확인 텍스트 길이: ${text.length}, 화면 비율: ${screenRatio.toFixed(2)}, 계산된 글자 크기: ${fontSize.toFixed(1)}rem`);
+    return `${fontSize}rem`;
+  };
+
+  const text = questionConfirmSubtitle ? questionConfirmSubtitle.word : '';
+  const optimalFontSize = calculateQuestionConfirmFontSize(text);
 
   return (
     <div style={{
@@ -187,21 +244,24 @@ const [showQuestionConfirmSubtitle, setShowQuestionConfirmSubtitle] = useState(f
       <div style={{
         maxWidth: '90vw',
         textAlign: 'center',
-        padding: '40px 20px'
+        padding: '20px',
+        overflow: 'hidden' // 넘치는 텍스트 숨김 방지
       }}>
         {/* 질문확인 단어 표시 */}
         <div style={{
-          fontSize: '9rem',
+          fontSize: optimalFontSize,
           fontWeight: 'bold',
           color: '#FFFFFF',
           textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
-          minHeight: '6rem',
+          minHeight: '4rem',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          letterSpacing: '0.05em'
+          letterSpacing: '0.05em',
+          whiteSpace: 'nowrap', // 텍스트를 한 줄로 유지
+          overflow: 'visible' // 넘치는 부분도 표시
         }}>
-          {questionConfirmSubtitle ? questionConfirmSubtitle.word : ''}
+          {text}
         </div>
       </div>
     </div>
@@ -448,20 +508,89 @@ const renderSingleWordSubtitle = () => {
     return null;
   }
 
+  // 🆕 화면 크기에 맞는 글자 크기 계산 함수 (비례적 조정)
+  const calculateOptimalFontSize = (text) => {
+    if (!text || text.length === 0) return '10rem';
+    
+    const screenWidth = window.innerWidth || 1112;
+    const screenHeight = window.innerHeight || 532;
+    
+    // 🆕 기준 화면 크기 (원래 크기)
+    const baseWidth = 1112;
+    const baseHeight = 532;
+    
+    // 🆕 화면 크기 비율 계산 (작은 쪽 기준)
+    const widthRatio = screenWidth / baseWidth;
+    const heightRatio = screenHeight / baseHeight;
+    const screenRatio = Math.min(widthRatio, heightRatio); // 작은 쪽 비율 사용
+    
+    console.log(`📐 화면 비율 계산: width=${widthRatio.toFixed(2)}, height=${heightRatio.toFixed(2)}, ratio=${screenRatio.toFixed(2)}`);
+    
+    const maxWidth = screenWidth * 0.9; // 화면 너비의 90% 사용
+    const maxHeight = screenHeight * 0.8; // 화면 높이의 80% 사용
+    
+    // 🆕 기본 글자 크기 (화면 비율 적용)
+    let fontSize = 10 * screenRatio; // 기본 크기에 화면 비율 적용
+    
+    // 텍스트 길이에 따른 기본 크기 조정 (화면 비율 고려)
+    if (text.length <= 3) {
+      fontSize = 10 * screenRatio;
+    } else if (text.length <= 6) {
+      fontSize = 8 * screenRatio;
+    } else if (text.length <= 10) {
+      fontSize = 6 * screenRatio;
+    } else if (text.length <= 15) {
+      fontSize = 4 * screenRatio;
+    } else {
+      fontSize = 3 * screenRatio;
+    }
+    
+    // 화면 너비 기준으로 추가 조정
+    const estimatedTextWidth = text.length * fontSize * 0.6; // 대략적인 텍스트 너비 계산
+    if (estimatedTextWidth > maxWidth) {
+      fontSize = (maxWidth / text.length) / 0.6;
+    }
+    
+    // 화면 높이 기준으로 추가 조정
+    if (fontSize > maxHeight / 2) {
+      fontSize = maxHeight / 2;
+    }
+    
+    // 🆕 최소 크기 보장 (화면 비율 고려)
+    fontSize = Math.max(1.5 * screenRatio, fontSize);
+    
+    console.log(`📏 텍스트 길이: ${text.length}, 화면 비율: ${screenRatio.toFixed(2)}, 계산된 글자 크기: ${fontSize.toFixed(1)}rem`);
+    return `${fontSize}rem`;
+  };
+
   // 🔑 핵심: 원본 텍스트 기반으로 부분별 하이라이트
   const renderHighlightedWord = () => {
     console.log('🔍 자막 데이터 상세:', singleWordSubtitle);
 
     if (!singleWordSubtitle || !singleWordSubtitle.morpheme_info) {
-      return singleWordSubtitle?.segment || '';
+      const text = singleWordSubtitle?.segment || '';
+      const fontSize = calculateOptimalFontSize(text);
+      
+      return (
+        <div style={{ fontSize: fontSize }}>
+          {text}
+        </div>
+      );
     }
 
     const originalWord = singleWordSubtitle.morpheme_info.original_word;
     const highlightRanges = singleWordSubtitle.morpheme_info.highlight_ranges || [];
     
+    // 전체 텍스트에 대한 최적 글자 크기 계산
+    const optimalFontSize = calculateOptimalFontSize(originalWord);
+    
     if (!highlightRanges || highlightRanges.length === 0) {
       console.log('⚠️ highlight_ranges가 없음 - 기본 표시');
-      return originalWord;
+      return (
+        <div style={{ fontSize: optimalFontSize }}>
+          {originalWord}
+        </div>
+      );
     }
 
     console.log('🔍 하이라이트 범위들:', highlightRanges);
@@ -512,7 +641,11 @@ const renderSingleWordSubtitle = () => {
     }
 
     console.log('🎨 렌더링 부분들:', parts.length);
-    return parts;
+    return (
+      <div style={{ fontSize: optimalFontSize }}>
+        {parts}
+      </div>
+    );
   };
 
   return (
@@ -532,17 +665,19 @@ const renderSingleWordSubtitle = () => {
       <div style={{
         maxWidth: '90vw',
         textAlign: 'center',
-        padding: '40px 20px'
+        padding: '20px',
+        overflow: 'hidden' // 넘치는 텍스트 숨김 방지
       }}>
         <div style={{
-          fontSize: '10rem',
           fontWeight: 'bold',
           textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
-          minHeight: '8rem',
+          minHeight: '4rem',
           display: 'flex',
           alignItems: 'center', 
           justifyContent: 'center',
-          letterSpacing: '0.05em'
+          letterSpacing: '0.05em',
+          whiteSpace: 'nowrap', // 텍스트를 한 줄로 유지
+          overflow: 'visible' // 넘치는 부분도 표시
         }}>
           {renderHighlightedWord()}
         </div>
@@ -2269,5 +2404,4 @@ const getScreenTransform = () => {
 }
 
 export default SpectrumVisualizer;
-
 
