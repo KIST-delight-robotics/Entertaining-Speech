@@ -1,4 +1,5 @@
 
+
 from __future__ import annotations
 
 # ────────────────────────────────────────────────────────────────
@@ -1666,24 +1667,22 @@ class UserQuestion(Node):
 
 
     # 🔧 수정된 대기 효과 실행 함수
-    def play_effect_sound_waiting_1(self):
-        """GPT-4.1 nano + ElevenLabs TTS 방식으로 질문 확인"""
+    def play_effect_sound_waiting_1(self, question_text):
+        """GPT-4.1 nano + ElevenLabs TTS 방식으로 질문 확인 (질문 텍스트를 매개변수로 받음)"""
         try:
-            # 1. 발행된 질문 텍스트 확인
-            if not hasattr(self, 'last_published_text') or not self.last_published_text:
-                self.get_logger().warning("발행된 질문이 없습니다.")
+            # 1. 매개변수로 받은 질문 텍스트 확인
+            if not question_text or not question_text.strip():
+                self.get_logger().warning("전달된 질문 텍스트가 없습니다.")
                 return
 
-            # 2. 순수 질문 텍스트 추출
-            question_text = self.extract_question_from_published_text(self.last_published_text)
-            
+            self.get_logger().info(f"✅ 질문 확인 처리 시작: {question_text.strip()}")
 
-            # 4. GPT-4.1 nano로 질문 확인 문구 생성
-            confirmation_text = self.generate_question_confirmation(question_text)
+            # 2. GPT-4.1 nano로 질문 확인 문구 생성
+            confirmation_text = self.generate_question_confirmation(question_text.strip())
             
-            # 5. ElevenLabs TTS로 음성 생성
+            # 3. ElevenLabs TTS로 음성 생성
             if self.text2speech_question_confirm(confirmation_text):
-                # 6. TTS 재생 (완료 시 자동으로 상태 퍼블리시됨)
+                # 4. TTS 재생 (완료 시 자동으로 상태 퍼블리시됨)
                 self.play_question_confirm_tts(self.question_confirm_path)
             else:
                 self.get_logger().error("❌ TTS 생성 실패")
@@ -1784,17 +1783,17 @@ class UserQuestion(Node):
 
 
 
-            # 🆕 플래그 설정 후 실행
+            # 🆕 플래그 설정 후 실행 - 질문 텍스트를 매개변수로 전달
             self.waiting_sequence_running = True
-            threading.Thread(target=self.execute_waiting_sequence, daemon=False).start()    
+            threading.Thread(target=self.execute_waiting_sequence, args=(text,), daemon=False).start()    
 
 
   
 
     
 
-    def execute_waiting_sequence(self):
-        """대기 효과 실행 - 간소화된 버전"""
+    def execute_waiting_sequence(self, question_text):
+        """대기 효과 실행 - 간소화된 버전 (질문 텍스트를 매개변수로 받음)"""
         try:
             if not self.waiting_sequence_running:
                 self.get_logger().info("대기 시퀀스가 이미 완료되었습니다.")
@@ -1802,8 +1801,8 @@ class UserQuestion(Node):
                     
             self.get_logger().info("즉시 Realtime 시퀀스 시작")
             
-            # 🚀 즉시 Realtime 실행 (TTS 과정 생략)
-            self.play_effect_sound_waiting_1()
+            # 🚀 즉시 Realtime 실행 (TTS 과정 생략) - 질문 텍스트 전달
+            self.play_effect_sound_waiting_1(question_text)
             
             self.get_logger().info("Realtime 시퀀스 완료")
             
