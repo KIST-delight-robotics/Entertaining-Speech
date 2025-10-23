@@ -11,40 +11,28 @@ from datetime import datetime
 import numpy as np
 import torch
 import pyaudio
-import webrtcvad
-import soundfile as sf
-import tempfile
+
 from rclpy.node import Node
-from rclpy.callback_groups import ReentrantCallbackGroup
+
 from rclpy.executors import MultiThreadedExecutor
 from google.cloud import speech
 from dotenv import load_dotenv
 import pygame
 import rclpy
 from rclpy.node import Node
-import simpleaudio as sa
 from pydub import AudioSegment
 from pydub.playback import play
 import json
 from std_msgs.msg import String, Float32
-import librosa
-import librosa.display
-from scipy import ndimage 
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
-from scipy import signal
-import matplotlib.pyplot as plt
-import webbrowser
+
 from openpyxl import Workbook
 from datetime import datetime
-import csv
 
 # 기존 imports에 추가
 import requests  # TTS API 호출용
 
-import websockets
 import asyncio
 from openai import AsyncOpenAI
-import base64
 from openai import OpenAI
 
 
@@ -140,19 +128,12 @@ class UserQuestion(Node):
         self.gif_status_pub = self.create_publisher(String, "/gif_status", 10)
    
         
-
-        # self.create_subscription(
-        #     String, "processing_done", self.processing_done_callback, 10
-        # )
         self.processing_subscription = self.create_subscription(String, "processing_done", self.processing_done_callback, 10)
-        # self.music_status_subscription = self.create_subscription(String, "music_status", self.music_status_callback, 10)
+
         self.stt_restart_subscription = self.create_subscription(String, "stt_restart", self.stt_restart_callback, 10)
        
 
-        self.spectrum_frame_counter = 0
-        self.spectrum_skip_rate = 2  # 2프레임마다 1번만 처리
-
-
+    
         # 상태 변수
         self.audio_stream = queue.Queue()
         self.audio_buffer = []  
@@ -180,8 +161,7 @@ class UserQuestion(Node):
         # PyAudio 세팅 (16 kHz mono)
         self.p = pyaudio.PyAudio()
       
-        self.device_index = 24
-        
+
         self.stream = None
 
         # 마이크 스트리밍 시작
@@ -196,14 +176,11 @@ class UserQuestion(Node):
         self.is_speaking = False  # STT 인식 중인지 여부
         self.current_speaker_id = 1  # 최초 화자 id 1로 시작
         # 음성 강조 스펙트럼 시각화를 위한 변수 추가
-        self.baseline_spectrum = None
-        self.spectrum_history = []
-        self.history_size = 50
+   
+   
+    
         self.sample_rate = 16000
         
-        # 주파수 계산을 위한 변수
-        self.fft_size = 1024
-        self.freqs = np.fft.fftfreq(self.fft_size, 1/self.sample_rate)[:self.fft_size//2]
 
         # 🆕 현재 각도 저장 및 고정 각도 퍼블리시용
         self.current_direction = 0.0
@@ -223,15 +200,7 @@ class UserQuestion(Node):
         self.waiting_sequence_running = False
 
 
-     
-
-        # 스펙트럼 평균화를 위한 변수들 (기존 변수들과 함께 추가)
-        self.spectrum_buffer = []  # 5개의 스펙트럼을 저장할 버퍼
-        self.spectrum_count = 0    # 현재 누적된 스펙트럼 개수
-
-
-
-            
+             
 
 
 
@@ -615,12 +584,13 @@ class UserQuestion(Node):
                     {
                         "role": "system",
                         "content": (
+                            "Keep responses must 1 sentences in Korean. "
                             "You are Dangdang, a snarky robotic dog at KIST with a dry sense of humor. "
                             "A human just asked you something. Your job is to acknowledge their question "
                             "in a slightly grumpy, witty way while showing you're reluctantly going to help them find the answer. "
                             "You have a sense of superiority as a robot but still help humans despite finding them amusing. "
                             "Never give the actual answer - only acknowledge the question and indicate you'll look into it. "
-                            "Keep responses 2-3 sentences in Korean. "
+                            
             
                             "Sound like a grumpy but loyal friend who pretends not to care but always has your back."
                         )
@@ -876,8 +846,7 @@ class UserQuestion(Node):
             
             # 대기 관련 상태 초기화
             self.waiting_sequence_running = False
-            self.waiting_image_displayed = False
-            self.current_waiting_image_path = ""
+
             
             # ✅ 핵심: speaker_id는 변경하지 않고 대기 상태만 설정
             self.trigger_detected = True  # 새로운 질문 대기 모드
@@ -1320,58 +1289,12 @@ class UserQuestion(Node):
         # 1. 기본 FFT 계산
         fft = np.fft.fft(windowed_data)
         spectrum = np.abs(fft[:len(fft)//2])
-        # spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-
+  
         # Mp3Player.py와 동일한 JSON 구조로 평균 스펙트럼 발송
         msg = String()
         msg.data = json.dumps({"spectrum": spectrum.tolist()})
         self.visualizer_pub.publish(msg)
   
-   #   spectrum = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
-        
-
-        # log_spectrum = np.log10(spectrum + 1)
-        # log_spectrum /= np.log10(np.max(spectrum) + 1)  # 정규화
-         
-
-        # # 🆕 스펙트럼 버퍼에 추가
-        # self.spectrum_buffer.append(spectrum)
-        # self.spectrum_count += 1
-
-        # # 🆕 5개가 모이면 평균 계산 후 전송
-        # if self.spectrum_count >= 2:
-        #     # 평균 스펙트럼 계산
-        #     avg_spectrum = np.mean(self.spectrum_buffer, axis=0)
-        #     # 로그 스케일링 적용 (값이 0~수천까지 나올 수 있으므로)
-           
-        #     # # 🆕 0.5초에 한 번씩만 스펙트럼 값 10개 출력 (디버깅용)
-        #     # if should_print:
-        #     #     self.last_print_time = current_time
-        #     #     print("=== 평균 스펙트럼 값 (처음 10개) ===")
-        #     #     for i in range(min(10, len(avg_spectrum))):
-        #     #         print(f"[{i}] {avg_spectrum[i]:.6f}")
-        #     #         print(f"최소값: {np.min(avg_spectrum):.6f}")
-        #     #         print(f"최대값: {np.max(avg_spectrum):.6f}")
-        #     #     print("==============================")
-            
-        #     # Mp3Player.py와 동일한 JSON 구조로 평균 스펙트럼 발송
-        #     msg = String()
-        #     msg.data = json.dumps({"spectrum": avg_spectrum.tolist()})
-        #     self.visualizer_pub.publish(msg)
-            
-        #     # 🆕 버퍼 초기화
-        #     self.spectrum_buffer = []
-        #     self.spectrum_count = 0
-        
-        # # 개별 스펙트럼은 더 이상 전송하지 않음
-
-
-
-
-
-
-
-
 
 
 
@@ -1758,19 +1681,7 @@ class UserQuestion(Node):
             self.last_published_text = msg.data
 
 
-            # # 🆕 추가: 즉시 통합 응답 준비 화면 표시
-            # self.publish_response_preparation_show(text)
-
-
-
-
-            # # 🆕 순수 질문 텍스트만 별도로 발행 (말풍선 표시용)
-            # question_display_msg = String()
-            # question_display_msg.data = text.strip()  # speaker ID 없이 순수 질문만
-            # self.user_question_display_pub.publish(question_display_msg)
-            # self.get_logger().info(f"🗨️ 사용자 질문 표시용 발행: {text.strip()}")
-
-
+        
 
             self.get_logger().info(f'Transcription published: "{msg.data}"')
             self.save_log(f'Transcription published: "{msg.data}"')
@@ -1836,25 +1747,6 @@ class UserQuestion(Node):
         
         
   
-
-    # def force_restart_stt(self):
-    #     self.get_logger().info("Forcing STT restart...")
-
-    #     # ✅ STT 세션 종료 표시
-    #     self.transcribing = False
-
-    #     # ✅ 세션 강제 중지
-    #     self.stop_audio_stream()
-
-    #     # #✅ 대기 시간 조금 여유롭게
-    #     # time.sleep(2.5)
-
-    #     # ✅ 입력 스트림 재시작
-    #     self.start_audio_stream()
-
-    #     # ✅ STT 재시작 – 쓰레드로 안전하게 분리
-    #     threading.Thread(target=self.transcribe_streaming, daemon=True).start()
-
 
 
 
