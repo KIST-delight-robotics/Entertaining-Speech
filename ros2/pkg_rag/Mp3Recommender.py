@@ -1,12 +1,5 @@
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 0911 local rag 방식 도입
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-
-
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -49,24 +42,15 @@ class Mp3Recommender(Node):
         device = "cuda" if torch.cuda.is_available() else "cpu"
         self.sbert_model = SentenceTransformer("BAAI/bge-m3", device=device)
 
-        # # mp3 인덱스/메타
-        # self.mp3_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus.db"
-        # self.mp3_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp3_new_plus.bin"
-        # self.mp3_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp3_database_new_plus"
-        
+ 
 
-        # mp3 인덱스/메타
+        # mp4 인덱스/메타
         self.mp4_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp4_database_mp4.db"
         self.mp4_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_mp4.bin"
         self.mp4_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/mp4_database(특수문자제외ver2)"
         
 
 
-
-        # # 이미지 인덱스/메타
-        # self.image_db_path = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus.db"
-        # self.image_faiss_index_file = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/faiss_index_image_plus.bin"
-        # self.image_dir = "/home/nvidia/ros2_ws/src/pkg_rag/pkg_rag/image_database_plus"
 
         # 인덱스와 메타데이터 로드
         try:
@@ -437,52 +421,6 @@ Answer the user's question using ONLY the provided context information.
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     def save_log(self, message: str):
         """로그를 파일에 저장"""
         try:
@@ -545,24 +483,6 @@ Answer the user's question using ONLY the provided context information.
         except Exception as e:
             self.get_logger().error(f"Error generating embedding: {e}")
             raise
-
-    # def search_candidates(self, query: str, k: int = 5) -> List[Dict]:
-    #     try:
-    #         emb = self.get_sbert_embedding(query).reshape(1, -1)
-    #         D, I = self.mp4_faiss_index.search(emb, k)
-    #         cands = []
-    #         for dist, idx in zip(D[0], I[0]):
-    #             if idx < 0:
-    #                 continue
-    #             fn = self.mp4_metadata.get(idx)
-    #             if not fn:
-    #                 continue
-    #             path = os.path.join(self.mp4_dir, fn + ".mp4")
-    #             cands.append({"file_name": fn, "path": path, "score": float(dist), "index": idx})
-    #         return cands
-    #     except Exception as e:
-    #         self.get_logger().error(f"Error searching candidates: {e}")
-    #         return []
 
 
 
@@ -1053,6 +973,5 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
 
 
