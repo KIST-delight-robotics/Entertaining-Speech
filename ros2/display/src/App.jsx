@@ -1,37 +1,9 @@
 
+//마이크 각도 관련코드 제거
+
 import React, { useEffect, useRef, useState } from 'react';
 import ros from './ros';
 import ROSLIB from 'roslib';
-
-
-
-
-
-
-// 중앙 일부만 사용
-function getCentralSlice(arr, ratio = 0.6) {
-  const total = arr.length;
-  const sliceSize = Math.floor(total * ratio);
-  const start = Math.floor((total - sliceSize) / 2);
-  return arr.slice(start, start + sliceSize);
-}
-
-// 다운샘플(평균)로 바 개수 줄이기
-function downsampleArray(arr, targetLen) {
-  const result = [];
-  const binSize = Math.floor(arr.length / targetLen);
-  for (let i = 0; i < targetLen; i++) {
-    const start = i * binSize;
-    const end = (i + 1) * binSize;
-    const bin = arr.slice(start, end);
-    result.push(bin.reduce((a, b) => a + b, 0) / bin.length || 0);
-  }
-  return result;
-}
-
-
-
-
 
 
 
@@ -57,15 +29,7 @@ function SpectrumVisualizer() {
   //const [imageVisible, setImageVisible] = useState(false);
   const [canShowSpectrum, setCanShowSpectrum] = useState(false);
 
-  // 🆕 방향 상태 추가
-  const [soundDirection, setSoundDirection] = useState(0);
-  const [screenFlipped, setScreenFlipped] = useState(false);
 
-  // 🆕 누락된 상태 변수들 추가
-  const [fixedDirection, setFixedDirection] = useState(null);
-  const [isDirectionFixed, setIsDirectionFixed] = useState(false);
-
-  
 
 // 🆕 trigger_detected 상태 추가 (기존 플래그 재사용)
   const [triggerDetected, setTriggerDetected] = useState(false);
@@ -275,13 +239,6 @@ const [showQuestionConfirmSubtitle, setShowQuestionConfirmSubtitle] = useState(f
 
 
 
-
-
-
-
-
-
-
 // 🆕 통합 응답 준비 화면 상태 추가
 const [responsePreparation, setResponsePreparation] = useState({
   show: false,
@@ -327,90 +284,6 @@ useEffect(() => {
     responsePreparationListener.unsubscribe();
   };
 }, []);
-
-// // 🆕 통합 응답 준비 화면 렌더링 함수
-// const renderResponsePreparation = () => {
-//   if (!responsePreparation.show || !responsePreparation.question || showQuestionConfirmSubtitle || questionConfirmStatus === 'playing') {
-//     return null;
-//   }
-
-//   return (
-//     <div style={{
-//       position: 'absolute',
-//       top: '0',
-//       left: '0',
-//       width: '100vw',
-//       height: '100vh',
-//       zIndex: 25,
-//       display: 'flex',
-//       justifyContent: 'center',
-//       alignItems: 'center',
-//       backgroundColor: 'rgba(26, 26, 26, 0.95)'
-//     }}>
-//       <div style={{
-//         maxWidth: '80vw',
-//         textAlign: 'center',
-//         padding: '40px 20px',
-//         color: '#fff'
-//       }}>
-//         {/* 질문 표시 */}
-//         <div style={{
-//           // fontSize: '2.2rem',
-//           fontSize: '4.2rem',
-//           fontWeight: '600',
-//           marginBottom: '30px',
-//           color: '#FFD700',
-//           lineHeight: '1.4'
-//         }}>
-//           "{responsePreparation.question}"
-//         </div>
-        
-//         {/* 답변 준비 메시지 */}
-//         <div style={{
-//           // fontSize: '1.8rem',
-//           fontSize: '3.8rem',
-//           fontWeight: '500',
-//           color: '#FFFFFF',
-//           animation: 'pulse 2s infinite'
-//         }}>
-//           에 대해 생각중이야. 
-//         </div>
-        
-//         {/* 로딩 인디케이터 */}
-//         <div style={{
-//           marginTop: '30px',
-//           display: 'flex',
-//           justifyContent: 'center',
-//           gap: '8px'
-//         }}>
-//           {[0, 1, 2].map(i => (
-//             <div key={i} style={{
-//               width: '12px',
-//               height: '12px',
-//               borderRadius: '50%',
-//               backgroundColor: '#FFD700',
-//               animation: `bounce 1.5s infinite ${i * 0.2}s`
-//             }} />
-//           ))}
-//         </div>
-//       </div>
-      
-//       <style>
-//         {`
-//           @keyframes pulse {
-//             0%, 100% { opacity: 1; }
-//             50% { opacity: 0.7; }
-//           }
-          
-//           @keyframes bounce {
-//             0%, 80%, 100% { transform: translateY(0); }
-//             40% { transform: translateY(-10px); }
-//           }
-//         `}
-//       </style>
-//     </div>
-//   );
-// };
 
 
 
@@ -726,42 +599,6 @@ useEffect(() => {
     questionConfirmStatusListener.unsubscribe();
   };
 }, [questionConfirmStatus, waitingForQuestionConfirm, pendingContent]);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1120,18 +957,7 @@ const createSafeUrl = (path) => {
           }}
         />
           
-        
-
-
-
-
-
-
-
-
-
-
-
+      
 
 
       </div>
@@ -1149,30 +975,6 @@ const requestTtsPlay = () => {
     console.log('🗣️ TTS 재생 요청 전송');
   }
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1237,62 +1039,6 @@ const shouldShowVoiceSpectrum = () => {
 
          isVoiceActive;
 };
-
-// // 🚀 더 즉각적인 렌더링
-// const renderVoiceSpectrum = () => {
-//   if (!shouldShowVoiceSpectrum() ) {
-//     return null;
-//   }
-
-//   // 🚀 더 역동적인 크기 변화
-//   const minRadius = 60;   // 🚀 60 → 40 (더 작은 최소값)
-//   const maxRadius = 600;  // 🚀 350 → 400 (더 큰 최대값)
-//   const radius = minRadius + (voiceVolume * (maxRadius - minRadius));
-  
-//   // 🚀 더 강한 투명도 변화
-//   const minOpacity = 0.2; // 🚀 0.3 → 0.2
-//   const maxOpacity = 1.0; // 🚀 0.95 → 1.0 (완전 불투명)
-//   const opacity = minOpacity + (voiceVolume * (maxOpacity - minOpacity));
-
-//   return (
-//     <div style={{
-//       position: 'fixed',
-//       top: '50%',
-//       left: '50%',
-//       transform: 'translate(-50%, -50%)',
-//       zIndex: 25,
-//       pointerEvents: 'none'
-//     }}>
-//       {/* 메인 원 - 불투명한 흰색 */}
-//       <div style={{
-//         width: `${radius * 2}px`,
-//         height: `${radius * 2}px`,
-//         borderRadius: '50%',
-//         background: `radial-gradient(circle, #ffffff 0%, rgba(255, 255, 255, 0.5) 70%, rgba(255, 255, 255, 0) 100%)`,
-//         transition: 'all 0.02s linear',
-//         animation: voiceVolume > 0.05 ? 'voicePulse 0.15s infinite alternate' : 'none'
-//       }} />
-      
-//       {/* 중앙 점 - 불투명한 흰색 */}
-//       <div style={{
-//         position: 'absolute',
-//         top: '50%',
-//         left: '50%',
-//         transform: 'translate(-50%, -50%)',
-//         width: `${8 + (voiceVolume * 20)}px`,
-//         height: `${8 + (voiceVolume * 20)}px`,
-//         borderRadius: '50%',
-//         backgroundColor: '#ffffff', // 불투명한 흰색
-//         boxShadow: `0 0 ${10 + (voiceVolume * 40)}px #ffffff`,
-//         transition: 'all 0.01s linear'
-//       }} />
-      
-    
-//     </div>
-//   );
-
-
-// };
 
 
 // 🚀 더 즉각적인 렌더링
@@ -1392,69 +1138,6 @@ const renderVoiceSpectrum = () => {
 
 
 
-  // 🆕 실시간 각도 구독 (주석 해제 및 수정)
-  useEffect(() => {
-    const directionListener = new ROSLIB.Topic({
-        ros: ros,
-        name: '/sound_direction_angle',
-        messageType: 'std_msgs/Float32'
-    });
-
-    directionListener.subscribe((message) => {
-        const angle = message.data;
-        setSoundDirection(angle);
-        
-        // 🆕 고정 모드가 아닐 때만 실시간 화면 방향 변경
-        if (!isDirectionFixed) {
-            if (angle >= 180 && angle <= 360) {
-                setScreenFlipped(true);
-                console.log(`🔄 실시간 화면 반전: ${angle}도`);
-            } else {
-                setScreenFlipped(false);
-                console.log(`➡️ 실시간 정상 화면: ${angle}도`);
-            }
-        } else {
-            console.log(`📍 실시간 각도: ${angle}도 (고정 모드: ${fixedDirection}도 유지)`);
-        }
-    });
-
-    return () => directionListener.unsubscribe();
-  }, [isDirectionFixed, fixedDirection]);
-
-
-
-
-
-
-  // 🆕 고정 각도 토픽 구독 (수정)
-  useEffect(() => {
-    const fixedDirectionListener = new ROSLIB.Topic({
-        ros: ros,
-        name: '/fixed_direction',
-        messageType: 'std_msgs/Float32'
-    });
-
-    fixedDirectionListener.subscribe((message) => {
-        const fixedAngle = message.data;
-        console.log('🔒 고정 각도 수신:', fixedAngle);
-        
-        setFixedDirection(fixedAngle);
-        setIsDirectionFixed(true);
-        
-        // 고정 각도에 따른 화면 방향 설정
-        if (fixedAngle >= 180 && fixedAngle <= 360) {
-            setScreenFlipped(true);
-            console.log(`🔒 화면 반전 고정: ${fixedAngle}도`);
-        } else {
-            setScreenFlipped(false);
-            console.log(`🔒 정상 화면 고정: ${fixedAngle}도`);
-        }
-    });
-
-    return () => fixedDirectionListener.unsubscribe();
-  }, []);
-
-
 
 
 
@@ -1487,83 +1170,6 @@ const renderVoiceSpectrum = () => {
     };
   }, []);
 
-
-
-
-
-
-// // TTS 상태 변화 감지 및 처리 (수정된 버전)
-// useEffect(() => {
-//   console.log('🔄 TTS 상태 변화 감지:', {
-//     ttsStatus,
-//     videoVisible,
-//     responsePreparation: responsePreparation.show,
-//     currentReply,
-//     isTtsPlaying
-//   });
-
-//   if (ttsStatus === 'tts_ready') {
-//     if (currentVideo && !videoVisible) {
-//       // 비디오가 있는 경우: 비디오 재생 시작
-//       console.log('🎬 TTS 준비 완료 - 비디오 재생 시작');
-//       setVideoVisible(true);
-//       setResponsePreparation(prev => ({ ...prev, show: false }));
-//       setIsWaitingAudioMode(false);
-//       setIsMp3WaitingMode(false);
-      
-//     } else if (!currentVideo && responsePreparation.show) {
-//       // 비디오가 없는 경우: TTS 재생 시작
-//       console.log('🗣️ TTS 준비 완료 - TTS 전용 재생 시작');
-      
-//       if (!currentReply || currentReply.trim() === '') {
-//         console.warn('⚠️ currentReply가 비어있음 - TTS 재생 중단');
-//         return;
-//       }
-
-//       // 🔧 수정: 기존 상태들 대신 responsePreparation만 처리
-//       setResponsePreparation(prev => ({ ...prev, show: false }));
-//       setIsTtsPlaying(true);
- 
-//       requestTtsPlay();
-//     }
-
-    
-
-
-//   } else if (ttsStatus === 'tts_done') {
-//     console.log('🗣️ TTS 재생 완료 - 초기화');
-    
-//     // ✅ TTS 관련 상태만 초기화
-//   setIsTtsPlaying(false);
-//   setTtsVolume(0);
-//   setCurrentReply('');
-//   setVideoVisible(false);
-  
-//   // ✅ 응답 준비 화면 숨김 추가
-//   setResponsePreparation({
-//     show: false,
-//     question: '',
-//     status: 'preparing'
-//   });
-  
-//   // 🆕 단일 단어 자막 상태 초기화
-//   setSingleWordSubtitle(null);
-//   setShowSingleWord(false);
-    
-//     // ✅ 새 질문을 위한 초기화
-//     setCanShowSpectrum(false);
-//     setMusicPlaying(false);
-//     setIsWaitingAudioMode(false);
-//     setIsMp3WaitingMode(false);
-//     setIsTransitioning(false);
-//     setVoiceVolume(0);
-//     setIsVoiceActive(false);
-//     setIsDirectionFixed(false);
-//     setFixedDirection(null);
-    
-//     console.log('✅ TTS 완료 후 상태 초기화');
-//   }
-// }, [ttsStatus, videoVisible, responsePreparation.show, currentReply, currentVideo, isTtsPlaying]);
 
 
 
@@ -1659,8 +1265,7 @@ useEffect(() => {
     setIsTransitioning(false);
     setVoiceVolume(0);
     setIsVoiceActive(false);
-    setIsDirectionFixed(false);
-    setFixedDirection(null);
+
     
     console.log('✅ TTS 완료 후 상태 초기화');
   }
@@ -2076,10 +1681,6 @@ const totalGaps = (numBars - 1);
       ctx.stroke();
     }
 
-
-
-
-
     
   }, [micSpectrum, musicPlaying, recommendStatus, canvasSize, triggerDetected, videoVisible, isTransitioning]);
 
@@ -2269,33 +1870,6 @@ for (let i = 0; i < numBars; i++) {
 
 
 
-
-
-
-
-
-
-
-
-
-
-const getScreenTransform = () => {
-  if (screenFlipped) {
-    return 'scaleY(-1) scaleX(-1)'; // 상하반전
-  }
-  return 'scaleY(1) scaleX(1)'; // 정상
-};
-
-
-
-  
-
-
-
-
-
-
-
   return (
     <div style={{ 
       width: '100vw', 
@@ -2314,30 +1888,10 @@ const getScreenTransform = () => {
       (isWaitingAudioMode) ? '#fff' :
       (musicPlaying || videoVisible) ? '#000' : '#000000',
 
-      // 🆕 화면 변환 적용
-      transform: getScreenTransform(),
-      transition: 'transform 0.5s ease-in-out' // 부드러운 전환 효과
+    
     }}>
 
-      {/* 🆕 방향 정보 표시 (디버깅용 - 원하면 제거) */}
-      <div style={{
-        position: 'absolute',
-        top: '10px',
-        right: '10px',
-        color: screenFlipped ? '#ff6b6b' : '#4ecdc4',
-        fontSize: '16px',
-        fontWeight: 'bold',
-        zIndex: 100,
-        transform: screenFlipped ? 'scaleY(-1)' : 'scaleY(1)', // 텍스트는 정상 방향 유지
-        backgroundColor: 'rgba(0,0,0,0)',
-        padding: '5px 10px',
-        borderRadius: '5px'
-      }}>
-        {/* {isDirectionFixed 
-          ? `🔒 고정: ${Math.round(fixedDirection)}° ${screenFlipped ? '(반전)' : '(정상)'}`
-          : `📍 실시간: ${Math.round(soundDirection)}° ${screenFlipped ? '(반전)' : '(정상)'}`
-        } */}
-      </div>
+
 
       
 
