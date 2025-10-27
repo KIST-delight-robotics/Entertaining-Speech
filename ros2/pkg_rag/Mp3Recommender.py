@@ -1,5 +1,6 @@
 
 
+
 import os, json, time, sqlite3, asyncio, random, faiss, torch
 from datetime import datetime
 from pathlib import Path
@@ -403,7 +404,7 @@ Answer the user's question using ONLY the provided context information.
 
         try:
             response = await self.async_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You are Dangdang, a helpful but snarky campus guide robot dog."},
                     {"role": "user", "content": prompt}
@@ -897,7 +898,7 @@ Available candidates ({len(candidates)} found):
 
             # ChatCompletion API로 직접 호출 (Assistant 대신)
             response = await client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1-nano",
                 messages=[
                     {"role": "system", "content": "You are Dangdang, a snarky robot dog guide at KIST. Always respond with valid JSON."},
                     {"role": "user", "content": task_prompt}
