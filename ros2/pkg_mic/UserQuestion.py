@@ -51,44 +51,44 @@ class VoiceCircularSpectrum:
         self.sample_rate = sample_rate 
         self.samples_per_ms = sample_rate // 1000  # 16 samples per ms
         monitor_f = 40
-        self.samples_per_buffer = sample_rate//monitor_f  # 64ms = 1024 samples
+        self.samples_per_buffer = sample_rate//monitor_f  # 25ms = 400 samples
         
-        # 현재 64ms 버퍼에 샘플 누적
+        # 현재 25ms 버퍼에 샘플 누적
         self.current_buffer_samples = []
         
-        # 각 64ms 구간의 마지막 5ms 최대값 저장 (슬라이딩 윈도우)
+        # 각 25ms 구간의 마지막 10ms 최대값 저장 (슬라이딩 윈도우)
         self.last_5ms_max_values = deque(maxlen=3)  # 최근 3개 값 유지
         
     def calculate_volume(self, audio_data):
         """
-        64ms마다 호출되어 각 구간의 마지막 5ms 최대값을 구하고
+        25ms마다 호출되어 각 구간의 마지막 10ms 최대값을 구하고
         최근 3개 값의 이동평균 반환
         """
         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
         if len(samples) == 0:
             return self.get_current_average()
         
-        # 현재 64ms 버퍼에 샘플 추가
+        # 현재 25ms 버퍼에 샘플 추가
         self.current_buffer_samples.extend(samples)
         
-        # 64ms 분량(1024 samples)이 모이면 처리
+        # 25ms 분량(1024 samples)이 모이면 처리
         if len(self.current_buffer_samples) >= self.samples_per_buffer:
-            # 64ms 버퍼에서 마지막 5ms(80 samples) 추출
+            # 25ms 버퍼에서 마지막 10ms(160 samples) 추출
             last_5ms_samples = self.current_buffer_samples[-10 * self.samples_per_ms:]
             
-            # 마지막 5ms에서 최대값 계산
+            # 마지막 10ms에서 최대값 계산
             max_value = np.max(np.abs(last_5ms_samples))
             
             # 슬라이딩 윈도우에 추가 (자동으로 3개 유지)
             self.last_5ms_max_values.append(max_value)
             
-            # 버퍼 초기화 (다음 64ms 준비)
+            # 버퍼 초기화 (다음 25ms 준비)
             self.current_buffer_samples = []
             
             # 현재까지의 평균 반환
             return self.get_current_average()
         
-        # 아직 64ms가 안 모였으면 이전 평균값 유지
+        # 아직 25ms가 안 모였으면 이전 평균값 유지
         return self.get_current_average()
     
     def get_current_average(self):
@@ -1881,3 +1881,4 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+
